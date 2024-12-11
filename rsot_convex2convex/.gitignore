@@ -1,0 +1,69 @@
+# Compiled Object files, Static and Dynamic libs (Shared Objects)
+*.o
+*.os
+*.so
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# CMake build directory
+**/build/
+
+#documentation
+**/docs/
+
+#dealii data
+**/data_dealii/
+**/vtk/
+*.vtu
+*.stl
+*.msh
+
+# Generated CMake files
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+CTestTestfile.cmake
+cmake_install.cmake
+Makefile
+
+# Compiled Python files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Visual Studio Code specific files
+.vscode/
+
+# macOS specific files
+.DS_Store
+
+# Compiled LaTeX files
+*.pdf
+*.log
+*.aux
+*.out
+*.toc
+*.gif
+
+# Vim backup files
+*.~*
+
+# Vim undo files
+*.un~
+
+# log file
+*.log
+**/log
+
+build/
+output/
+**/.history/
+.cursorignore
+compile_commands.json
+.cursorrules
