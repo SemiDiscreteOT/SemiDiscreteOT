@@ -1,4 +1,5 @@
 #include "rsot.h"
+#include "PowerDiagram.h"
 #include <deal.II/base/timer.h>
 
 template <int dim>
@@ -330,6 +331,47 @@ void Convex2Convex<dim>::save_results(const Vector<double> &weights, const std::
 }
 
 template <int dim>
+void Convex2Convex<dim>::compute_power_diagram()
+{
+    load_meshes();
+    setup_finite_elements();
+
+    // Read weights from SOT results
+    std::ifstream weights_file("sot_results.txt");
+    Assert(weights_file.is_open(), 
+           ExcMessage("Could not open sot_results.txt for reading weights"));
+
+    Vector<double> weights(target_points.size());
+    for (unsigned int i = 0; i < target_points.size(); ++i)
+    {
+        if (!(weights_file >> weights[i]))
+        {
+            AssertThrow(false, 
+                ExcMessage("Error reading weights from sot_results.txt"));
+        }
+    }
+    weights_file.close();
+
+    // Create and configure power diagram
+    PowerDiagramSpace::PowerDiagram<dim> power_diagram(source_mesh);
+    power_diagram.set_generators(target_points, weights);
+    
+    // Compute power diagram and its properties
+    power_diagram.compute_power_diagram();
+    power_diagram.compute_cell_centroids();
+    
+    // Save results
+    const std::string output_dir = "output/power_diagram";
+    std::filesystem::create_directories(output_dir);
+    
+    power_diagram.save_centroids_to_file(output_dir + "/centroids.txt");
+    power_diagram.output_vtu(output_dir + "/power_diagram.vtu");
+    
+    std::cout << "Power diagram computation completed." << std::endl;
+    std::cout << "Results saved in " << output_dir << std::endl;
+}
+
+template <int dim>
 void Convex2Convex<dim>::run()
 {
     print_parameters();
@@ -346,6 +388,10 @@ void Convex2Convex<dim>::run()
     {
         load_meshes();
         run_sot();
+    }
+    else if (selected_task == "power_diagram")
+    {
+        compute_power_diagram();
     }
     else
     {

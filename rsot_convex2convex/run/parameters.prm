@@ -1,6 +1,6 @@
 subsection Convex2Convex
 
-  set selected_task = sot  # Options: mesh_generation, load_meshes, sot
+  set selected_task = power_diagram  # Options: mesh_generation, load_meshes, sot, power_diagram
 
   subsection mesh_generation
     subsection source
@@ -17,9 +17,9 @@ subsection Convex2Convex
   end
 
   subsection rsot_solver
-    set max_iterations = 10
-    set tolerance = 1e-5
-    set regularization_parameter = 1e-2
+    set max_iterations = 1000
+    set tolerance = 1e-8
+    set regularization_parameter = 1e-1
     set verbose_output = true
     set solver_type = BFGS
     set quadrature_order = 3

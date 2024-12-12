@@ -31,6 +31,7 @@ private:
     void print_parameters();
     void load_meshes();
     void run_sot();
+    void compute_power_diagram();
 
     std::string selected_task;
 

@@ -2,6 +2,7 @@ SET(TARGET "rsot.exe")
 SET(TARGET_SRC
   src/main.cc
   src/rsot.cc
+  src/PowerDiagram.cc
 )
 SET(DEAL_II_DIR "/scratch/mkhamlic/spack/opt/spack/linux-rocky8-x86_64_v4/gcc-12.2.0/dealii-9.5.0-nbal44n4aoskliqi4yri5icwmcgumyxt")
 CMAKE_MINIMUM_REQUIRED(VERSION 3.3.0)
