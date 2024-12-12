@@ -34,6 +34,8 @@ private:
     void compute_power_diagram();
 
     std::string selected_task;
+    std::string io_coding = "txt"; 
+
 
     struct MeshParameters {
         unsigned int n_refinements = 0 ;
@@ -51,6 +53,7 @@ private:
     FESystem<dim> fe_system;
     Vector<double> source_density;
     std::vector<Point<dim>> target_points;
+    std::vector<Point<dim>> source_points;
     Vector<double> target_weights;
 
     struct SolverParameters {

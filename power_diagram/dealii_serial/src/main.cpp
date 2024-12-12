@@ -32,6 +32,8 @@ int main() {
     PowerDiagramSpace::PowerDiagram<3> power_diagram(triangulation);
     power_diagram.set_generators(generators, weights);
     power_diagram.compute_power_diagram();
+    power_diagram.compute_cell_centroids();
+    power_diagram.save_centroids_to_file("cell_centroids.txt");
     power_diagram.output_vtu("power_diagram_3d.vtu");
     
     return 0;

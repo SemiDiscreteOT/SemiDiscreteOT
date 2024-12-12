@@ -1,5 +1,6 @@
 #include "rsot.h"
 #include "PowerDiagram.h"
+#include "utils.h"
 #include <deal.II/base/timer.h>
 
 template <int dim>
@@ -7,6 +8,8 @@ Convex2Convex<dim>::Convex2Convex()
     : ParameterAcceptor("Convex2Convex"), source_mesh(), target_mesh(), dof_handler_source(source_mesh), dof_handler_target(target_mesh), fe_system(FE_Q<dim>(1), 1)
 {
     add_parameter("selected_task", selected_task);
+    add_parameter("io_coding", io_coding,
+                 "File format for I/O operations (txt/bin)");
 
     enter_subsection("mesh_generation");
     {
@@ -61,6 +64,7 @@ template <int dim>
 void Convex2Convex<dim>::print_parameters()
 {
     std::cout << "Selected Task: " << selected_task << std::endl;
+    std::cout << "I/O Coding: " << io_coding << std::endl;
 
     std::cout << "Source Mesh Parameters:" << std::endl;
     std::cout << "  Grid Generator Function: " << source_params.grid_generator_function << std::endl;
@@ -98,19 +102,15 @@ template <int dim>
 void Convex2Convex<dim>::save_meshes()
 {
     const std::string directory = "output/data_mesh";
-    std::filesystem::create_directories(directory);
-
-    GridOut grid_out;
-
-    std::ofstream out_vtk_source(directory + "/source.vtk");
-    std::ofstream out_msh_source(directory + "/source.msh");
-    grid_out.write_vtk(source_mesh, out_vtk_source);
-    grid_out.write_msh(source_mesh, out_msh_source);
-
-    std::ofstream out_vtk_target(directory + "/target.vtk");
-    std::ofstream out_msh_target(directory + "/target.msh");
-    grid_out.write_vtk(target_mesh, out_vtk_target);
-    grid_out.write_msh(target_mesh, out_msh_target);
+    
+    // Use Utils::write_mesh for both meshes
+    Utils::write_mesh(source_mesh, 
+                     directory + "/source",
+                     std::vector<std::string>{"vtk", "msh"});
+    
+    Utils::write_mesh(target_mesh, 
+                     directory + "/target",
+                     std::vector<std::string>{"vtk", "msh"});
 
     std::cout << "Meshes saved in VTK and MSH formats" << std::endl;
 }
@@ -185,16 +185,61 @@ void Convex2Convex<dim>::setup_finite_elements()
     std::cout << "Source density L1 norm: " << l1_norm << std::endl;
     source_density /= l1_norm; // Normalize to mass 1
 
-    std::map<types::global_dof_index, Point<dim>> support_points;
-    DoFTools::map_dofs_to_support_points(MappingQ1<dim>(), dof_handler_target, support_points);
-    target_points.clear();
-    target_weights.reinit(support_points.size());
-    target_weights = 1.0 / support_points.size();
+    const std::string directory = "output/data_points";
+    bool points_loaded = false;
 
-    for (const auto &point_pair : support_points)
+    // Try to load target points from file first
+    if (Utils::read_vector(target_points, directory + "/target_points", io_coding))
     {
-        target_points.push_back(point_pair.second);
+        target_weights.reinit(target_points.size());
+        target_weights = 1.0 / target_points.size();
+        points_loaded = true;
+        std::cout << "Target points loaded from file" << std::endl;
     }
+
+    // If loading failed, compute and save them
+    if (!points_loaded)
+    {
+        std::map<types::global_dof_index, Point<dim>> support_points_target;
+        DoFTools::map_dofs_to_support_points(MappingQ1<dim>(), dof_handler_target, support_points_target);
+        target_points.clear();
+        for (const auto &point_pair : support_points_target)
+        {
+            target_points.push_back(point_pair.second);
+        }
+        target_weights.reinit(support_points_target.size());
+        target_weights = 1.0 / support_points_target.size();
+
+        // Save the computed points
+        Utils::write_vector(target_points, directory + "/target_points", io_coding);
+        std::cout << "Target points computed and saved to file" << std::endl;
+    }
+
+    // Similar approach for source points
+    points_loaded = false;
+    if (Utils::read_vector(source_points, directory + "/source_points", io_coding))
+    {
+        points_loaded = true;
+        std::cout << "Source points loaded from file" << std::endl;
+    }
+
+    if (!points_loaded)
+    {
+        std::map<types::global_dof_index, Point<dim>> support_points_source;
+        DoFTools::map_dofs_to_support_points(MappingQ1<dim>(), dof_handler_source, support_points_source);
+        source_points.clear();
+        for (const auto &point_pair : support_points_source)
+        {
+            source_points.push_back(point_pair.second);
+        }
+        
+        // Save the computed points
+        Utils::write_vector(source_points, directory + "/source_points", io_coding);
+        std::cout << "Source points computed and saved to file" << std::endl;
+    }
+
+    std::cout << "Setup complete with " << source_points.size() << " source points and "
+              << target_points.size() << " target points" << std::endl;
 }
 
 
@@ -321,13 +366,11 @@ void Convex2Convex<dim>::run_sot()
 }
 
 template <int dim>
-void Convex2Convex<dim>::save_results(const Vector<double> &weights, const std::string &filename)
+void Convex2Convex<dim>::save_results(const Vector<double> &weights, 
+                                     const std::string &filename)
 {
-    std::ofstream file(filename);
-    for (unsigned int i = 0; i < weights.size(); ++i)
-    {
-        file << weights[i] << std::endl;
-    }
+    std::vector<double> weights_vec(weights.begin(), weights.end());
+    Utils::write_vector(weights_vec, filename, io_coding);
 }
 
 template <int dim>
@@ -337,20 +380,14 @@ void Convex2Convex<dim>::compute_power_diagram()
     setup_finite_elements();
 
     // Read weights from SOT results
-    std::ifstream weights_file("sot_results.txt");
-    Assert(weights_file.is_open(), 
-           ExcMessage("Could not open sot_results.txt for reading weights"));
+    std::vector<double> weights_vec;
+    bool success = Utils::read_vector(weights_vec, "sot_results");
+    Assert(success && weights_vec.size() == target_points.size(),
+           ExcMessage("Error reading weights from sot_results.txt"));
 
-    Vector<double> weights(target_points.size());
-    for (unsigned int i = 0; i < target_points.size(); ++i)
-    {
-        if (!(weights_file >> weights[i]))
-        {
-            AssertThrow(false, 
-                ExcMessage("Error reading weights from sot_results.txt"));
-        }
-    }
-    weights_file.close();
+    // Convert to dealii::Vector
+    Vector<double> weights(weights_vec.size());
+    std::copy(weights_vec.begin(), weights_vec.end(), weights.begin());
 
     // Create and configure power diagram
     PowerDiagramSpace::PowerDiagram<dim> power_diagram(source_mesh);
@@ -362,10 +399,8 @@ void Convex2Convex<dim>::compute_power_diagram()
     
     // Save results
     const std::string output_dir = "output/power_diagram";
-    std::filesystem::create_directories(output_dir);
-    
-    power_diagram.save_centroids_to_file(output_dir + "/centroids.txt");
-    power_diagram.output_vtu(output_dir + "/power_diagram.vtu");
+    power_diagram.save_centroids_to_file(output_dir + "/centroids");
+    power_diagram.output_vtu(output_dir + "/power_diagram");
     
     std::cout << "Power diagram computation completed." << std::endl;
     std::cout << "Results saved in " << output_dir << std::endl;

@@ -1,4 +1,5 @@
 #include "PowerDiagram.h"
+#include "utils.h"
 #include <fstream>
 
 namespace PowerDiagramSpace {
@@ -61,15 +62,15 @@ void PowerDiagram<dim>::compute_power_diagram()
 template <int dim>
 void PowerDiagram<dim>::output_vtu(const std::string& filename) const
 {
-    DataOut<dim> data_out;
-    data_out.attach_triangulation(*source_triangulation);
+    // Convert cell_assignments to vector<double> for compatibility
+    std::vector<double> cell_data(cell_assignments.begin(), cell_assignments.end());
     
-    Vector<double> cell_data(cell_assignments.begin(), cell_assignments.end());
-    data_out.add_data_vector(cell_data, "power_region");
-    
-    data_out.build_patches();
-    std::ofstream output_file(filename);
-    data_out.write_vtu(output_file);
+    // Use Utils::write_mesh with VTU format
+    Utils::write_mesh(*source_triangulation, 
+                     filename, 
+                     std::vector<std::string>{"vtu"}, 
+                     &cell_data,
+                     "power_region");
 }
 
 template <int dim>
@@ -129,24 +130,9 @@ void PowerDiagram<dim>::save_centroids_to_file(const std::string& filename) cons
 {
     Assert(!cell_centroids.empty(),
            ExcMessage("Cell centroids have not been computed. Call compute_cell_centroids() first."));
-           
-    std::ofstream output_file(filename);
-    Assert(output_file.is_open(),
-           ExcMessage("Could not open file for writing centroids."));
     
-    // Set precision for floating-point output
-    output_file.precision(16);
-    output_file.setf(std::ios::scientific);
-    
-    // Output all centroids (they are all valid now)
-    for (const auto& centroid : cell_centroids)
-    {
-        for (unsigned int d = 0; d < dim; ++d)
-        {
-            output_file << centroid[d] << " ";
-        }
-        output_file << "\n";
-    }
+    // Use Utils::write_vector for centroid output
+    Utils::write_vector(cell_centroids, filename, "txt");
 }
 
 template <int dim>

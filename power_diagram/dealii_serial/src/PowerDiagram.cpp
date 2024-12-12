@@ -84,6 +84,77 @@ const std::vector<unsigned int>& PowerDiagram<dim>::get_cell_assignments() const
     return cell_assignments;
 }
 
+template <int dim>
+void PowerDiagram<dim>::compute_cell_centroids()
+{
+    Assert(!cell_assignments.empty(),
+           ExcMessage("Power diagram must be computed before calculating cell centroids."));
+    
+    const unsigned int n_cells = generator_points.size();
+    cell_centroids.clear();
+    std::vector<Point<dim>> temp_centroids(n_cells, Point<dim>());
+    std::vector<double> cell_volumes(n_cells, 0.0);
+    unsigned int empty_cells = 0;
+    
+    // Compute weighted sum of mesh element centers for each power cell
+    for (const auto &element : source_triangulation->active_cell_iterators())
+    {
+        const unsigned int cell_idx = cell_assignments[element->active_cell_index()];
+        const double volume = element->measure();
+        temp_centroids[cell_idx] += element->center() * volume;
+        cell_volumes[cell_idx] += volume;
+    }
+    
+    // Store only valid centroids
+    for (unsigned int i = 0; i < n_cells; ++i)
+    {
+        if (cell_volumes[i] > 0.0)
+        {
+            cell_centroids.push_back(temp_centroids[i] / cell_volumes[i]);
+        }
+        else
+        {
+            empty_cells++;
+        }
+    }
+    
+    std::cout << "Found " << empty_cells << " empty power cells out of " 
+              << n_cells << " generators." << std::endl;
+}
+
+template <int dim>
+void PowerDiagram<dim>::save_centroids_to_file(const std::string& filename) const
+{
+    Assert(!cell_centroids.empty(),
+           ExcMessage("Cell centroids have not been computed. Call compute_cell_centroids() first."));
+           
+    std::ofstream output_file(filename);
+    Assert(output_file.is_open(),
+           ExcMessage("Could not open file for writing centroids."));
+    
+    // Set precision for floating-point output
+    output_file.precision(16);
+    output_file.setf(std::ios::scientific);
+    
+    // Output all centroids (they are all valid now)
+    for (const auto& centroid : cell_centroids)
+    {
+        for (unsigned int d = 0; d < dim; ++d)
+        {
+            output_file << centroid[d] << " ";
+        }
+        output_file << "\n";
+    }
+}
+
+template <int dim>
+const std::vector<Point<dim>>& PowerDiagram<dim>::get_cell_centroids() const
+{
+    Assert(!cell_centroids.empty(),
+           ExcMessage("Cell centroids have not been computed. Call compute_cell_centroids() first."));
+    return cell_centroids;
+}
+
 template class PowerDiagram<3>;
 
 }

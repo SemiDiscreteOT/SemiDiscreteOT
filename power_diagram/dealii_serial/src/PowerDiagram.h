@@ -20,9 +20,6 @@ public:
     void set_generators(const std::vector<Point<dim>> &points,
                        const std::vector<double> &weights);
                        
-    double power_distance(const Point<dim> &point,
-                         const unsigned int generator_idx) const;
-                         
     void compute_power_diagram();
     
     void output_vtu(const std::string& filename) const;
@@ -30,12 +27,19 @@ public:
     unsigned int get_cell_assignment(const unsigned int cell_index) const;
     
     const std::vector<unsigned int>& get_cell_assignments() const;
+    
+    void compute_cell_centroids();
+    void save_centroids_to_file(const std::string& filename) const;
+    const std::vector<Point<dim>>& get_cell_centroids() const;
 
 private:
     const Triangulation<dim>* source_triangulation;
     std::vector<Point<dim>> generator_points;
     std::vector<double> generator_weights;
     std::vector<unsigned int> cell_assignments;
+    std::vector<Point<dim>> cell_centroids;
+    double power_distance(const Point<dim> &point,
+                         const unsigned int generator_idx) const;
 };
 
 }
