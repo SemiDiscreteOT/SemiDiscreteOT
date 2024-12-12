@@ -7,9 +7,11 @@
 #include <deal.II/grid/grid_in.h>
 #include <deal.II/base/parameter_acceptor.h>
 #include <deal.II/dofs/dof_handler.h>
+#include <deal.II/dofs/dof_tools.h>
 #include <deal.II/fe/fe_q.h>
 #include <deal.II/fe/fe_system.h>
 #include <deal.II/fe/fe_values.h>
+#include <deal.II/fe/mapping_q1.h>
 #include <deal.II/lac/vector.h>
 #include <deal.II/numerics/vector_tools.h>
 #include <deal.II/optimization/solver_bfgs.h>

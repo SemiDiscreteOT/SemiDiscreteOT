@@ -1,4 +1,5 @@
 #include "rsot.h"
+#include <deal.II/base/timer.h>
 
 template <int dim>
 Convex2Convex<dim>::Convex2Convex()
@@ -147,6 +148,8 @@ void Convex2Convex<dim>::load_meshes()
     grid_in_target.read_vtk(in_vtk_target);
 
     std::cout << "Meshes loaded from VTK and MSH formats" << std::endl;
+    std::cout << "Source mesh: " << source_mesh.n_active_cells() << " cells, " << source_mesh.n_vertices() << " vertices" << std::endl;
+    std::cout << "Target mesh: " << target_mesh.n_active_cells() << " cells, " << target_mesh.n_vertices() << " vertices" << std::endl;
 }
 
 // TODO: controllare da qua in poi
@@ -197,6 +200,9 @@ void Convex2Convex<dim>::setup_finite_elements()
 template <int dim>
 double Convex2Convex<dim>::evaluate_sot_functional(const Vector<double> &weights, Vector<double> &gradient)
 {
+    Timer timer;
+    timer.start();
+    
     const double lambda = solver_params.regularization_param;
     double functional = 0.0;
     gradient = 0;
@@ -243,6 +249,10 @@ double Convex2Convex<dim>::evaluate_sot_functional(const Vector<double> &weights
         functional -= weights[i] * target_weights[i];
         gradient[i] -= target_weights[i];
     }
+
+    timer.stop();
+    if (solver_params.verbose_output)
+        std::cout << "Evaluation time: " << timer.wall_time() << " seconds" << std::endl;
 
     return functional;
 }
