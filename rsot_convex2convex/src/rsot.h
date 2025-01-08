@@ -17,6 +17,7 @@
 #include <deal.II/optimization/solver_bfgs.h>
 
 #include <filesystem>
+#include <memory>
 
 using namespace dealii;
 
@@ -55,6 +56,8 @@ private:
     std::vector<Point<dim>> target_points;
     std::vector<Point<dim>> source_points;
     Vector<double> target_weights;
+
+    std::unique_ptr<SolverControl> solver_control;
 
     struct SolverParameters {
         unsigned int max_iterations = 1000;

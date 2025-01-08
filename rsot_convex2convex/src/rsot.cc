@@ -2,6 +2,8 @@
 #include "PowerDiagram.h"
 #include "utils.h"
 #include <deal.II/base/timer.h>
+#include <filesystem>
+namespace fs = std::filesystem;
 
 template <int dim>
 Convex2Convex<dim>::Convex2Convex()
@@ -330,16 +332,19 @@ void Convex2Convex<dim>::run_sot()
         }
     };
 
-    VerboseSolverControl solver_control(solver_params.max_iterations, 
-                                      solver_params.tolerance);
+    // Create solver control and store it in the class member
+    solver_control = std::make_unique<VerboseSolverControl>(
+        solver_params.max_iterations, 
+        solver_params.tolerance
+    );
     
     if (!solver_params.verbose_output)
     {
-        solver_control.log_history(false);
-        solver_control.log_result(false);
+        solver_control->log_history(false);
+        solver_control->log_result(false);
     }
 
-    SolverBFGS<Vector<double>> solver(solver_control);
+    SolverBFGS<Vector<double>> solver(*solver_control);
 
     try
     {
@@ -353,11 +358,23 @@ void Convex2Convex<dim>::run_sot()
         );
         
         std::cout << "\nOptimization completed successfully!" << std::endl;
-        std::cout << "Final number of iterations: " << solver_control.last_step() << std::endl;
-        std::cout << "Final function value: " << solver_control.last_value() << std::endl;
+        std::cout << "Final number of iterations: " << solver_control->last_step() << std::endl;
+        std::cout << "Final function value: " << solver_control->last_value() << std::endl;
 
-        save_results(weights, "sot_results.txt");
-        std::cout << "Results saved to sot_results.txt" << std::endl;
+        save_results(weights, "sot_results");
+        std::cout << "Results saved to sot_results" << std::endl;
+    }
+    catch (SolverControl::NoConvergence &exc)
+    {
+        // Save results before reporting the error
+        save_results(weights, "sot_results");
+        std::cout << "\nMaximum iterations reached without convergence." << std::endl;
+        std::cout << "Final number of iterations: " << solver_control->last_step() << std::endl;
+        std::cout << "Final function value: " << solver_control->last_value() << std::endl;
+        std::cout << "Intermediate results saved to sot_results" << std::endl;
+        
+        // Re-throw the exception
+        throw;
     }
     catch (std::exception &exc)
     {
@@ -369,8 +386,22 @@ template <int dim>
 void Convex2Convex<dim>::save_results(const Vector<double> &weights, 
                                      const std::string &filename)
 {
+    // Create epsilon-specific directory
+    std::string eps_dir = "output/epsilon_" + std::to_string(solver_params.regularization_param);
+    fs::create_directories(eps_dir);
+    
+    // Save weights
     std::vector<double> weights_vec(weights.begin(), weights.end());
-    Utils::write_vector(weights_vec, filename, io_coding);
+    Utils::write_vector(weights_vec, eps_dir + "/" + filename, io_coding);
+    
+    // Save convergence info if solver_control exists
+    if (solver_control) {
+        std::ofstream conv_info(eps_dir + "/convergence_info.txt");
+        conv_info << "Regularization parameter (λ): " << solver_params.regularization_param << "\n";
+        conv_info << "Number of iterations: " << solver_control->last_step() << "\n";
+        conv_info << "Final function value: " << solver_control->last_value() << "\n";
+        conv_info << "Convergence achieved: " << (solver_control->last_check() == SolverControl::success) << "\n";
+    }
 }
 
 template <int dim>
@@ -379,11 +410,21 @@ void Convex2Convex<dim>::compute_power_diagram()
     load_meshes();
     setup_finite_elements();
 
+    std::string eps_dir = "output/epsilon_" + std::to_string(solver_params.regularization_param);
+    
     // Read weights from SOT results
     std::vector<double> weights_vec;
-    bool success = Utils::read_vector(weights_vec, "sot_results");
-    Assert(success && weights_vec.size() == target_points.size(),
-           ExcMessage("Error reading weights from sot_results.txt"));
+    bool success = Utils::read_vector(weights_vec, eps_dir + "/sot_results");
+    if (!success) {
+        std::cerr << "Failed to read weights from " << eps_dir << "/sot_results" << std::endl;
+        return;
+    }
+
+    if (weights_vec.size() != target_points.size()) {
+        std::cerr << "Error: Mismatch between weights size (" << weights_vec.size() 
+                  << ") and target points size (" << target_points.size() << ")" << std::endl;
+        return;
+    }
 
     // Convert to dealii::Vector
     Vector<double> weights(weights_vec.size());
@@ -398,7 +439,7 @@ void Convex2Convex<dim>::compute_power_diagram()
     power_diagram.compute_cell_centroids();
     
     // Save results
-    const std::string output_dir = "output/power_diagram";
+    const std::string output_dir = eps_dir + "/power_diagram";
     power_diagram.save_centroids_to_file(output_dir + "/centroids");
     power_diagram.output_vtu(output_dir + "/power_diagram");
     
