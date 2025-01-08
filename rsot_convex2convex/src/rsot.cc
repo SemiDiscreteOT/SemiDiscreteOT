@@ -1,14 +1,23 @@
 #include "rsot.h"
 #include "PowerDiagram.h"
 #include "utils.h"
+#include "ExactSot.h"
 #include <deal.II/base/timer.h>
 #include <filesystem>
 namespace fs = std::filesystem;
 
 template <int dim>
 Convex2Convex<dim>::Convex2Convex()
-    : ParameterAcceptor("Convex2Convex"), source_mesh(), target_mesh(), dof_handler_source(source_mesh), dof_handler_target(target_mesh), fe_system(FE_Q<dim>(1), 1)
+    : ParameterAcceptor("Convex2Convex"), 
+      source_mesh(), 
+      target_mesh(), 
+      dof_handler_source(source_mesh), 
+      dof_handler_target(target_mesh)
 {
+    // Initialize with default hexahedral elements
+    fe_system = std::make_unique<FE_Q<dim>>(1);
+    mapping = std::make_unique<MappingQ1<dim>>();
+
     add_parameter("selected_task", selected_task);
     add_parameter("io_coding", io_coding,
                  "File format for I/O operations (txt/bin)");
@@ -20,6 +29,8 @@ Convex2Convex<dim>::Convex2Convex()
             add_parameter("number of refinements", source_params.n_refinements);
             add_parameter("grid generator function", source_params.grid_generator_function);
             add_parameter("grid generator arguments", source_params.grid_generator_arguments);
+            add_parameter("use tetrahedral mesh", source_params.use_tetrahedral_mesh,
+                         "Whether to convert the mesh to tetrahedral cells (only for 3D)");
         }
         leave_subsection();
 
@@ -28,6 +39,8 @@ Convex2Convex<dim>::Convex2Convex()
             add_parameter("number of refinements", target_params.n_refinements);
             add_parameter("grid generator function", target_params.grid_generator_function);
             add_parameter("grid generator arguments", target_params.grid_generator_arguments);
+            add_parameter("use tetrahedral mesh", target_params.use_tetrahedral_mesh,
+                         "Whether to convert the mesh to tetrahedral cells (only for 3D)");
         }
         leave_subsection();
     }
@@ -35,29 +48,33 @@ Convex2Convex<dim>::Convex2Convex()
 
     enter_subsection("rsot_solver");
     {
-        add_parameter("max_iterations", 
+        add_parameter("max_iterations",
                      solver_params.max_iterations,
                      "Maximum number of iterations for the optimization solver");
-        
-        add_parameter("tolerance", 
+
+        add_parameter("tolerance",
                      solver_params.tolerance,
                      "Convergence tolerance for the optimization solver");
-        
-        add_parameter("regularization_parameter", 
+
+        add_parameter("regularization_parameter",
                      solver_params.regularization_param,
                      "Entropy regularization parameter (lambda)");
-        
-        add_parameter("verbose_output", 
+
+        add_parameter("verbose_output",
                      solver_params.verbose_output,
                      "Enable detailed solver output");
-        
+
         add_parameter("solver_type",
                      solver_params.solver_type,
                      "Type of optimization solver (BFGS)");
-        
+
         add_parameter("quadrature_order",
                      solver_params.quadrature_order,
                      "Order of quadrature formula for numerical integration");
+
+        add_parameter("nb_points",
+                     solver_params.nb_points,
+                     "Number of points for exact SOT computation");
     }
     leave_subsection();
 }
@@ -91,12 +108,18 @@ template <int dim>
 void Convex2Convex<dim>::generate_mesh(Triangulation<dim> &tria,
                                        const std::string &grid_generator_function,
                                        const std::string &grid_generator_arguments,
-                                       const unsigned int n_refinements)
+                                       const unsigned int n_refinements,
+                                       const bool use_tetrahedral_mesh)
 {
     GridGenerator::generate_from_name_and_arguments(
         tria,
         grid_generator_function,
         grid_generator_arguments);
+
+    if (use_tetrahedral_mesh && dim == 3) {
+        GridGenerator::convert_hypercube_to_simplex_mesh(tria, tria);
+    }
+
     tria.refine_global(n_refinements);
 }
 
@@ -104,13 +127,13 @@ template <int dim>
 void Convex2Convex<dim>::save_meshes()
 {
     const std::string directory = "output/data_mesh";
-    
+
     // Use Utils::write_mesh for both meshes
-    Utils::write_mesh(source_mesh, 
+    Utils::write_mesh(source_mesh,
                      directory + "/source",
                      std::vector<std::string>{"vtk", "msh"});
-    
-    Utils::write_mesh(target_mesh, 
+
+    Utils::write_mesh(target_mesh,
                      directory + "/target",
                      std::vector<std::string>{"vtk", "msh"});
 
@@ -121,14 +144,16 @@ template <int dim>
 void Convex2Convex<dim>::mesh_generation()
 {
     generate_mesh(source_mesh,
-                  source_params.grid_generator_function,
-                  source_params.grid_generator_arguments,
-                  source_params.n_refinements);
+                 source_params.grid_generator_function,
+                 source_params.grid_generator_arguments,
+                 source_params.n_refinements,
+                 source_params.use_tetrahedral_mesh);
 
     generate_mesh(target_mesh,
-                  target_params.grid_generator_function,
-                  target_params.grid_generator_arguments,
-                  target_params.n_refinements);
+                 target_params.grid_generator_function,
+                 target_params.grid_generator_arguments,
+                 target_params.n_refinements,
+                 target_params.use_tetrahedral_mesh);
 
     save_meshes();
 }
@@ -159,31 +184,50 @@ void Convex2Convex<dim>::load_meshes()
 template <int dim>
 void Convex2Convex<dim>::setup_finite_elements()
 {
-    dof_handler_target.distribute_dofs(fe_system);
-    dof_handler_source.distribute_dofs(fe_system);
-    
+    // Check if we're using tetrahedral meshes
+    bool use_simplex = (source_params.use_tetrahedral_mesh || target_params.use_tetrahedral_mesh);
+
+    if (use_simplex) {
+        // For simplex meshes, use FE_SimplexP and appropriate mapping
+        fe_system = std::make_unique<FE_SimplexP<dim>>(1);
+        mapping = std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
+    } else {
+        // For hexahedral meshes, use FE_Q and MappingQ1
+        fe_system = std::make_unique<FE_Q<dim>>(1);
+        mapping = std::make_unique<MappingQ1<dim>>();
+    }
+
+    dof_handler_target.distribute_dofs(*fe_system);
+    dof_handler_source.distribute_dofs(*fe_system);
+
     source_density.reinit(dof_handler_source.n_dofs());
     source_density = 1.0;
-    
-    // Compute actual L1 norm using quadrature
-    QGauss<dim> quadrature(solver_params.quadrature_order);
-    FEValues<dim> fe_values(fe_system, quadrature,
+
+    // Compute actual L1 norm using appropriate quadrature
+    std::unique_ptr<Quadrature<dim>> quadrature;
+    if (use_simplex) {
+        quadrature = std::make_unique<QGaussSimplex<dim>>(solver_params.quadrature_order);
+    } else {
+        quadrature = std::make_unique<QGauss<dim>>(solver_params.quadrature_order);
+    }
+
+    FEValues<dim> fe_values(*mapping, *fe_system, *quadrature,
                            update_values | update_JxW_values);
-    
-    std::vector<double> density_values(quadrature.size());
+
+    std::vector<double> density_values(quadrature->size());
     double l1_norm = 0.0;
-    
+
     for (const auto &cell : dof_handler_source.active_cell_iterators())
     {
         fe_values.reinit(cell);
         fe_values.get_function_values(source_density, density_values);
-        
-        for (unsigned int q = 0; q < quadrature.size(); ++q)
+
+        for (unsigned int q = 0; q < quadrature->size(); ++q)
         {
             l1_norm += std::abs(density_values[q]) * fe_values.JxW(q);
         }
     }
-    
+
     std::cout << "Source density L1 norm: " << l1_norm << std::endl;
     source_density /= l1_norm; // Normalize to mass 1
 
@@ -203,7 +247,7 @@ void Convex2Convex<dim>::setup_finite_elements()
     if (!points_loaded)
     {
         std::map<types::global_dof_index, Point<dim>> support_points_target;
-        DoFTools::map_dofs_to_support_points(MappingQ1<dim>(), dof_handler_target, support_points_target);
+        DoFTools::map_dofs_to_support_points(*mapping, dof_handler_target, support_points_target);
         target_points.clear();
         for (const auto &point_pair : support_points_target)
         {
@@ -228,13 +272,13 @@ void Convex2Convex<dim>::setup_finite_elements()
     if (!points_loaded)
     {
         std::map<types::global_dof_index, Point<dim>> support_points_source;
-        DoFTools::map_dofs_to_support_points(MappingQ1<dim>(), dof_handler_source, support_points_source);
+        DoFTools::map_dofs_to_support_points(*mapping, dof_handler_source, support_points_source);
         source_points.clear();
         for (const auto &point_pair : support_points_source)
         {
             source_points.push_back(point_pair.second);
         }
-        
+
         // Save the computed points
         Utils::write_vector(source_points, directory + "/source_points", io_coding);
         std::cout << "Source points computed and saved to file" << std::endl;
@@ -250,22 +294,32 @@ double Convex2Convex<dim>::evaluate_sot_functional(const Vector<double> &weights
 {
     Timer timer;
     timer.start();
-    
+
     const double lambda = solver_params.regularization_param;
     double functional = 0.0;
     gradient = 0;
 
-    QGauss<dim> quadrature(dim);
-    FEValues<dim> fe_values(fe_system, quadrature,
-                            update_values | update_quadrature_points | update_JxW_values);
+    // Check if we're using tetrahedral meshes
+    bool use_simplex = (source_params.use_tetrahedral_mesh || target_params.use_tetrahedral_mesh);
 
-    std::vector<double> density_values(quadrature.size());
+    // Use appropriate quadrature
+    std::unique_ptr<Quadrature<dim>> quadrature;
+    if (use_simplex) {
+        quadrature = std::make_unique<QGaussSimplex<dim>>(solver_params.quadrature_order);
+    } else {
+        quadrature = std::make_unique<QGauss<dim>>(solver_params.quadrature_order);
+    }
+
+    FEValues<dim> fe_values(*mapping, *fe_system, *quadrature,
+                           update_values | update_quadrature_points | update_JxW_values);
+
+    std::vector<double> density_values(quadrature->size());
+
     for (const auto &cell : dof_handler_source.active_cell_iterators())
     {
         fe_values.reinit(cell);
         const std::vector<Point<dim>> &q_points = fe_values.get_quadrature_points();
         fe_values.get_function_values(source_density, density_values);
-
 
         for (unsigned int q = 0; q < q_points.size(); ++q)
         {
@@ -286,7 +340,6 @@ double Convex2Convex<dim>::evaluate_sot_functional(const Vector<double> &weights
             for (unsigned int i = 0; i < target_points.size(); ++i)
             {
                 gradient[i] += density_values[q] * (exp_terms[i] / sum_exp) * fe_values.JxW(q);
-
             }
         }
     }
@@ -334,10 +387,10 @@ void Convex2Convex<dim>::run_sot()
 
     // Create solver control and store it in the class member
     solver_control = std::make_unique<VerboseSolverControl>(
-        solver_params.max_iterations, 
+        solver_params.max_iterations,
         solver_params.tolerance
     );
-    
+
     if (!solver_params.verbose_output)
     {
         solver_control->log_history(false);
@@ -348,7 +401,7 @@ void Convex2Convex<dim>::run_sot()
 
     try
     {
-        std::cout << "Using regularization parameter λ = " 
+        std::cout << "Using regularization parameter λ = "
                   << solver_params.regularization_param << std::endl;
         solver.solve(
             [&](const Vector<double> &w, Vector<double> &grad) {
@@ -356,7 +409,7 @@ void Convex2Convex<dim>::run_sot()
             },
             weights
         );
-        
+
         std::cout << "\nOptimization completed successfully!" << std::endl;
         std::cout << "Final number of iterations: " << solver_control->last_step() << std::endl;
         std::cout << "Final function value: " << solver_control->last_value() << std::endl;
@@ -372,7 +425,7 @@ void Convex2Convex<dim>::run_sot()
         std::cout << "Final number of iterations: " << solver_control->last_step() << std::endl;
         std::cout << "Final function value: " << solver_control->last_value() << std::endl;
         std::cout << "Intermediate results saved to sot_results" << std::endl;
-        
+
         // Re-throw the exception
         throw;
     }
@@ -383,17 +436,17 @@ void Convex2Convex<dim>::run_sot()
 }
 
 template <int dim>
-void Convex2Convex<dim>::save_results(const Vector<double> &weights, 
+void Convex2Convex<dim>::save_results(const Vector<double> &weights,
                                      const std::string &filename)
 {
     // Create epsilon-specific directory
     std::string eps_dir = "output/epsilon_" + std::to_string(solver_params.regularization_param);
     fs::create_directories(eps_dir);
-    
+
     // Save weights
     std::vector<double> weights_vec(weights.begin(), weights.end());
     Utils::write_vector(weights_vec, eps_dir + "/" + filename, io_coding);
-    
+
     // Save convergence info if solver_control exists
     if (solver_control) {
         std::ofstream conv_info(eps_dir + "/convergence_info.txt");
@@ -411,7 +464,7 @@ void Convex2Convex<dim>::compute_power_diagram()
     setup_finite_elements();
 
     std::string eps_dir = "output/epsilon_" + std::to_string(solver_params.regularization_param);
-    
+
     // Read weights from SOT results
     std::vector<double> weights_vec;
     bool success = Utils::read_vector(weights_vec, eps_dir + "/sot_results");
@@ -421,7 +474,7 @@ void Convex2Convex<dim>::compute_power_diagram()
     }
 
     if (weights_vec.size() != target_points.size()) {
-        std::cerr << "Error: Mismatch between weights size (" << weights_vec.size() 
+        std::cerr << "Error: Mismatch between weights size (" << weights_vec.size()
                   << ") and target points size (" << target_points.size() << ")" << std::endl;
         return;
     }
@@ -433,18 +486,66 @@ void Convex2Convex<dim>::compute_power_diagram()
     // Create and configure power diagram
     PowerDiagramSpace::PowerDiagram<dim> power_diagram(source_mesh);
     power_diagram.set_generators(target_points, weights);
-    
+
     // Compute power diagram and its properties
     power_diagram.compute_power_diagram();
     power_diagram.compute_cell_centroids();
-    
+
     // Save results
     const std::string output_dir = eps_dir + "/power_diagram";
     power_diagram.save_centroids_to_file(output_dir + "/centroids");
     power_diagram.output_vtu(output_dir + "/power_diagram");
-    
+
     std::cout << "Power diagram computation completed." << std::endl;
     std::cout << "Results saved in " << output_dir << std::endl;
+}
+
+template <int dim>
+template <int d>
+typename std::enable_if<d == 3>::type Convex2Convex<dim>::run_exact_sot()
+{
+    std::cout << "Running exact SOT computation..." << std::endl;
+
+    ExactSot exact_solver;
+
+    // Set source mesh and target points
+    if (!exact_solver.set_source_mesh("output/data_mesh/source.msh")) {
+        std::cerr << "Failed to load source mesh for exact SOT" << std::endl;
+        return;
+    }
+
+    // Load target points from the same location as used in setup_finite_elements
+    const std::string directory = "output/data_points";
+    if (!exact_solver.set_target_points(directory + "/target_points")) {
+        std::cerr << "Failed to load target points for exact SOT" << std::endl;
+        return;
+    }
+
+    // Set solver parameters
+    exact_solver.set_parameters(
+        solver_params.max_iterations,
+        solver_params.tolerance
+    );
+
+    // Create output directory
+    std::string output_dir = "output/exact_sot";
+    fs::create_directories(output_dir);
+
+    // Run the solver
+    if (!exact_solver.run()) {
+        std::cerr << "Exact SOT computation failed" << std::endl;
+        return;
+    }
+
+    // Save results
+    if (!exact_solver.save_results(
+            output_dir + "/weights",
+            output_dir + "/points")) {
+        std::cerr << "Failed to save exact SOT results" << std::endl;
+        return;
+    }
+
+    std::cout << "Exact SOT computation completed successfully" << std::endl;
 }
 
 template <int dim>
@@ -464,6 +565,14 @@ void Convex2Convex<dim>::run()
     {
         load_meshes();
         run_sot();
+    }
+    else if (selected_task == "exact_sot")
+    {
+        if constexpr (dim == 3) {
+            run_exact_sot();
+        } else {
+            std::cerr << "Exact SOT is only available for 3D problems" << std::endl;
+        }
     }
     else if (selected_task == "power_diagram")
     {

@@ -105,7 +105,6 @@ bool write_mesh(const dealii::Triangulation<dim>& mesh,
                const std::string& data_name = "cell_data")
 {
     try {
-        // Create directories if they don't exist
         std::filesystem::path path(filepath);
         std::filesystem::create_directories(path.parent_path());
 
@@ -123,6 +122,7 @@ bool write_mesh(const dealii::Triangulation<dim>& mesh,
                 std::cout << "Mesh saved to: " << filepath + ".vtk" << std::endl;
             }
             else if (format == "msh") {
+                // First write in default format
                 std::ofstream out_msh(filepath + ".msh");
                 if (!out_msh.is_open()) {
                     std::cerr << "Error: Unable to open file for writing: " 
@@ -130,7 +130,18 @@ bool write_mesh(const dealii::Triangulation<dim>& mesh,
                     return false;
                 }
                 grid_out.write_msh(mesh, out_msh);
-                std::cout << "Mesh saved to: " << filepath + ".msh" << std::endl;
+                out_msh.close();
+                
+                // Convert to MSH2 format using gmsh
+                std::string cmd = "gmsh " + filepath + ".msh -format msh2 -save_all -3 -o " + 
+                                filepath + "_msh2.msh && mv " + filepath + "_msh2.msh " + 
+                                filepath + ".msh";
+                int ret = system(cmd.c_str());
+                if (ret != 0) {
+                    std::cerr << "Error: Failed to convert mesh to MSH2 format" << std::endl;
+                    return false;
+                }
+                std::cout << "Mesh saved and converted to MSH2 format: " << filepath + ".msh" << std::endl;
             }
             else if (format == "vtu") {
                 dealii::DataOut<dim> data_out;
