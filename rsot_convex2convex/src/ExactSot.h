@@ -64,7 +64,7 @@ public:
      * @param filename Path to the target points file
      * @return true if successful, false otherwise
      */
-    bool set_target_points(const std::string& filename);
+    bool set_target_points(const std::string& filename, const std::string& io_coding);
 
     /**
      * @brief Set parameters for the solver

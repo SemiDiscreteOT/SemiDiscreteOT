@@ -68,13 +68,17 @@ private:
 
     struct SolverParameters {
         unsigned int max_iterations = 1000;
-        double tolerance = 1e-5;
-        double regularization_param = 0.1;
+        double tolerance = 1e-8;
+        double regularization_param = 1e-3;
         bool verbose_output = true;
         std::string solver_type = "BFGS";
         unsigned int quadrature_order = 3;
-        unsigned int nb_points = 1000;  // Added for exact SOT
+        unsigned int nb_points = 1000;
     } solver_params;
+
+    struct PowerDiagramParameters {
+        std::string implementation = "dealii";  // Options: dealii/geogram
+    } power_diagram_params;
 
     void generate_mesh(Triangulation<dim> &tria,
                       const std::string &grid_generator_function,

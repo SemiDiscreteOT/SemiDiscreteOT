@@ -80,8 +80,8 @@ bool ExactSot::set_source_mesh(const std::string& filename) {
     return load_volume_mesh(filename, *source_mesh);
 }
 
-bool ExactSot::set_target_points(const std::string& filename) {
-    return Utils::read_vector(target_points, filename);
+bool ExactSot::set_target_points(const std::string& filename, const std::string& io_coding) {
+    return Utils::read_vector(target_points, filename, io_coding);
 }
 
 void ExactSot::set_parameters(unsigned int max_iterations,

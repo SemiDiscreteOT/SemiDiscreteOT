@@ -1,18 +1,18 @@
 subsection Convex2Convex
 
-  set selected_task = exact_sot  # Options: mesh_generation, load_meshes, sot, exact_sot, power_diagram
+  set selected_task = power_diagram  # Options: mesh_generation, load_meshes, sot, exact_sot, power_diagram
   set io_coding = txt
 
   subsection mesh_generation
     subsection source
-      set number of refinements = 4
+      set number of refinements = 2
       set grid generator function = hyper_cube
       set grid generator arguments = -1 : 1 : false
       set use tetrahedral mesh = true
     end
 
     subsection target
-      set number of refinements = 3
+      set number of refinements = 2
       set grid generator function = hyper_ball
       set grid generator arguments = 0, 0, 0 : 1 : true
       set use tetrahedral mesh = true
@@ -22,11 +22,14 @@ subsection Convex2Convex
   subsection rsot_solver
     set max_iterations = 10
     set tolerance = 1e-8
-    set regularization_parameter = 1e-3
+    set regularization_parameter = 1e-2
     set verbose_output = true
     set solver_type = BFGS
     set quadrature_order = 3
-    set nb_points = 1000  # Number of points for exact SOT
+  end
+
+  subsection power_diagram_parameters
+    set implementation = geogram  # Options: dealii/geogram
   end
 
 end

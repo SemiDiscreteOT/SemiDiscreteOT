@@ -5,36 +5,36 @@
 namespace PowerDiagramSpace {
 
 template <int dim>
-PowerDiagram<dim>::PowerDiagram(const Triangulation<dim> &source_mesh)
+DealIIPowerDiagram<dim>::DealIIPowerDiagram(const Triangulation<dim> &source_mesh)
     : source_triangulation(&source_mesh)
 {}
 
 template <int dim>
-void PowerDiagram<dim>::set_generators(const std::vector<Point<dim>> &points,
-                                     const Vector<double> &weights)
+void DealIIPowerDiagram<dim>::set_generators(const std::vector<Point<dim>> &points,
+                                          const Vector<double> &weights)
 {
     Assert(points.size() == weights.size(),
            ExcDimensionMismatch(points.size(), weights.size()));
     
-    generator_points = points;
-    generator_weights.resize(weights.size());
+    this->generator_points = points;
+    this->generator_weights.resize(weights.size());
     for (unsigned int i = 0; i < weights.size(); ++i)
-        generator_weights[i] = weights[i];
+        this->generator_weights[i] = weights[i];
 }
 
 template <int dim>
-double PowerDiagram<dim>::power_distance(const Point<dim> &point,
-                                       const unsigned int generator_idx) const
+double DealIIPowerDiagram<dim>::power_distance(const Point<dim> &point,
+                                            const unsigned int generator_idx) const
 {
-    Assert(generator_idx < generator_points.size(),
-           ExcIndexRange(generator_idx, 0, generator_points.size()));
+    Assert(generator_idx < this->generator_points.size(),
+           ExcIndexRange(generator_idx, 0, this->generator_points.size()));
     const double squared_distance = 
-        point.distance_square(generator_points[generator_idx]);
-    return squared_distance - generator_weights[generator_idx];
+        point.distance_square(this->generator_points[generator_idx]);
+    return squared_distance - this->generator_weights[generator_idx];
 }
 
 template <int dim>
-void PowerDiagram<dim>::compute_power_diagram()
+void DealIIPowerDiagram<dim>::compute_power_diagram()
 {
     cell_assignments.clear();
     cell_assignments.resize(source_triangulation->n_active_cells());
@@ -45,7 +45,7 @@ void PowerDiagram<dim>::compute_power_diagram()
         unsigned int closest_generator = 0;
         double min_power_distance = power_distance(cell_center, 0);
         
-        for (unsigned int i = 1; i < generator_points.size(); ++i)
+        for (unsigned int i = 1; i < this->generator_points.size(); ++i)
         {
             const double current_power_distance = 
                 power_distance(cell_center, i);
@@ -60,7 +60,7 @@ void PowerDiagram<dim>::compute_power_diagram()
 }
 
 template <int dim>
-void PowerDiagram<dim>::output_vtu(const std::string& filename) const
+void DealIIPowerDiagram<dim>::output_vtu(const std::string& filename) const
 {
     // Convert cell_assignments to vector<double> for compatibility
     std::vector<double> cell_data(cell_assignments.begin(), cell_assignments.end());
@@ -74,7 +74,7 @@ void PowerDiagram<dim>::output_vtu(const std::string& filename) const
 }
 
 template <int dim>
-unsigned int PowerDiagram<dim>::get_cell_assignment(const unsigned int cell_index) const
+unsigned int DealIIPowerDiagram<dim>::get_cell_assignment(const unsigned int cell_index) const
 {
     Assert(cell_index < cell_assignments.size(),
            ExcIndexRange(cell_index, 0, cell_assignments.size()));
@@ -82,19 +82,19 @@ unsigned int PowerDiagram<dim>::get_cell_assignment(const unsigned int cell_inde
 }
 
 template <int dim>
-const std::vector<unsigned int>& PowerDiagram<dim>::get_cell_assignments() const
+const std::vector<unsigned int>& DealIIPowerDiagram<dim>::get_cell_assignments() const
 {
     return cell_assignments;
 }
 
 template <int dim>
-void PowerDiagram<dim>::compute_cell_centroids()
+void DealIIPowerDiagram<dim>::compute_cell_centroids()
 {
     Assert(!cell_assignments.empty(),
            ExcMessage("Power diagram must be computed before calculating cell centroids."));
     
-    const unsigned int n_cells = generator_points.size();
-    cell_centroids.clear();
+    const unsigned int n_cells = this->generator_points.size();
+    this->cell_centroids.clear();
     std::vector<Point<dim>> temp_centroids(n_cells, Point<dim>());
     std::vector<double> cell_volumes(n_cells, 0.0);
     unsigned int empty_cells = 0;
@@ -113,7 +113,7 @@ void PowerDiagram<dim>::compute_cell_centroids()
     {
         if (cell_volumes[i] > 0.0)
         {
-            cell_centroids.push_back(temp_centroids[i] / cell_volumes[i]);
+            this->cell_centroids.push_back(temp_centroids[i] / cell_volumes[i]);
         }
         else
         {
@@ -126,24 +126,25 @@ void PowerDiagram<dim>::compute_cell_centroids()
 }
 
 template <int dim>
-void PowerDiagram<dim>::save_centroids_to_file(const std::string& filename) const
+void DealIIPowerDiagram<dim>::save_centroids_to_file(const std::string& filename) const
 {
-    Assert(!cell_centroids.empty(),
+    Assert(!this->cell_centroids.empty(),
            ExcMessage("Cell centroids have not been computed. Call compute_cell_centroids() first."));
     
     // Use Utils::write_vector for centroid output
-    Utils::write_vector(cell_centroids, filename, "txt");
+    Utils::write_vector(this->cell_centroids, filename, "txt");
 }
 
 template <int dim>
-const std::vector<Point<dim>>& PowerDiagram<dim>::get_cell_centroids() const
+const std::vector<Point<dim>>& DealIIPowerDiagram<dim>::get_cell_centroids() const
 {
-    Assert(!cell_centroids.empty(),
+    Assert(!this->cell_centroids.empty(),
            ExcMessage("Cell centroids have not been computed. Call compute_cell_centroids() first."));
-    return cell_centroids;
+    return this->cell_centroids;
 }
 
-template class PowerDiagram<2>;
-template class PowerDiagram<3>;
+// Explicit instantiation
+template class DealIIPowerDiagram<2>;
+template class DealIIPowerDiagram<3>;
 
-}
+} 

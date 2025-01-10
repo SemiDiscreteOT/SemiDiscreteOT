@@ -182,6 +182,56 @@ bool write_mesh(const dealii::Triangulation<dim>& mesh,
     }
 }
 
+// Function to list available epsilon folders and let user select one
+inline std::vector<std::string> select_folder(const std::string& base_dir = "output", bool allow_all = true) {
+    std::vector<std::string> epsilon_folders;
+    
+    // List all epsilon folders and exact_sot
+    for (const auto& entry : std::filesystem::directory_iterator(base_dir)) {
+        if (entry.is_directory()) {
+            std::string folder_name = entry.path().filename().string();
+            if (folder_name.find("epsilon_") == 0 || folder_name == "exact_sot") {
+                epsilon_folders.push_back(folder_name);
+            }
+        }
+    }
+    
+    if (epsilon_folders.empty()) {
+        throw std::runtime_error("No epsilon or exact_sot folders found in " + base_dir);
+    }
+    
+    // Sort folders to ensure consistent ordering
+    std::sort(epsilon_folders.begin(), epsilon_folders.end());
+    
+    // Print available options
+    std::cout << "\nAvailable folders:\n";
+    for (size_t i = 0; i < epsilon_folders.size(); ++i) {
+        std::cout << "[" << i + 1 << "] " << epsilon_folders[i] << "\n";
+    }
+    if (allow_all) {
+        std::cout << "[" << epsilon_folders.size() + 1 << "] ALL FOLDERS\n";
+    }
+    
+    // Get user selection
+    size_t selection;
+    while (true) {
+        std::cout << "\nSelect a folder (1-" << (allow_all ? epsilon_folders.size() + 1 : epsilon_folders.size()) << "): ";
+        if (std::cin >> selection && selection >= 1 && 
+            selection <= (allow_all ? epsilon_folders.size() + 1 : epsilon_folders.size())) {
+            break;
+        }
+        std::cout << "Invalid selection. Please try again.\n";
+        std::cin.clear();
+        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+    }
+    
+    // Return all folders if "ALL" was selected, otherwise return a vector with just the selected folder
+    if (allow_all && selection == epsilon_folders.size() + 1) {
+        return epsilon_folders;
+    }
+    return {epsilon_folders[selection - 1]};
+}
+
 } 
 
 #endif 

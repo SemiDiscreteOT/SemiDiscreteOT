@@ -77,6 +77,14 @@ Convex2Convex<dim>::Convex2Convex()
                      "Number of points for exact SOT computation");
     }
     leave_subsection();
+
+    enter_subsection("power_diagram_parameters");
+    {
+        add_parameter("implementation",
+                     power_diagram_params.implementation,
+                     "Implementation to use for power diagram computation (dealii/geogram)");
+    }
+    leave_subsection();
 }
 
 template <int dim>
@@ -414,17 +422,17 @@ void Convex2Convex<dim>::run_sot()
         std::cout << "Final number of iterations: " << solver_control->last_step() << std::endl;
         std::cout << "Final function value: " << solver_control->last_value() << std::endl;
 
-        save_results(weights, "sot_results");
-        std::cout << "Results saved to sot_results" << std::endl;
+        save_results(weights, "weights");
+        std::cout << "Results saved to weights" << std::endl;
     }
     catch (SolverControl::NoConvergence &exc)
     {
         // Save results before reporting the error
-        save_results(weights, "sot_results");
+        save_results(weights, "weights");
         std::cout << "\nMaximum iterations reached without convergence." << std::endl;
         std::cout << "Final number of iterations: " << solver_control->last_step() << std::endl;
         std::cout << "Final function value: " << solver_control->last_value() << std::endl;
-        std::cout << "Intermediate results saved to sot_results" << std::endl;
+        std::cout << "Intermediate results saved to weights" << std::endl;
 
         // Re-throw the exception
         throw;
@@ -463,41 +471,98 @@ void Convex2Convex<dim>::compute_power_diagram()
     load_meshes();
     setup_finite_elements();
 
-    std::string eps_dir = "output/epsilon_" + std::to_string(solver_params.regularization_param);
-
-    // Read weights from SOT results
-    std::vector<double> weights_vec;
-    bool success = Utils::read_vector(weights_vec, eps_dir + "/sot_results");
-    if (!success) {
-        std::cerr << "Failed to read weights from " << eps_dir << "/sot_results" << std::endl;
+    // Let user select which folder(s) to use
+    std::vector<std::string> selected_folders;
+    try {
+        selected_folders = Utils::select_folder();
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
         return;
     }
 
-    if (weights_vec.size() != target_points.size()) {
-        std::cerr << "Error: Mismatch between weights size (" << weights_vec.size()
-                  << ") and target points size (" << target_points.size() << ")" << std::endl;
-        return;
+    // Process each selected folder
+    for (const auto& selected_folder : selected_folders) {
+        std::cout << "\nProcessing folder: " << selected_folder << std::endl;
+
+        // Read weights from selected folder's results
+        std::vector<double> weights_vec;
+        bool success = Utils::read_vector(weights_vec, "output/" + selected_folder + "/weights", io_coding);
+        if (!success) {
+            std::cerr << "Failed to read weights from output/" << selected_folder << "/weights" << std::endl;
+            continue; // Skip to next folder
+        }
+
+        if (weights_vec.size() != target_points.size()) {
+            std::cerr << "Error: Mismatch between weights size (" << weights_vec.size()
+                      << ") and target points size (" << target_points.size() << ")" << std::endl;
+            continue; // Skip to next folder
+        }
+
+        // Convert to dealii::Vector
+        Vector<double> weights(weights_vec.size());
+        std::copy(weights_vec.begin(), weights_vec.end(), weights.begin());
+
+        // Create output directory
+        const std::string output_dir = "output/" + selected_folder + "/power_diagram_"+power_diagram_params.implementation;
+        fs::create_directories(output_dir);
+
+        // Create power diagram using factory function based on parameter choice
+        std::unique_ptr<PowerDiagramSpace::PowerDiagramBase<dim>> power_diagram;
+        
+        try {
+            if (power_diagram_params.implementation == "geogram") {
+                if constexpr (dim == 3) {
+                    power_diagram = PowerDiagramSpace::create_power_diagram<dim>(
+                        "geogram", 
+                        nullptr, 
+                        "output/data_mesh/source.msh"
+                    );
+                    std::cout << "Using Geogram implementation for power diagram" << std::endl;
+                } else {
+                    std::cerr << "Geogram implementation is only available for 3D problems" << std::endl;
+                    std::cout << "Falling back to Deal.II implementation" << std::endl;
+                    power_diagram = PowerDiagramSpace::create_power_diagram<dim>(
+                        "dealii", 
+                        &source_mesh
+                    );
+                }
+            } else {
+                power_diagram = PowerDiagramSpace::create_power_diagram<dim>(
+                    "dealii", 
+                    &source_mesh
+                );
+                std::cout << "Using Deal.II implementation for power diagram" << std::endl;
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "Failed to initialize " << power_diagram_params.implementation 
+                      << " implementation: " << e.what() << std::endl;
+            if (power_diagram_params.implementation == "geogram") {
+                std::cout << "Falling back to Deal.II implementation" << std::endl;
+                power_diagram = PowerDiagramSpace::create_power_diagram<dim>(
+                    "dealii", 
+                    &source_mesh
+                );
+            } else {
+                throw;
+            }
+        }
+
+        // Set generators and compute power diagram
+        power_diagram->set_generators(target_points, weights);
+        power_diagram->compute_power_diagram();
+        power_diagram->compute_cell_centroids();
+
+        // Save results
+        power_diagram->save_centroids_to_file(output_dir + "/centroids");
+        power_diagram->output_vtu(output_dir + "/power_diagram");
+
+        std::cout << "Power diagram computation completed for " << selected_folder << std::endl;
+        std::cout << "Results saved in " << output_dir << std::endl;
     }
 
-    // Convert to dealii::Vector
-    Vector<double> weights(weights_vec.size());
-    std::copy(weights_vec.begin(), weights_vec.end(), weights.begin());
-
-    // Create and configure power diagram
-    PowerDiagramSpace::PowerDiagram<dim> power_diagram(source_mesh);
-    power_diagram.set_generators(target_points, weights);
-
-    // Compute power diagram and its properties
-    power_diagram.compute_power_diagram();
-    power_diagram.compute_cell_centroids();
-
-    // Save results
-    const std::string output_dir = eps_dir + "/power_diagram";
-    power_diagram.save_centroids_to_file(output_dir + "/centroids");
-    power_diagram.output_vtu(output_dir + "/power_diagram");
-
-    std::cout << "Power diagram computation completed." << std::endl;
-    std::cout << "Results saved in " << output_dir << std::endl;
+    if (selected_folders.size() > 1) {
+        std::cout << "\nCompleted power diagram computation for all selected folders." << std::endl;
+    }
 }
 
 template <int dim>
@@ -516,7 +581,7 @@ typename std::enable_if<d == 3>::type Convex2Convex<dim>::run_exact_sot()
 
     // Load target points from the same location as used in setup_finite_elements
     const std::string directory = "output/data_points";
-    if (!exact_solver.set_target_points(directory + "/target_points")) {
+    if (!exact_solver.set_target_points(directory + "/target_points", io_coding)) {
         std::cerr << "Failed to load target points for exact SOT" << std::endl;
         return;
     }
@@ -569,6 +634,8 @@ void Convex2Convex<dim>::run()
     else if (selected_task == "exact_sot")
     {
         if constexpr (dim == 3) {
+            load_meshes();
+            setup_finite_elements();
             run_exact_sot();
         } else {
             std::cerr << "Exact SOT is only available for 3D problems" << std::endl;
