@@ -19,9 +19,12 @@
 #include <deal.II/lac/vector.h>
 #include <deal.II/numerics/vector_tools.h>
 #include <deal.II/optimization/solver_bfgs.h>
+#include <deal.II/base/work_stream.h>
+#include <deal.II/base/multithread_info.h>
 
 #include <filesystem>
 #include <memory>
+#include <mutex>
 
 using namespace dealii;
 
@@ -32,6 +35,49 @@ public:
     void run();
 
 private:
+    // Scratch data for parallel assembly
+    struct ScratchData {
+        ScratchData(const FiniteElement<dim> &fe,
+                   const Mapping<dim> &mapping,
+                   const Quadrature<dim> &quadrature)
+            : fe_values(mapping, fe, quadrature,
+                       update_values | update_quadrature_points | update_JxW_values),
+              density_values(quadrature.size()) {}
+
+        ScratchData(const ScratchData &scratch_data)
+            : fe_values(scratch_data.fe_values.get_mapping(),
+                       scratch_data.fe_values.get_fe(),
+                       scratch_data.fe_values.get_quadrature(),
+                       update_values | update_quadrature_points | update_JxW_values),
+              density_values(scratch_data.density_values) {}
+
+        FEValues<dim> fe_values;
+        std::vector<double> density_values;
+    };
+
+    // Copy data for parallel assembly
+    struct CopyData {
+        double functional_value{0.0};
+        Vector<double> gradient_values;
+
+        CopyData(const unsigned int n_target_points)
+            : gradient_values(n_target_points) {}
+    };
+
+    // Helper functions for parallel assembly
+    void local_assemble_sot(const typename DoFHandler<dim>::active_cell_iterator &cell,
+                           ScratchData &scratch_data,
+                           CopyData &copy_data);
+
+    void copy_local_to_global(const CopyData &copy_data);
+
+    // Mutex for thread-safe updates
+    mutable std::mutex assembly_mutex;
+    double global_functional{0.0};
+    Vector<double> global_gradient;
+    const Vector<double>* current_weights{nullptr};
+    double current_lambda{0.0};
+
     void mesh_generation();
     void print_parameters();
     void load_meshes();
@@ -74,6 +120,7 @@ private:
         std::string solver_type = "BFGS";
         unsigned int quadrature_order = 3;
         unsigned int nb_points = 1000;
+        unsigned int number_of_threads = 0;  // 0 means use all available cores
     } solver_params;
 
     struct PowerDiagramParameters {

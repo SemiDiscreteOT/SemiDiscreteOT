@@ -72,9 +72,9 @@ Convex2Convex<dim>::Convex2Convex()
                      solver_params.quadrature_order,
                      "Order of quadrature formula for numerical integration");
 
-        add_parameter("nb_points",
-                     solver_params.nb_points,
-                     "Number of points for exact SOT computation");
+        add_parameter("number_of_threads",
+                     solver_params.number_of_threads,
+                     "Number of threads to use (0 means use all available cores)");
     }
     leave_subsection();
 
@@ -296,6 +296,49 @@ void Convex2Convex<dim>::setup_finite_elements()
               << target_points.size() << " target points" << std::endl;
 }
 
+template <int dim>
+void Convex2Convex<dim>::local_assemble_sot(
+    const typename DoFHandler<dim>::active_cell_iterator &cell,
+    ScratchData &scratch_data,
+    CopyData &copy_data)
+{
+    scratch_data.fe_values.reinit(cell);
+    const std::vector<Point<dim>> &q_points = scratch_data.fe_values.get_quadrature_points();
+    scratch_data.fe_values.get_function_values(source_density, scratch_data.density_values);
+
+    copy_data.functional_value = 0.0;
+    copy_data.gradient_values = 0;
+
+    for (unsigned int q = 0; q < q_points.size(); ++q)
+    {
+        const Point<dim> &x = q_points[q];
+        double sum_exp = 0.0;
+        std::vector<double> exp_terms(target_points.size());
+
+        // Compute exp terms
+        for (unsigned int i = 0; i < target_points.size(); ++i)
+        {
+            const double dist2 = (x - target_points[i]).norm_square();
+            exp_terms[i] = target_weights[i] * std::exp(((*current_weights)[i] - 0.5 * dist2) / current_lambda);
+            sum_exp += exp_terms[i];
+        }
+
+        copy_data.functional_value += scratch_data.density_values[q] * current_lambda * std::log(sum_exp) * scratch_data.fe_values.JxW(q);
+
+        for (unsigned int i = 0; i < target_points.size(); ++i)
+        {
+            copy_data.gradient_values[i] += scratch_data.density_values[q] * (exp_terms[i] / sum_exp) * scratch_data.fe_values.JxW(q);
+        }
+    }
+}
+
+template <int dim>
+void Convex2Convex<dim>::copy_local_to_global(const CopyData &copy_data)
+{
+    std::lock_guard<std::mutex> lock(assembly_mutex);
+    global_functional += copy_data.functional_value;
+    global_gradient += copy_data.gradient_values;
+}
 
 template <int dim>
 double Convex2Convex<dim>::evaluate_sot_functional(const Vector<double> &weights, Vector<double> &gradient)
@@ -303,9 +346,14 @@ double Convex2Convex<dim>::evaluate_sot_functional(const Vector<double> &weights
     Timer timer;
     timer.start();
 
-    const double lambda = solver_params.regularization_param;
-    double functional = 0.0;
-    gradient = 0;
+    // Store current weights and lambda for parallel access
+    current_weights = &weights;
+    current_lambda = solver_params.regularization_param;
+    
+    // Reset global values
+    global_functional = 0.0;
+    global_gradient = 0;
+    global_gradient.reinit(target_points.size());
 
     // Check if we're using tetrahedral meshes
     bool use_simplex = (source_params.use_tetrahedral_mesh || target_params.use_tetrahedral_mesh);
@@ -318,57 +366,57 @@ double Convex2Convex<dim>::evaluate_sot_functional(const Vector<double> &weights
         quadrature = std::make_unique<QGauss<dim>>(solver_params.quadrature_order);
     }
 
-    FEValues<dim> fe_values(*mapping, *fe_system, *quadrature,
-                           update_values | update_quadrature_points | update_JxW_values);
+    // Create lambda function for WorkStream
+    auto worker = [this](const typename DoFHandler<dim>::active_cell_iterator &cell,
+                        ScratchData &scratch_data,
+                        CopyData &copy_data) {
+        this->local_assemble_sot(cell, scratch_data, copy_data);
+    };
 
-    std::vector<double> density_values(quadrature->size());
+    auto copier = [this](const CopyData &copy_data) {
+        this->copy_local_to_global(copy_data);
+    };
 
-    for (const auto &cell : dof_handler_source.active_cell_iterators())
-    {
-        fe_values.reinit(cell);
-        const std::vector<Point<dim>> &q_points = fe_values.get_quadrature_points();
-        fe_values.get_function_values(source_density, density_values);
+    // Create scratch and copy data objects
+    ScratchData scratch_data(*fe_system, *mapping, *quadrature);
+    CopyData copy_data(target_points.size());
 
-        for (unsigned int q = 0; q < q_points.size(); ++q)
-        {
-            const Point<dim> &x = q_points[q];
-            double sum_exp = 0.0;
-            std::vector<double> exp_terms(target_points.size());
-
-            // Compute exp terms
-            for (unsigned int i = 0; i < target_points.size(); ++i)
-            {
-                const double dist2 = (x - target_points[i]).norm_square();
-                exp_terms[i] = target_weights[i] * std::exp((weights[i] - 0.5 * dist2) / lambda);
-                sum_exp += exp_terms[i];
-            }
-
-            functional += density_values[q] * lambda * std::log(sum_exp) * fe_values.JxW(q);
-
-            for (unsigned int i = 0; i < target_points.size(); ++i)
-            {
-                gradient[i] += density_values[q] * (exp_terms[i] / sum_exp) * fe_values.JxW(q);
-            }
-        }
-    }
+    // Run parallel assembly
+    WorkStream::run(dof_handler_source.begin_active(),
+                   dof_handler_source.end(),
+                   worker,
+                   copier,
+                   scratch_data,
+                   copy_data);
 
     // Add linear term
     for (unsigned int i = 0; i < target_points.size(); ++i)
     {
-        functional -= weights[i] * target_weights[i];
-        gradient[i] -= target_weights[i];
+        global_functional -= weights[i] * target_weights[i];
+        global_gradient[i] -= target_weights[i];
     }
+
+    // Copy results to output gradient
+    gradient = global_gradient;
 
     timer.stop();
     if (solver_params.verbose_output)
-        std::cout << "Evaluation time: " << timer.wall_time() << " seconds" << std::endl;
+        std::cout << "Parallel evaluation time: " << timer.wall_time() << " seconds" << std::endl;
 
-    return functional;
+    return global_functional;
 }
 
 template <int dim>
 void Convex2Convex<dim>::run_sot()
 {
+    // Set number of threads based on parameter
+    unsigned int n_threads = solver_params.number_of_threads;
+    if (n_threads == 0) {
+        n_threads = MultithreadInfo::n_cores();
+    }
+    MultithreadInfo::set_thread_limit(n_threads);
+    std::cout << "Running parallel SOT with " << n_threads << " threads" << std::endl;
+
     setup_finite_elements();
 
     std::cout << "Starting SOT optimization with " << target_points.size()
