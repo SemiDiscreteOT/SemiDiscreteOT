@@ -14,11 +14,11 @@ EOL
 # Directory structure
 mkdir -p params output
 
-# Base parameter file
+# Base parameter file - using the current parameters.prm as template
 cat > params/base_params.prm << EOL
 subsection Convex2Convex
 
-  set selected_task = sot  # Options: mesh_generation, load_meshes, sot, power_diagram
+  set selected_task = sot  # Options: mesh_generation, load_meshes, sot, exact_sot, power_diagram
   set io_coding = txt
 
   subsection mesh_generation
@@ -26,22 +26,29 @@ subsection Convex2Convex
       set number of refinements = 4
       set grid generator function = hyper_cube
       set grid generator arguments = -1 : 1 : false
+      set use tetrahedral mesh = true
     end
 
     subsection target
       set number of refinements = 3
       set grid generator function = hyper_ball
       set grid generator arguments = 0, 0, 0 : 1 : true
+      set use tetrahedral mesh = true
     end
   end
 
   subsection rsot_solver
     set max_iterations = 10000
-    set tolerance = 1e-7
-    set regularization_parameter = 1e-3
+    set tolerance = 1e-8
+    set regularization_parameter = 1e-2
     set verbose_output = true
     set solver_type = BFGS
-    set quadrature_order = 3
+    set quadrature_order = 2
+    set number_of_threads = 40  # Using all CPUs allocated by SLURM
+  end
+
+  subsection power_diagram_parameters
+    set implementation = geogram  # Options: dealii/geogram
   end
 
 end
@@ -65,7 +72,7 @@ do
 #SBATCH --output=output/rsot_eps_EPSILON_%j.out
 #SBATCH --error=output/rsot_eps_EPSILON_%j.err
 
-export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
+# Make sure we're in the right directory
 cd $SLURM_SUBMIT_DIR
 
 # Create parameter file for this epsilon
@@ -76,7 +83,7 @@ cp params/base_params.prm "$param_file"
 sed -i "s/set regularization_parameter = .*/set regularization_parameter = EPSILON/" "$param_file"
 
 # Run the simulation
-./rsot.exe "$param_file"
+srun ./rsot.exe "$param_file"
 
 # Check if simulation was successful
 if [ $? -eq 0 ]; then
@@ -130,7 +137,7 @@ done
     echo "## Results"
     echo "| Epsilon | Iterations | Final Value | Converged |"
     echo "|---------|------------|-------------|-----------|"
-    
+
     while IFS=',' read -r eps iter val conv; do
         echo "| $eps | $iter | $val | $conv |"
     done < output/results_summary.csv
