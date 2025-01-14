@@ -33,6 +33,7 @@ class Convex2Convex : public ParameterAcceptor {
 public:
     Convex2Convex();
     void run();
+    void save_discrete_measures();
 
 private:
     // Scratch data for parallel assembly

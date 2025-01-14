@@ -1,6 +1,6 @@
 subsection Convex2Convex
 
-  set selected_task = sot  # Options: mesh_generation, load_meshes, sot, exact_sot, power_diagram
+  set selected_task = save_discrete_measures  # Options: mesh_generation, load_meshes, sot, exact_sot, power_diagram
   set io_coding = txt
 
   subsection mesh_generation

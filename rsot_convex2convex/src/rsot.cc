@@ -343,9 +343,6 @@ void Convex2Convex<dim>::copy_local_to_global(const CopyData &copy_data)
 template <int dim>
 double Convex2Convex<dim>::evaluate_sot_functional(const Vector<double> &weights, Vector<double> &gradient)
 {
-    Timer timer;
-    timer.start();
-
     // Store current weights and lambda for parallel access
     current_weights = &weights;
     current_lambda = solver_params.regularization_param;
@@ -399,10 +396,6 @@ double Convex2Convex<dim>::evaluate_sot_functional(const Vector<double> &weights
     // Copy results to output gradient
     gradient = global_gradient;
 
-    timer.stop();
-    if (solver_params.verbose_output)
-        std::cout << "Parallel evaluation time: " << timer.wall_time() << " seconds" << std::endl;
-
     return global_functional;
 }
 
@@ -416,6 +409,9 @@ void Convex2Convex<dim>::run_sot()
     }
     MultithreadInfo::set_thread_limit(n_threads);
     std::cout << "Running parallel SOT with " << n_threads << " threads" << std::endl;
+
+    Timer timer;
+    timer.start();
 
     setup_finite_elements();
 
@@ -466,7 +462,9 @@ void Convex2Convex<dim>::run_sot()
             weights
         );
 
+        timer.stop();
         std::cout << "\nOptimization completed successfully!" << std::endl;
+        std::cout << "Total solver time: " << timer.wall_time() << " seconds" << std::endl;
         std::cout << "Final number of iterations: " << solver_control->last_step() << std::endl;
         std::cout << "Final function value: " << solver_control->last_value() << std::endl;
 
@@ -475,9 +473,11 @@ void Convex2Convex<dim>::run_sot()
     }
     catch (SolverControl::NoConvergence &exc)
     {
+        timer.stop();
         // Save results before reporting the error
         save_results(weights, "weights");
         std::cout << "\nMaximum iterations reached without convergence." << std::endl;
+        std::cout << "Total solver time: " << timer.wall_time() << " seconds" << std::endl;
         std::cout << "Final number of iterations: " << solver_control->last_step() << std::endl;
         std::cout << "Final function value: " << solver_control->last_value() << std::endl;
         std::cout << "Intermediate results saved to weights" << std::endl;
@@ -487,6 +487,8 @@ void Convex2Convex<dim>::run_sot()
     }
     catch (std::exception &exc)
     {
+        timer.stop();
+        std::cout << "Total solver time: " << timer.wall_time() << " seconds" << std::endl;
         std::cerr << "Error in SOT computation: " << exc.what() << std::endl;
     }
 }
@@ -662,6 +664,81 @@ typename std::enable_if<d == 3>::type Convex2Convex<dim>::run_exact_sot()
 }
 
 template <int dim>
+void Convex2Convex<dim>::save_discrete_measures()
+{
+    load_meshes();
+    setup_finite_elements();
+
+    // Create output directory
+    const std::string directory = "output/discrete_measures";
+    fs::create_directories(directory);
+
+    // Get quadrature points and weights
+    std::unique_ptr<Quadrature<dim>> quadrature;
+    if (source_params.use_tetrahedral_mesh) {
+        quadrature = std::make_unique<QGaussSimplex<dim>>(solver_params.quadrature_order);
+    } else {
+        quadrature = std::make_unique<QGauss<dim>>(solver_params.quadrature_order);
+    }
+
+    FEValues<dim> fe_values(*mapping, *fe_system, *quadrature,
+                           update_values | update_quadrature_points | update_JxW_values);
+
+    // Count total number of quadrature points
+    const unsigned int n_q_points = quadrature->size();
+    const unsigned int total_q_points = source_mesh.n_active_cells() * n_q_points;
+
+    // Prepare vectors for quadrature data
+    std::vector<Point<dim>> quad_points;
+    std::vector<double> quad_weights;
+    std::vector<double> density_values;
+    quad_points.reserve(total_q_points);
+    quad_weights.reserve(total_q_points);
+    density_values.reserve(total_q_points);
+
+    // Get density values at DoF points
+    std::vector<double> local_density_values(n_q_points);
+
+    // Loop over cells to collect quadrature data
+    for (const auto &cell : dof_handler_source.active_cell_iterators())
+    {
+        fe_values.reinit(cell);
+        fe_values.get_function_values(source_density, local_density_values);
+
+        for (unsigned int q = 0; q < n_q_points; ++q)
+        {
+            quad_points.push_back(fe_values.quadrature_point(q));
+            quad_weights.push_back(fe_values.JxW(q));
+            density_values.push_back(local_density_values[q]);
+        }
+    }
+
+    // Save quadrature data
+    Utils::write_vector(quad_points, directory + "/quadrature_points", io_coding);
+    Utils::write_vector(quad_weights, directory + "/quadrature_weights", io_coding);
+    Utils::write_vector(density_values, directory + "/density_values", io_coding);
+
+    // Save target measure data
+    Utils::write_vector(target_points, directory + "/target_points", io_coding);
+    std::vector<double> target_weights_vec(target_weights.begin(), target_weights.end());
+    Utils::write_vector(target_weights_vec, directory + "/target_weights", io_coding);
+
+    // Save metadata
+    std::ofstream meta(directory + "/metadata.txt");
+    meta << "Dimension: " << dim << "\n"
+         << "Number of quadrature points per cell: " << n_q_points << "\n"
+         << "Total number of quadrature points: " << total_q_points << "\n"
+         << "Number of target points: " << target_points.size() << "\n"
+         << "Quadrature order: " << solver_params.quadrature_order << "\n"
+         << "Using tetrahedral mesh: " << source_params.use_tetrahedral_mesh << "\n";
+    meta.close();
+
+    std::cout << "Discrete measures data saved in " << directory << std::endl;
+    std::cout << "Total quadrature points: " << total_q_points << std::endl;
+    std::cout << "Number of target points: " << target_points.size() << std::endl;
+}
+
+template <int dim>
 void Convex2Convex<dim>::run()
 {
     print_parameters();
@@ -692,6 +769,10 @@ void Convex2Convex<dim>::run()
     else if (selected_task == "power_diagram")
     {
         compute_power_diagram();
+    }
+    else if (selected_task == "save_discrete_measures")
+    {
+        save_discrete_measures();
     }
     else
     {
