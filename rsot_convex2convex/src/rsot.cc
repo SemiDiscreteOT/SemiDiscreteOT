@@ -4,6 +4,7 @@
 #include "ExactSot.h"
 #include <deal.II/base/timer.h>
 #include <filesystem>
+#include <deal.II/base/vectorization.h>
 namespace fs = std::filesystem;
 
 template <int dim>
@@ -302,6 +303,9 @@ void Convex2Convex<dim>::local_assemble_sot(
     ScratchData &scratch_data,
     CopyData &copy_data)
 {
+    using VectorizedDouble = VectorizedArray<double>;
+    constexpr unsigned int vectorization_width = VectorizedArray<double>::size();
+    
     scratch_data.fe_values.reinit(cell);
     const std::vector<Point<dim>> &q_points = scratch_data.fe_values.get_quadrature_points();
     scratch_data.fe_values.get_function_values(source_density, scratch_data.density_values);
@@ -309,25 +313,66 @@ void Convex2Convex<dim>::local_assemble_sot(
     copy_data.functional_value = 0.0;
     copy_data.gradient_values = 0;
 
-    for (unsigned int q = 0; q < q_points.size(); ++q)
-    {
-        const Point<dim> &x = q_points[q];
-        double sum_exp = 0.0;
-        std::vector<double> exp_terms(target_points.size());
+    const unsigned int n_q_points = q_points.size();
+    const unsigned int n_targets = target_points.size();
+    
+    // Pre-compute vectorized target points and weights
+    std::vector<VectorizedDouble> target_weights_vec;
+    std::vector<VectorizedDouble> current_weights_vec;
+    std::vector<std::array<VectorizedDouble, dim>> target_points_vec;
+    
+    for (unsigned int i = 0; i < n_targets; i += vectorization_width) {
+        VectorizedDouble weight;
+        VectorizedDouble curr_weight;
+        std::array<VectorizedDouble, dim> point;
+        
+        for (unsigned int v = 0; v < vectorization_width && (i + v) < n_targets; ++v) {
+            weight[v] = target_weights[i + v];
+            curr_weight[v] = (*current_weights)[i + v];
+            for (unsigned int d = 0; d < dim; ++d) {
+                point[d][v] = target_points[i + v][d];
+            }
+        }
+        target_weights_vec.push_back(weight);
+        current_weights_vec.push_back(curr_weight);
+        target_points_vec.push_back(point);
+    }
 
-        // Compute exp terms
-        for (unsigned int i = 0; i < target_points.size(); ++i)
-        {
-            const double dist2 = (x - target_points[i]).norm_square();
-            exp_terms[i] = target_weights[i] * std::exp(((*current_weights)[i] - 0.5 * dist2) / current_lambda);
-            sum_exp += exp_terms[i];
+    // Process quadrature points
+    for (unsigned int q = 0; q < n_q_points; ++q) {
+        const Point<dim> &x = q_points[q];
+        double total_sum_exp = 0.0;
+        std::vector<double> exp_terms(n_targets, 0.0);
+        
+        // Vectorized computation of exp terms
+        for (unsigned int i = 0; i < target_weights_vec.size(); ++i) {
+            VectorizedDouble dist2 = VectorizedDouble();
+            
+            // Compute squared distance
+            for (unsigned int d = 0; d < dim; ++d) {
+                VectorizedDouble diff = target_points_vec[i][d] - x[d];
+                dist2 += diff * diff;
+            }
+            
+            // Compute exp terms for this SIMD group
+            VectorizedDouble exp_term = target_weights_vec[i] * 
+                std::exp((current_weights_vec[i] - 0.5 * dist2) / current_lambda);
+            
+            // Store individual exp terms and accumulate sum
+            for (unsigned int v = 0; v < vectorization_width && (i * vectorization_width + v) < n_targets; ++v) {
+                exp_terms[i * vectorization_width + v] = exp_term[v];
+                total_sum_exp += exp_term[v];
+            }
         }
 
-        copy_data.functional_value += scratch_data.density_values[q] * current_lambda * std::log(sum_exp) * scratch_data.fe_values.JxW(q);
+        // Accumulate functional value
+        copy_data.functional_value += scratch_data.density_values[q] * 
+            current_lambda * std::log(total_sum_exp) * scratch_data.fe_values.JxW(q);
 
-        for (unsigned int i = 0; i < target_points.size(); ++i)
-        {
-            copy_data.gradient_values[i] += scratch_data.density_values[q] * (exp_terms[i] / sum_exp) * scratch_data.fe_values.JxW(q);
+        // Accumulate gradient values
+        for (unsigned int i = 0; i < n_targets; ++i) {
+            copy_data.gradient_values[i] += 
+                scratch_data.density_values[q] * (exp_terms[i] / total_sum_exp) * scratch_data.fe_values.JxW(q);
         }
     }
 }
