@@ -390,7 +390,8 @@ void Convex2Convex<dim>::local_assemble_sot(
     Point<dim> max_point = min_point;
     
     // Find bounding box of the cell
-    for (unsigned int v = 1; v < GeometryInfo<dim>::vertices_per_cell; ++v) {
+    const unsigned int vertices_per_cell = (source_params.use_tetrahedral_mesh || target_params.use_tetrahedral_mesh) ? 4 : GeometryInfo<dim>::vertices_per_cell;
+    for (unsigned int v = 1; v < vertices_per_cell; ++v) {
         const Point<dim>& vertex = cell->vertex(v);
         for (unsigned int d = 0; d < dim; ++d) {
             min_point[d] = std::min(min_point[d], vertex[d]);
