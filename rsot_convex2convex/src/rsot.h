@@ -21,10 +21,12 @@
 #include <deal.II/optimization/solver_bfgs.h>
 #include <deal.II/base/work_stream.h>
 #include <deal.II/base/multithread_info.h>
+#include <deal.II/numerics/rtree.h>
 
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <atomic>
 
 using namespace dealii;
 
@@ -79,6 +81,9 @@ private:
     const Vector<double>* current_weights{nullptr};
     double current_lambda{0.0};
 
+    // Debug tracking variables
+    std::atomic<size_t> total_target_points{0};
+
     void mesh_generation();
     void print_parameters();
     void load_meshes();
@@ -117,7 +122,9 @@ private:
         unsigned int max_iterations = 1000;
         double tolerance = 1e-8;
         double regularization_param = 1e-3;
+        double epsilon = 1e-8;  // Parameter for truncation criterion
         bool verbose_output = true;
+        bool debug = false;  // Debug flag for additional output
         std::string solver_type = "BFGS";
         unsigned int quadrature_order = 3;
         unsigned int nb_points = 1000;
@@ -137,6 +144,22 @@ private:
     void setup_finite_elements();
     double evaluate_sot_functional(const Vector<double>& weights, Vector<double>& gradient);
     void save_results(const Vector<double>& weights, const std::string& filename);
+
+    // RTree for spatial queries on target points
+    using IndexedPoint = std::pair<Point<dim>, std::size_t>;
+    RTree<IndexedPoint> target_points_rtree;
+    
+    // Computed distance threshold for current iteration
+    mutable double current_distance_threshold{0.0};
+    
+    // Compute the distance threshold based on current weights and parameters
+    void compute_distance_threshold() const;
+    
+    // Helper function for nearest neighbor queries
+    std::vector<std::size_t> find_nearest_target_points(const Point<dim>& query_point) const;
+    
+    // Helper function for range queries
+    std::vector<std::size_t> find_target_points_in_box(const BoundingBox<dim>& box) const;
 };
 
 #endif

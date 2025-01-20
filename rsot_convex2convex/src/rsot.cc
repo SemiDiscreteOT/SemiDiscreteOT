@@ -60,9 +60,17 @@ Convex2Convex<dim>::Convex2Convex()
                      solver_params.regularization_param,
                      "Entropy regularization parameter (lambda)");
 
+        add_parameter("epsilon",
+                     solver_params.epsilon,
+                     "Truncation criterion for the kernel evaluation (smaller values include more points)");
+
         add_parameter("verbose_output",
                      solver_params.verbose_output,
                      "Enable detailed solver output");
+
+        add_parameter("debug",
+                     solver_params.debug,
+                     "Enable debug output for target point statistics");
 
         add_parameter("solver_type",
                      solver_params.solver_type,
@@ -351,6 +359,17 @@ void Convex2Convex<dim>::setup_finite_elements()
 
     std::cout << "Setup complete with " << source_points.size() << " source points and "
               << target_points.size() << " target points" << std::endl;
+
+    // Initialize RTree with target points and their indices
+    std::vector<IndexedPoint> indexed_points;
+    indexed_points.reserve(target_points.size());
+    for (std::size_t i = 0; i < target_points.size(); ++i) {
+        indexed_points.emplace_back(target_points[i], i);
+    }
+    target_points_rtree = pack_rtree(indexed_points);
+
+    std::cout << "RTree initialized for target points" << std::endl;
+    std::cout << n_levels(target_points_rtree) << std::endl;
 }
 
 template <int dim>
@@ -366,25 +385,67 @@ void Convex2Convex<dim>::local_assemble_sot(
     copy_data.functional_value = 0.0;
     copy_data.gradient_values = 0;
 
+    // Get cell bounding box and extend it by the current distance threshold
+    Point<dim> min_point = cell->vertex(0);
+    Point<dim> max_point = min_point;
+    
+    // Find bounding box of the cell
+    for (unsigned int v = 1; v < GeometryInfo<dim>::vertices_per_cell; ++v) {
+        const Point<dim>& vertex = cell->vertex(v);
+        for (unsigned int d = 0; d < dim; ++d) {
+            min_point[d] = std::min(min_point[d], vertex[d]);
+            max_point[d] = std::max(max_point[d], vertex[d]);
+        }
+    }
+    
+    // Extend bounding box by the distance threshold
+    for (unsigned int d = 0; d < dim; ++d) {
+        min_point[d] -= current_distance_threshold;
+        max_point[d] += current_distance_threshold;
+    }
+    
+    // Find target points within the extended bounding box
+    std::vector<std::size_t> cell_target_indices;
+    BoundingBox<dim> extended_box(std::make_pair(min_point, max_point));
+    cell_target_indices = find_target_points_in_box(extended_box);
+
+    // Debug tracking - only track total target points if debug is enabled
+    if (solver_params.debug) {
+        total_target_points += cell_target_indices.size();
+    }
+
+    // Process each quadrature point using the precomputed target indices
     for (unsigned int q = 0; q < q_points.size(); ++q)
     {
         const Point<dim> &x = q_points[q];
         double sum_exp = 0.0;
-        std::vector<double> exp_terms(target_points.size());
+        std::vector<double> exp_terms;
+        exp_terms.resize(cell_target_indices.size());
 
-        // Compute exp terms
-        for (unsigned int i = 0; i < target_points.size(); ++i)
+        // Compute exp terms for the precomputed target points
+        for (size_t i = 0; i < cell_target_indices.size(); ++i)
         {
-            const double dist2 = (x - target_points[i]).norm_square();
-            exp_terms[i] = target_weights[i] * std::exp(((*current_weights)[i] - 0.5 * dist2) / current_lambda);
-            sum_exp += exp_terms[i];
+            const size_t idx = cell_target_indices[i];
+            const double dist2 = (x - target_points[idx]).norm_square();
+            
+            // Only include points within the actual distance threshold
+            if (dist2 <= current_distance_threshold * current_distance_threshold) {
+                exp_terms[i] = target_weights[idx] * std::exp(((*current_weights)[idx] - 0.5 * dist2) / current_lambda);
+                sum_exp += exp_terms[i];
+            } else {
+                exp_terms[i] = 0.0;
+            }
         }
 
         copy_data.functional_value += scratch_data.density_values[q] * current_lambda * std::log(sum_exp) * scratch_data.fe_values.JxW(q);
 
-        for (unsigned int i = 0; i < target_points.size(); ++i)
+        // Update gradient only for points within threshold
+        for (size_t i = 0; i < cell_target_indices.size(); ++i)
         {
-            copy_data.gradient_values[i] += scratch_data.density_values[q] * (exp_terms[i] / sum_exp) * scratch_data.fe_values.JxW(q);
+            if (exp_terms[i] > 0.0) {  // Only process points that were within threshold
+                const size_t idx = cell_target_indices[i];
+                copy_data.gradient_values[idx] += scratch_data.density_values[q] * (exp_terms[i] / sum_exp) * scratch_data.fe_values.JxW(q);
+            }
         }
     }
 }
@@ -404,10 +465,18 @@ double Convex2Convex<dim>::evaluate_sot_functional(const Vector<double> &weights
     current_weights = &weights;
     current_lambda = solver_params.regularization_param;
     
+    // Compute the distance threshold for this iteration
+    compute_distance_threshold();
+    
     // Reset global values
     global_functional = 0.0;
     global_gradient = 0;
     global_gradient.reinit(target_points.size());
+
+    // Debug tracking variables
+    if (solver_params.debug) {
+        total_target_points = 0;
+    }
 
     // Check if we're using tetrahedral meshes
     bool use_simplex = (source_params.use_tetrahedral_mesh || target_params.use_tetrahedral_mesh);
@@ -448,6 +517,18 @@ double Convex2Convex<dim>::evaluate_sot_functional(const Vector<double> &weights
     {
         global_functional -= weights[i] * target_weights[i];
         global_gradient[i] -= target_weights[i];
+    }
+
+    // Debug output - calculate total quadrature points only once
+    if (solver_params.debug) {
+        const unsigned int points_per_cell = use_simplex ? 
+            QGaussSimplex<dim>(solver_params.quadrature_order).size() :
+            QGauss<dim>(solver_params.quadrature_order).size();
+        const unsigned int total_quad_points = dof_handler_source.get_triangulation().n_active_cells() * points_per_cell;
+        double avg_targets = static_cast<double>(total_target_points) / total_quad_points;
+        std::cout << "Debug: Average target points per quadrature point: " << avg_targets 
+                  << " (Total targets: " << total_target_points 
+                  << ", Total quad points: " << total_quad_points << ")" << std::endl;
     }
 
     // Copy results to output gradient
@@ -793,6 +874,66 @@ void Convex2Convex<dim>::save_discrete_measures()
     std::cout << "Discrete measures data saved in " << directory << std::endl;
     std::cout << "Total quadrature points: " << total_q_points << std::endl;
     std::cout << "Number of target points: " << target_points.size() << std::endl;
+}
+
+template <int dim>
+void Convex2Convex<dim>::compute_distance_threshold() const
+{
+    // Compute the maximum weight (ψⱼ) from current_weights if available
+    double max_weight = 0.0;
+    if (current_weights != nullptr) {
+        max_weight = *std::max_element(current_weights->begin(), current_weights->end());
+    }
+    
+    // Find the minimum target weight (νⱼ)
+    double min_target_weight = *std::min_element(target_weights.begin(), target_weights.end());
+    
+    // Compute the actual distance threshold based on the formula
+    // |x-yⱼ|² ≥ -2λlog(ε/νⱼ) + 2ψⱼ
+    double lambda = solver_params.regularization_param;
+    double epsilon = solver_params.epsilon;
+    
+    // Using the most conservative case:
+    // - maximum weight (ψⱼ) for positive contribution
+    // - minimum target weight (νⱼ) for the log term
+    double squared_threshold = -2.0 * lambda * std::log(epsilon/min_target_weight) + 2.0 * max_weight;
+    current_distance_threshold = std::sqrt(std::max(0.0, squared_threshold));
+}
+
+template <int dim>
+std::vector<std::size_t> Convex2Convex<dim>::find_nearest_target_points(
+    const Point<dim>& query_point) const
+{
+    namespace bgi = boost::geometry::index;
+    std::vector<std::size_t> indices;
+    
+    // Query all points within the precomputed threshold
+    for (const auto& indexed_point : target_points_rtree | 
+         bgi::adaptors::queried(bgi::satisfies([&](const IndexedPoint& p) {
+             return (p.first - query_point).norm() <= current_distance_threshold;
+         })))
+    {
+        indices.push_back(indexed_point.second);
+    }
+    
+    return indices;
+}
+
+template <int dim>
+std::vector<std::size_t> Convex2Convex<dim>::find_target_points_in_box(
+    const BoundingBox<dim>& box) const
+{
+    namespace bgi = boost::geometry::index;
+    std::vector<std::size_t> indices;
+    
+    // Query points that intersect with the box
+    for (const auto& indexed_point : target_points_rtree | 
+         bgi::adaptors::queried(bgi::intersects(box)))
+    {
+        indices.push_back(indexed_point.second);
+    }
+    
+    return indices;
 }
 
 template <int dim>
