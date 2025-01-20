@@ -171,19 +171,76 @@ void Convex2Convex<dim>::load_meshes()
 {
     const std::string directory = "output/data_mesh";
 
-    std::ifstream in_vtk_source(directory + "/source.vtk");
-    std::ifstream in_msh_source(directory + "/source.msh");
+    // Try loading source mesh
     GridIn<dim> grid_in_source;
     grid_in_source.attach_triangulation(source_mesh);
-    grid_in_source.read_vtk(in_vtk_source);
+    bool source_loaded = false;
 
-    std::ifstream in_vtk_target(directory + "/target.vtk");
-    std::ifstream in_msh_target(directory + "/target.msh");
+    // First try VTK
+    std::ifstream in_vtk_source(directory + "/source.vtk");
+    if (in_vtk_source.good()) {
+        try {
+            grid_in_source.read_vtk(in_vtk_source);
+            source_loaded = true;
+            std::cout << "Source mesh loaded from VTK format" << std::endl;
+        } catch (const std::exception& e) {
+            std::cout << "Failed to load source mesh from VTK: " << e.what() << std::endl;
+        }
+    }
+
+    // If VTK failed, try MSH
+    if (!source_loaded) {
+        std::ifstream in_msh_source(directory + "/source.msh");
+        if (in_msh_source.good()) {
+            try {
+                grid_in_source.read_msh(in_msh_source);
+                source_loaded = true;
+                std::cout << "Source mesh loaded from MSH format" << std::endl;
+            } catch (const std::exception& e) {
+                std::cerr << "Failed to load source mesh from MSH: " << e.what() << std::endl;
+            }
+        }
+    }
+
+    if (!source_loaded) {
+        throw std::runtime_error("Failed to load source mesh from either VTK or MSH format");
+    }
+
+    // Try loading target mesh
     GridIn<dim> grid_in_target;
     grid_in_target.attach_triangulation(target_mesh);
-    grid_in_target.read_vtk(in_vtk_target);
+    bool target_loaded = false;
 
-    std::cout << "Meshes loaded from VTK and MSH formats" << std::endl;
+    // First try VTK
+    std::ifstream in_vtk_target(directory + "/target.vtk");
+    if (in_vtk_target.good()) {
+        try {
+            grid_in_target.read_vtk(in_vtk_target);
+            target_loaded = true;
+            std::cout << "Target mesh loaded from VTK format" << std::endl;
+        } catch (const std::exception& e) {
+            std::cout << "Failed to load target mesh from VTK: " << e.what() << std::endl;
+        }
+    }
+
+    // If VTK failed, try MSH
+    if (!target_loaded) {
+        std::ifstream in_msh_target(directory + "/target.msh");
+        if (in_msh_target.good()) {
+            try {
+                grid_in_target.read_msh(in_msh_target);
+                target_loaded = true;
+                std::cout << "Target mesh loaded from MSH format" << std::endl;
+            } catch (const std::exception& e) {
+                std::cerr << "Failed to load target mesh from MSH: " << e.what() << std::endl;
+            }
+        }
+    }
+
+    if (!target_loaded) {
+        throw std::runtime_error("Failed to load target mesh from either VTK or MSH format");
+    }
+
     std::cout << "Source mesh: " << source_mesh.n_active_cells() << " cells, " << source_mesh.n_vertices() << " vertices" << std::endl;
     std::cout << "Target mesh: " << target_mesh.n_active_cells() << " cells, " << target_mesh.n_vertices() << " vertices" << std::endl;
 }
