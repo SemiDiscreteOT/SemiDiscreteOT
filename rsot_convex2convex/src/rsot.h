@@ -27,6 +27,7 @@
 #include <memory>
 #include <mutex>
 #include <atomic>
+#include <boost/geometry/index/rtree.hpp>
 
 using namespace dealii;
 
@@ -83,6 +84,7 @@ private:
 
     // Debug tracking variables
     std::atomic<size_t> total_target_points{0};
+    size_t total_quad_points{0};  // Total number of quadrature points across all cells
 
     void mesh_generation();
     void print_parameters();
@@ -147,7 +149,9 @@ private:
 
     // RTree for spatial queries on target points
     using IndexedPoint = std::pair<Point<dim>, std::size_t>;
-    RTree<IndexedPoint> target_points_rtree;
+    using RTreeParams = boost::geometry::index::rstar<8>;
+    using RTree = boost::geometry::index::rtree<IndexedPoint, RTreeParams>;
+    RTree target_points_rtree;
     
     // Computed distance threshold for current iteration
     mutable double current_distance_threshold{0.0};

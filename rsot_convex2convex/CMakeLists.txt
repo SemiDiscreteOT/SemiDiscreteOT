@@ -7,14 +7,22 @@ SET(TARGET_SRC
   src/ExactSot.cc
 )
 
-SET(GEOGRAM_DIR "/scratch/mkhamlic/lib/geogram")
+SET(GEOGRAM_DIR "/Users/moaadkhamlich/scratch/libs/geogram")
 
 # Geogram setup
 INCLUDE_DIRECTORIES(${GEOGRAM_DIR}/src/lib)
 SET(CMAKE_MODULE_PATH ${GEOGRAM_DIR}/cmake)
-SET(GEOGRAM_LIBS 
-    ${GEOGRAM_DIR}/build/Linux64-gcc-dynamic-Release/lib/libgeogram.so 
-    ${GEOGRAM_DIR}/build/Linux64-gcc-dynamic-Release/lib/libexploragram.so
+
+# Set library extension based on platform
+IF(APPLE)
+    SET(LIB_EXTENSION "dylib")
+ELSE()
+    SET(LIB_EXTENSION "so")
+ENDIF()
+
+SET(GEOGRAM_LIBS
+    ${GEOGRAM_DIR}/build/Darwin-clang-dynamic-Release/lib/libgeogram.${LIB_EXTENSION}
+    ${GEOGRAM_DIR}/build/Darwin-clang-dynamic-Release/lib/libexploragram.${LIB_EXTENSION}
 )
 
 # Deal.II setup

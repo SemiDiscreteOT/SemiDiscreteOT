@@ -1,6 +1,6 @@
 subsection Convex2Convex
 
-  set selected_task = save_discrete_measures  # Options: mesh_generation, load_meshes, sot, exact_sot, power_diagram
+  set selected_task = sot  # Options: mesh_generation, load_meshes, sot, exact_sot, power_diagram
   set io_coding = txt
 
   subsection mesh_generation
@@ -21,12 +21,14 @@ subsection Convex2Convex
 
   subsection rsot_solver
     set max_iterations = 10000
-    set tolerance = 1e-8
+    set tolerance = 1e-5
     set regularization_parameter = 1e-2
+    set epsilon = 1e-15  # Parameter for truncation criterion
     set verbose_output = true
+    set debug = true  # Enable debug output for target point statistics
     set solver_type = BFGS
     set quadrature_order = 3
-    set number_of_threads = 1  # 0 means use all available cores
+    set number_of_threads = 0  # 0 means use all available cores
   end
 
   subsection power_diagram_parameters
