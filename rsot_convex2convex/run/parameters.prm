@@ -22,7 +22,7 @@ subsection Convex2Convex
   subsection rsot_solver
     set max_iterations = 10000
     set tolerance = 1e-5
-    set regularization_parameter = 1e1
+    set regularization_parameter = 1e-2
     set verbose_output = true
     set solver_type = BFGS
     set quadrature_order = 3

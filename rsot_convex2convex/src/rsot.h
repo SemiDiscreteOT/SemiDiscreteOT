@@ -109,9 +109,14 @@ private:
     Vector<double> source_density;
     std::vector<Point<dim>> target_points;
     std::vector<Point<dim>> source_points;
-    Vector<double> target_weights;
+    Vector<double> target_density;
 
     std::unique_ptr<SolverControl> solver_control;
+
+    // Vectorized data members
+    std::vector<VectorizedArray<double>> target_density_vec;
+    std::vector<VectorizedArray<double>> current_weights_vec;
+    std::vector<std::array<VectorizedArray<double>, dim>> target_points_vec;
 
     struct SolverParameters {
         unsigned int max_iterations = 1000;

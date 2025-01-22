@@ -189,7 +189,6 @@ void Convex2Convex<dim>::load_meshes()
     std::cout << "Target mesh: " << target_mesh.n_active_cells() << " cells, " << target_mesh.n_vertices() << " vertices" << std::endl;
 }
 
-// TODO: controllare da qua in poi
 template <int dim>
 void Convex2Convex<dim>::setup_finite_elements()
 {
@@ -246,8 +245,8 @@ void Convex2Convex<dim>::setup_finite_elements()
     // Try to load target points from file first
     if (Utils::read_vector(target_points, directory + "/target_points", io_coding))
     {
-        target_weights.reinit(target_points.size());
-        target_weights = 1.0 / target_points.size();
+        target_density.reinit(target_points.size());
+        target_density = 1.0 / target_points.size();
         points_loaded = true;
         std::cout << "Target points loaded from file" << std::endl;
     }
@@ -262,12 +261,33 @@ void Convex2Convex<dim>::setup_finite_elements()
         {
             target_points.push_back(point_pair.second);
         }
-        target_weights.reinit(support_points_target.size());
-        target_weights = 1.0 / support_points_target.size();
+        target_density.reinit(support_points_target.size());
+        target_density = 1.0 / support_points_target.size();
 
         // Save the computed points
         Utils::write_vector(target_points, directory + "/target_points", io_coding);
         std::cout << "Target points computed and saved to file" << std::endl;
+    }
+
+    // Pre-compute vectorized target data
+    const unsigned int vectorization_width = VectorizedArray<double>::size();
+    const unsigned int n_targets = target_points.size();
+    
+    target_density_vec.clear();
+    target_points_vec.clear();
+    
+    for (unsigned int i = 0; i < n_targets; i += vectorization_width) {
+        VectorizedArray<double> weight;
+        std::array<VectorizedArray<double>, dim> point;
+        
+        for (unsigned int v = 0; v < vectorization_width && (i + v) < n_targets; ++v) {
+            weight[v] = target_density[i + v];
+            for (unsigned int d = 0; d < dim; ++d) {
+                point[d][v] = target_points[i + v][d];
+            }
+        }
+        target_density_vec.push_back(weight);
+        target_points_vec.push_back(point);
     }
 
     // Similar approach for source points
@@ -315,28 +335,6 @@ void Convex2Convex<dim>::local_assemble_sot(
 
     const unsigned int n_q_points = q_points.size();
     const unsigned int n_targets = target_points.size();
-    
-    // Pre-compute vectorized target points and weights
-    std::vector<VectorizedDouble> target_weights_vec;
-    std::vector<VectorizedDouble> current_weights_vec;
-    std::vector<std::array<VectorizedDouble, dim>> target_points_vec;
-    
-    for (unsigned int i = 0; i < n_targets; i += vectorization_width) {
-        VectorizedDouble weight;
-        VectorizedDouble curr_weight;
-        std::array<VectorizedDouble, dim> point;
-        
-        for (unsigned int v = 0; v < vectorization_width && (i + v) < n_targets; ++v) {
-            weight[v] = target_weights[i + v];
-            curr_weight[v] = (*current_weights)[i + v];
-            for (unsigned int d = 0; d < dim; ++d) {
-                point[d][v] = target_points[i + v][d];
-            }
-        }
-        target_weights_vec.push_back(weight);
-        current_weights_vec.push_back(curr_weight);
-        target_points_vec.push_back(point);
-    }
 
     // Process quadrature points
     for (unsigned int q = 0; q < n_q_points; ++q) {
@@ -345,7 +343,7 @@ void Convex2Convex<dim>::local_assemble_sot(
         std::vector<double> exp_terms(n_targets, 0.0);
         
         // Vectorized computation of exp terms
-        for (unsigned int i = 0; i < target_weights_vec.size(); ++i) {
+        for (unsigned int i = 0; i < target_density_vec.size(); ++i) {
             VectorizedDouble dist2 = VectorizedDouble();
             
             // Compute squared distance
@@ -355,7 +353,7 @@ void Convex2Convex<dim>::local_assemble_sot(
             }
             
             // Compute exp terms for this SIMD group
-            VectorizedDouble exp_term = target_weights_vec[i] * 
+            VectorizedDouble exp_term = target_density_vec[i] * 
                 std::exp((current_weights_vec[i] - 0.5 * dist2) / current_lambda);
             
             // Store individual exp terms and accumulate sum
@@ -397,6 +395,21 @@ double Convex2Convex<dim>::evaluate_sot_functional(const Vector<double> &weights
     global_gradient = 0;
     global_gradient.reinit(target_points.size());
 
+    // Pre-compute vectorized weights only (target data already vectorized)
+    const unsigned int vectorization_width = VectorizedArray<double>::size();
+    const unsigned int n_targets = target_points.size();
+    
+    current_weights_vec.clear();
+    
+    for (unsigned int i = 0; i < n_targets; i += vectorization_width) {
+        VectorizedArray<double> curr_weight;
+        
+        for (unsigned int v = 0; v < vectorization_width && (i + v) < n_targets; ++v) {
+            curr_weight[v] = (*current_weights)[i + v];
+        }
+        current_weights_vec.push_back(curr_weight);
+    }
+
     // Check if we're using tetrahedral meshes
     bool use_simplex = (source_params.use_tetrahedral_mesh || target_params.use_tetrahedral_mesh);
 
@@ -434,8 +447,8 @@ double Convex2Convex<dim>::evaluate_sot_functional(const Vector<double> &weights
     // Add linear term
     for (unsigned int i = 0; i < target_points.size(); ++i)
     {
-        global_functional -= weights[i] * target_weights[i];
-        global_gradient[i] -= target_weights[i];
+        global_functional -= weights[i] * target_density[i];
+        global_gradient[i] -= target_density[i];
     }
 
     // Copy results to output gradient
@@ -765,8 +778,8 @@ void Convex2Convex<dim>::save_discrete_measures()
 
     // Save target measure data
     Utils::write_vector(target_points, directory + "/target_points", io_coding);
-    std::vector<double> target_weights_vec(target_weights.begin(), target_weights.end());
-    Utils::write_vector(target_weights_vec, directory + "/target_weights", io_coding);
+    std::vector<double> target_density_vec(target_density.begin(), target_density.end());
+    Utils::write_vector(target_density_vec, directory + "/target_density", io_coding);
 
     // Save metadata
     std::ofstream meta(directory + "/metadata.txt");
