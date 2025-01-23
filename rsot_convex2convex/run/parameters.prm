@@ -8,14 +8,14 @@ subsection Convex2Convex
       set number of refinements = 4
       set grid generator function = hyper_cube
       set grid generator arguments = -1 : 1 : false
-      set use tetrahedral mesh = false
+      set use tetrahedral mesh = true
     end
 
     subsection target
       set number of refinements = 3
       set grid generator function = hyper_ball
       set grid generator arguments = 0, 0, 0 : 1 : true
-      set use tetrahedral mesh = false
+      set use tetrahedral mesh = true
     end
   end
 
@@ -23,6 +23,7 @@ subsection Convex2Convex
     set max_iterations = 10000
     set tolerance = 1e-5
     set regularization_parameter = 1e-2
+    set epsilon = 1e-15
     set verbose_output = true
     set solver_type = BFGS
     set quadrature_order = 3

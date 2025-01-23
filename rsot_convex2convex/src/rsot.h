@@ -26,10 +26,14 @@
 #include <deal.II/base/mpi.h>
 #include <deal.II/base/utilities.h>
 #include <deal.II/base/conditional_ostream.h>
+#include <deal.II/numerics/rtree.h>
 
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <atomic>
+#include <boost/geometry/index/rtree.hpp>
+
 
 using namespace dealii;
 
@@ -99,7 +103,7 @@ private:
     void compute_power_diagram();
 
     std::string selected_task;
-    std::string io_coding = "txt"; 
+    std::string io_coding = "txt";
 
     struct MeshParameters {
         unsigned int n_refinements = 0;
@@ -134,6 +138,8 @@ private:
         double tolerance = 1e-8;
         double regularization_param = 1e-3;
         bool verbose_output = true;
+        double epsilon = 1e-8;  // Parameter for truncation criterion
+        bool debug = true;  // Debug flag for additional output
         std::string solver_type = "BFGS";
         unsigned int quadrature_order = 3;
         unsigned int nb_points = 1000;
@@ -157,10 +163,21 @@ private:
     double evaluate_sot_functional(const Vector<double>& weights, Vector<double>& gradient);
     void save_results(const Vector<double>& weights, const std::string& filename);
 
-    // Helper functions for parallel I/O
-    void broadcast_vector(std::vector<Point<dim>>& vec);
-    void broadcast_vector(std::vector<double>& vec);
-    void broadcast_string(std::string& str);
+
+    // RTree for spatial queries on target points
+    using IndexedPoint = std::pair<Point<dim>, std::size_t>;
+    using RTreeParams = boost::geometry::index::rstar<8>;
+    using RTree = boost::geometry::index::rtree<IndexedPoint, RTreeParams>;
+    RTree target_points_rtree;
+
+    // Computed distance threshold for current iteration
+    mutable double current_distance_threshold{0.0};
+    // Compute the distance threshold based on current weights and parameters
+    void compute_distance_threshold() const;
+    // Helper function for nearest neighbor queries
+    std::vector<std::size_t> find_nearest_target_points(const Point<dim>& query_point) const;
+    // Helper function for range queries
+    std::vector<std::size_t> find_target_points_in_box(const BoundingBox<dim>& box) const;
 };
 
 #endif
