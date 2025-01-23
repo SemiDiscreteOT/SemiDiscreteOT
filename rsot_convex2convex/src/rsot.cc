@@ -5,14 +5,19 @@
 #include <deal.II/base/timer.h>
 #include <filesystem>
 #include <deal.II/base/vectorization.h>
+#include <deal.II/lac/vector_operations_internal.h>
 namespace fs = std::filesystem;
 
 template <int dim>
-Convex2Convex<dim>::Convex2Convex()
-    : ParameterAcceptor("Convex2Convex"), 
-      source_mesh(), 
-      target_mesh(), 
-      dof_handler_source(source_mesh), 
+Convex2Convex<dim>::Convex2Convex(const MPI_Comm &comm)
+    : ParameterAcceptor("Convex2Convex"),
+      mpi_communicator(comm),
+      n_mpi_processes(Utilities::MPI::n_mpi_processes(comm)),
+      this_mpi_process(Utilities::MPI::this_mpi_process(comm)),
+      pcout(std::cout, Utilities::MPI::this_mpi_process(comm) == 0),
+      source_mesh(comm),
+      target_mesh(),  // Regular triangulation without MPI
+      dof_handler_source(source_mesh),
       dof_handler_target(target_mesh)
 {
     // Initialize with default hexahedral elements
@@ -72,10 +77,6 @@ Convex2Convex<dim>::Convex2Convex()
         add_parameter("quadrature_order",
                      solver_params.quadrature_order,
                      "Order of quadrature formula for numerical integration");
-
-        add_parameter("number_of_threads",
-                     solver_params.number_of_threads,
-                     "Number of threads to use (0 means use all available cores)");
     }
     leave_subsection();
 
@@ -91,34 +92,35 @@ Convex2Convex<dim>::Convex2Convex()
 template <int dim>
 void Convex2Convex<dim>::print_parameters()
 {
-    std::cout << "Selected Task: " << selected_task << std::endl;
-    std::cout << "I/O Coding: " << io_coding << std::endl;
+    pcout << "Selected Task: " << selected_task << std::endl;
+    pcout << "I/O Coding: " << io_coding << std::endl;
 
-    std::cout << "Source Mesh Parameters:" << std::endl;
-    std::cout << "  Grid Generator Function: " << source_params.grid_generator_function << std::endl;
-    std::cout << "  Grid Generator Arguments: " << source_params.grid_generator_arguments << std::endl;
-    std::cout << "  Number of Refinements: " << source_params.n_refinements << std::endl;
+    pcout << "Source Mesh Parameters:" << std::endl;
+    pcout << "  Grid Generator Function: " << source_params.grid_generator_function << std::endl;
+    pcout << "  Grid Generator Arguments: " << source_params.grid_generator_arguments << std::endl;
+    pcout << "  Number of Refinements: " << source_params.n_refinements << std::endl;
 
-    std::cout << "Target Mesh Parameters:" << std::endl;
-    std::cout << "  Grid Generator Function: " << target_params.grid_generator_function << std::endl;
-    std::cout << "  Grid Generator Arguments: " << target_params.grid_generator_arguments << std::endl;
-    std::cout << "  Number of Refinements: " << target_params.n_refinements << std::endl;
+    pcout << "Target Mesh Parameters:" << std::endl;
+    pcout << "  Grid Generator Function: " << target_params.grid_generator_function << std::endl;
+    pcout << "  Grid Generator Arguments: " << target_params.grid_generator_arguments << std::endl;
+    pcout << "  Number of Refinements: " << target_params.n_refinements << std::endl;
 
-    std::cout << "RSOT Solver Parameters:" << std::endl;
-    std::cout << "  Max Iterations: " << solver_params.max_iterations << std::endl;
-    std::cout << "  Tolerance: " << solver_params.tolerance << std::endl;
-    std::cout << "  Regularization Parameter (λ): " << solver_params.regularization_param << std::endl;
-    std::cout << "  Verbose Output: " << (solver_params.verbose_output ? "Yes" : "No") << std::endl;
-    std::cout << "  Solver Type: " << solver_params.solver_type << std::endl;
-    std::cout << "  Quadrature Order: " << solver_params.quadrature_order << std::endl;
+    pcout << "RSOT Solver Parameters:" << std::endl;
+    pcout << "  Max Iterations: " << solver_params.max_iterations << std::endl;
+    pcout << "  Tolerance: " << solver_params.tolerance << std::endl;
+    pcout << "  Regularization Parameter (λ): " << solver_params.regularization_param << std::endl;
+    pcout << "  Verbose Output: " << (solver_params.verbose_output ? "Yes" : "No") << std::endl;
+    pcout << "  Solver Type: " << solver_params.solver_type << std::endl;
+    pcout << "  Quadrature Order: " << solver_params.quadrature_order << std::endl;
 }
 
 template <int dim>
-void Convex2Convex<dim>::generate_mesh(Triangulation<dim> &tria,
-                                       const std::string &grid_generator_function,
-                                       const std::string &grid_generator_arguments,
-                                       const unsigned int n_refinements,
-                                       const bool use_tetrahedral_mesh)
+template <typename TriangulationType>
+void Convex2Convex<dim>::generate_mesh(TriangulationType &tria,
+                                     const std::string &grid_generator_function,
+                                     const std::string &grid_generator_arguments,
+                                     const unsigned int n_refinements,
+                                     const bool use_tetrahedral_mesh)
 {
     GridGenerator::generate_from_name_and_arguments(
         tria,
@@ -146,7 +148,7 @@ void Convex2Convex<dim>::save_meshes()
                      directory + "/target",
                      std::vector<std::string>{"vtk", "msh"});
 
-    std::cout << "Meshes saved in VTK and MSH formats" << std::endl;
+    pcout << "Meshes saved in VTK and MSH formats" << std::endl;
 }
 
 template <int dim>
@@ -184,9 +186,9 @@ void Convex2Convex<dim>::load_meshes()
     grid_in_target.attach_triangulation(target_mesh);
     grid_in_target.read_vtk(in_vtk_target);
 
-    std::cout << "Meshes loaded from VTK and MSH formats" << std::endl;
-    std::cout << "Source mesh: " << source_mesh.n_active_cells() << " cells, " << source_mesh.n_vertices() << " vertices" << std::endl;
-    std::cout << "Target mesh: " << target_mesh.n_active_cells() << " cells, " << target_mesh.n_vertices() << " vertices" << std::endl;
+    pcout << "Meshes loaded from VTK and MSH formats" << std::endl;
+    pcout << "Source mesh: " << source_mesh.n_active_cells() << " cells, " << source_mesh.n_vertices() << " vertices" << std::endl;
+    pcout << "Target mesh: " << target_mesh.n_active_cells() << " cells, " << target_mesh.n_vertices() << " vertices" << std::endl;
 }
 
 template <int dim>
@@ -196,22 +198,25 @@ void Convex2Convex<dim>::setup_finite_elements()
     bool use_simplex = (source_params.use_tetrahedral_mesh || target_params.use_tetrahedral_mesh);
 
     if (use_simplex) {
-        // For simplex meshes, use FE_SimplexP and appropriate mapping
         fe_system = std::make_unique<FE_SimplexP<dim>>(1);
         mapping = std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
     } else {
-        // For hexahedral meshes, use FE_Q and MappingQ1
         fe_system = std::make_unique<FE_Q<dim>>(1);
         mapping = std::make_unique<MappingQ1<dim>>();
     }
 
-    dof_handler_target.distribute_dofs(*fe_system);
     dof_handler_source.distribute_dofs(*fe_system);
+    dof_handler_target.distribute_dofs(*fe_system);
 
-    source_density.reinit(dof_handler_source.n_dofs());
+    IndexSet locally_owned_dofs = dof_handler_source.locally_owned_dofs();
+    IndexSet locally_relevant_dofs;
+    DoFTools::extract_locally_relevant_dofs(dof_handler_source, locally_relevant_dofs);
+
+    source_density.reinit(locally_owned_dofs, locally_relevant_dofs, mpi_communicator);
     source_density = 1.0;
+    source_density.update_ghost_values();  // Ensure ghost values are updated
 
-    // Compute actual L1 norm using appropriate quadrature
+    // Create appropriate quadrature
     std::unique_ptr<Quadrature<dim>> quadrature;
     if (use_simplex) {
         quadrature = std::make_unique<QGaussSimplex<dim>>(solver_params.quadrature_order);
@@ -219,68 +224,112 @@ void Convex2Convex<dim>::setup_finite_elements()
         quadrature = std::make_unique<QGauss<dim>>(solver_params.quadrature_order);
     }
 
+    // Debug info about parallel distribution
+    unsigned int n_locally_owned = 0;
+    for (const auto &cell : dof_handler_source.active_cell_iterators()) {
+        if (cell->is_locally_owned())
+            ++n_locally_owned;
+    }
+    const unsigned int n_total_owned = 
+        Utilities::MPI::sum(n_locally_owned, mpi_communicator);
+                     
+    pcout << "Total cells: " << source_mesh.n_active_cells() 
+          << ", Locally owned on proc " << this_mpi_process 
+          << ": " << n_locally_owned 
+          << ", Sum of owned: " << n_total_owned << std::endl;
+
+    // Verify normalization
+    double local_l1_norm = 0.0;
+    unsigned int local_cell_count = 0;
     FEValues<dim> fe_values(*mapping, *fe_system, *quadrature,
                            update_values | update_JxW_values);
-
     std::vector<double> density_values(quadrature->size());
-    double l1_norm = 0.0;
 
     for (const auto &cell : dof_handler_source.active_cell_iterators())
     {
+        if (!cell->is_locally_owned())
+            continue;
+
+        local_cell_count++;
         fe_values.reinit(cell);
         fe_values.get_function_values(source_density, density_values);
 
         for (unsigned int q = 0; q < quadrature->size(); ++q)
         {
-            l1_norm += std::abs(density_values[q]) * fe_values.JxW(q);
+            local_l1_norm += std::abs(density_values[q]) * fe_values.JxW(q);
         }
     }
 
-    std::cout << "Source density L1 norm: " << l1_norm << std::endl;
-    source_density /= l1_norm; // Normalize to mass 1
+    // Debug info about local contributions
+    std::cout << "Process " << this_mpi_process 
+          << " processed " << local_cell_count << " cells"
+          << " with local L1 norm: " << local_l1_norm << std::endl;
 
+    const double global_l1_norm = 
+        Utilities::MPI::sum(local_l1_norm, mpi_communicator);
+    pcout << "Source density L1 norm: " << global_l1_norm << std::endl;
+    source_density /= global_l1_norm; // Normalize to mass 1
+
+    // Load or compute target points (shared across all processes)
     const std::string directory = "output/data_points";
     bool points_loaded = false;
+    target_points.clear();  // Clear on all processes
 
-    // Try to load target points from file first
-    if (Utils::read_vector(target_points, directory + "/target_points", io_coding))
-    {
-        target_density.reinit(target_points.size());
-        target_density = 1.0 / target_points.size();
-        points_loaded = true;
-        std::cout << "Target points loaded from file" << std::endl;
-    }
-
-    // If loading failed, compute and save them
-    if (!points_loaded)
-    {
-        std::map<types::global_dof_index, Point<dim>> support_points_target;
-        DoFTools::map_dofs_to_support_points(*mapping, dof_handler_target, support_points_target);
-        target_points.clear();
-        for (const auto &point_pair : support_points_target)
-        {
-            target_points.push_back(point_pair.second);
+    // Only root process reads/computes points
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+        if (Utils::read_vector(target_points, directory + "/target_points", io_coding)) {
+            points_loaded = true;
+            pcout << "Target points loaded from file" << std::endl;
+        } else {
+            std::map<types::global_dof_index, Point<dim>> support_points_target;
+            DoFTools::map_dofs_to_support_points(*mapping, dof_handler_target, support_points_target);
+            for (const auto &point_pair : support_points_target) {
+                target_points.push_back(point_pair.second);
+            }
+            Utils::write_vector(target_points, directory + "/target_points", io_coding);
+            points_loaded = true;
+            pcout << "Target points computed and saved to file" << std::endl;
         }
-        target_density.reinit(support_points_target.size());
-        target_density = 1.0 / support_points_target.size();
-
-        // Save the computed points
-        Utils::write_vector(target_points, directory + "/target_points", io_coding);
-        std::cout << "Target points computed and saved to file" << std::endl;
     }
 
-    // Pre-compute vectorized target data
+    // Broadcast success flag
+    points_loaded = Utilities::MPI::broadcast(mpi_communicator, points_loaded, 0);
+    if (!points_loaded) {
+        throw std::runtime_error("Failed to load or compute target points");
+    }
+
+    // Broadcast target points size first
+    unsigned int n_points = 0;
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+        n_points = target_points.size();
+    }
+    n_points = Utilities::MPI::broadcast(mpi_communicator, n_points, 0);
+
+    // Resize target_points on non-root processes
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) != 0) {
+        target_points.resize(n_points);
+    }
+
+    // Broadcast the actual points
+    for (unsigned int i = 0; i < n_points; ++i) {
+        target_points[i] = Utilities::MPI::broadcast(mpi_communicator, target_points[i], 0);
+    }
+
+    // Initialize target density (shared across all processes)
+    target_density.reinit(target_points.size());
+    target_density = 1.0 / target_points.size();
+
+    // Pre-compute vectorized target data (identical on all processes)
     const unsigned int vectorization_width = VectorizedArray<double>::size();
-    const unsigned int n_targets = target_points.size();
     
     target_density_vec.clear();
     target_points_vec.clear();
     
-    for (unsigned int i = 0; i < n_targets; i += vectorization_width) {
+    for (unsigned int i = 0; i < target_points.size(); i += vectorization_width) {
         VectorizedArray<double> weight;
         std::array<VectorizedArray<double>, dim> point;
         
-        for (unsigned int v = 0; v < vectorization_width && (i + v) < n_targets; ++v) {
+        for (unsigned int v = 0; v < vectorization_width && (i + v) < target_points.size(); ++v) {
             weight[v] = target_density[i + v];
             for (unsigned int d = 0; d < dim; ++d) {
                 point[d][v] = target_points[i + v][d];
@@ -290,31 +339,8 @@ void Convex2Convex<dim>::setup_finite_elements()
         target_points_vec.push_back(point);
     }
 
-    // Similar approach for source points
-    points_loaded = false;
-    if (Utils::read_vector(source_points, directory + "/source_points", io_coding))
-    {
-        points_loaded = true;
-        std::cout << "Source points loaded from file" << std::endl;
-    }
-
-    if (!points_loaded)
-    {
-        std::map<types::global_dof_index, Point<dim>> support_points_source;
-        DoFTools::map_dofs_to_support_points(*mapping, dof_handler_source, support_points_source);
-        source_points.clear();
-        for (const auto &point_pair : support_points_source)
-        {
-            source_points.push_back(point_pair.second);
-        }
-
-        // Save the computed points
-        Utils::write_vector(source_points, directory + "/source_points", io_coding);
-        std::cout << "Source points computed and saved to file" << std::endl;
-    }
-
-    std::cout << "Setup complete with " << source_points.size() << " source points and "
-              << target_points.size() << " target points" << std::endl;
+    pcout << "Setup complete with " << source_points.size() << " source points and "
+          << target_points.size() << " target points" << std::endl;
 }
 
 template <int dim>
@@ -323,6 +349,9 @@ void Convex2Convex<dim>::local_assemble_sot(
     ScratchData &scratch_data,
     CopyData &copy_data)
 {
+    if (!cell->is_locally_owned())
+        return;
+
     using VectorizedDouble = VectorizedArray<double>;
     constexpr unsigned int vectorization_width = VectorizedArray<double>::size();
     
@@ -380,7 +409,16 @@ void Convex2Convex<dim>::copy_local_to_global(const CopyData &copy_data)
 {
     std::lock_guard<std::mutex> lock(assembly_mutex);
     global_functional += copy_data.functional_value;
-    global_gradient += copy_data.gradient_values;
+    
+    // Convert Vector to distributed Vector
+    LinearAlgebra::distributed::Vector<double> temp_gradient;
+    temp_gradient.reinit(global_gradient);
+    for (unsigned int i = 0; i < copy_data.gradient_values.size(); ++i) {
+        if (global_gradient.in_local_range(i)) {
+            temp_gradient[i] = copy_data.gradient_values[i];
+        }
+    }
+    global_gradient += temp_gradient;
 }
 
 template <int dim>
@@ -392,67 +430,65 @@ double Convex2Convex<dim>::evaluate_sot_functional(const Vector<double> &weights
     
     // Reset global values
     global_functional = 0.0;
-    global_gradient = 0;
     global_gradient.reinit(target_points.size());
 
-    // Pre-compute vectorized weights only (target data already vectorized)
+    // Pre-compute vectorized weights
     const unsigned int vectorization_width = VectorizedArray<double>::size();
-    const unsigned int n_targets = target_points.size();
-    
     current_weights_vec.clear();
     
-    for (unsigned int i = 0; i < n_targets; i += vectorization_width) {
+    for (unsigned int i = 0; i < target_points.size(); i += vectorization_width) {
         VectorizedArray<double> curr_weight;
-        
-        for (unsigned int v = 0; v < vectorization_width && (i + v) < n_targets; ++v) {
+        for (unsigned int v = 0; v < vectorization_width && (i + v) < target_points.size(); ++v) {
             curr_weight[v] = (*current_weights)[i + v];
         }
         current_weights_vec.push_back(curr_weight);
     }
 
-    // Check if we're using tetrahedral meshes
-    bool use_simplex = (source_params.use_tetrahedral_mesh || target_params.use_tetrahedral_mesh);
-
     // Use appropriate quadrature
     std::unique_ptr<Quadrature<dim>> quadrature;
-    if (use_simplex) {
+    if (source_params.use_tetrahedral_mesh) {
         quadrature = std::make_unique<QGaussSimplex<dim>>(solver_params.quadrature_order);
     } else {
         quadrature = std::make_unique<QGauss<dim>>(solver_params.quadrature_order);
     }
 
-    // Create lambda function for WorkStream
-    auto worker = [this](const typename DoFHandler<dim>::active_cell_iterator &cell,
-                        ScratchData &scratch_data,
-                        CopyData &copy_data) {
-        this->local_assemble_sot(cell, scratch_data, copy_data);
-    };
-
-    auto copier = [this](const CopyData &copy_data) {
-        this->copy_local_to_global(copy_data);
-    };
-
     // Create scratch and copy data objects
     ScratchData scratch_data(*fe_system, *mapping, *quadrature);
     CopyData copy_data(target_points.size());
 
-    // Run parallel assembly
-    WorkStream::run(dof_handler_source.begin_active(),
-                   dof_handler_source.end(),
-                   worker,
-                   copier,
-                   scratch_data,
-                   copy_data);
-
-    // Add linear term
-    for (unsigned int i = 0; i < target_points.size(); ++i)
-    {
-        global_functional -= weights[i] * target_density[i];
-        global_gradient[i] -= target_density[i];
+    // Local assembly over owned cells
+    double local_functional = 0.0;
+    Vector<double> local_gradient(target_points.size());
+    
+    for (const auto &cell : dof_handler_source.active_cell_iterators()) {
+        if (!cell->is_locally_owned())
+            continue;
+            
+        local_assemble_sot(cell, scratch_data, copy_data);
+        local_functional += copy_data.functional_value;
+        local_gradient += copy_data.gradient_values;
     }
 
-    // Copy results to output gradient
-    gradient = global_gradient;
+    // Sum up contributions across all processes
+    global_functional = Utilities::MPI::sum(local_functional, mpi_communicator);
+    
+    // Convert to regular Vector for gradient
+    gradient = 0;  // Reset gradient
+    Utilities::MPI::sum(local_gradient, mpi_communicator, gradient);
+
+    // Add linear term (only on root process to avoid duplication)
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+        for (unsigned int i = 0; i < target_points.size(); ++i) {
+            global_functional -= weights[i] * target_density[i];
+            gradient[i] -= target_density[i];
+        }
+    }
+
+    // Broadcast final results to all processes
+    global_functional = 
+        Utilities::MPI::broadcast(mpi_communicator, global_functional, 0);
+    gradient = 
+        Utilities::MPI::broadcast(mpi_communicator, gradient, 0);
 
     return global_functional;
 }
@@ -460,20 +496,12 @@ double Convex2Convex<dim>::evaluate_sot_functional(const Vector<double> &weights
 template <int dim>
 void Convex2Convex<dim>::run_sot()
 {
-    // Set number of threads based on parameter
-    unsigned int n_threads = solver_params.number_of_threads;
-    if (n_threads == 0) {
-        n_threads = MultithreadInfo::n_cores();
-    }
-    MultithreadInfo::set_thread_limit(n_threads);
-    std::cout << "Running parallel SOT with " << n_threads << " threads" << std::endl;
-
     Timer timer;
     timer.start();
 
     setup_finite_elements();
 
-    std::cout << "Starting SOT optimization with " << target_points.size()
+    pcout << "Starting SOT optimization with " << target_points.size()
               << " target points..." << std::endl;
 
     Vector<double> weights(target_points.size());
@@ -483,22 +511,25 @@ void Convex2Convex<dim>::run_sot()
     class VerboseSolverControl : public SolverControl
     {
     public:
-        VerboseSolverControl(unsigned int n, double tol)
-            : SolverControl(n, tol) {}
+        VerboseSolverControl(unsigned int n, double tol, ConditionalOStream& pcout_)
+            : SolverControl(n, tol), pcout(pcout_) {}
 
         virtual State check(unsigned int step, double value) override
         {
-            std::cout << "Iteration " << step
+            pcout << "Iteration " << step
                       << " - Function value: " << value
                       << " - Relative residual: " << value / initial_value() << std::endl;
             return SolverControl::check(step, value);
         }
+    private:
+        ConditionalOStream& pcout;
     };
 
     // Create solver control and store it in the class member
     solver_control = std::make_unique<VerboseSolverControl>(
         solver_params.max_iterations,
-        solver_params.tolerance
+        solver_params.tolerance,
+        pcout
     );
 
     if (!solver_params.verbose_output)
@@ -511,7 +542,7 @@ void Convex2Convex<dim>::run_sot()
 
     try
     {
-        std::cout << "Using regularization parameter λ = "
+        pcout << "Using regularization parameter λ = "
                   << solver_params.regularization_param << std::endl;
         solver.solve(
             [&](const Vector<double> &w, Vector<double> &grad) {
@@ -521,24 +552,24 @@ void Convex2Convex<dim>::run_sot()
         );
 
         timer.stop();
-        std::cout << "\nOptimization completed successfully!" << std::endl;
-        std::cout << "Total solver time: " << timer.wall_time() << " seconds" << std::endl;
-        std::cout << "Final number of iterations: " << solver_control->last_step() << std::endl;
-        std::cout << "Final function value: " << solver_control->last_value() << std::endl;
+        pcout << "\nOptimization completed successfully!" << std::endl;
+        pcout << "Total solver time: " << timer.wall_time() << " seconds" << std::endl;
+        pcout << "Final number of iterations: " << solver_control->last_step() << std::endl;
+        pcout << "Final function value: " << solver_control->last_value() << std::endl;
 
         save_results(weights, "weights");
-        std::cout << "Results saved to weights" << std::endl;
+        pcout << "Results saved to weights" << std::endl;
     }
     catch (SolverControl::NoConvergence &exc)
     {
         timer.stop();
         // Save results before reporting the error
         save_results(weights, "weights");
-        std::cout << "\nMaximum iterations reached without convergence." << std::endl;
-        std::cout << "Total solver time: " << timer.wall_time() << " seconds" << std::endl;
-        std::cout << "Final number of iterations: " << solver_control->last_step() << std::endl;
-        std::cout << "Final function value: " << solver_control->last_value() << std::endl;
-        std::cout << "Intermediate results saved to weights" << std::endl;
+        pcout << "\nMaximum iterations reached without convergence." << std::endl;
+        pcout << "Total solver time: " << timer.wall_time() << " seconds" << std::endl;
+        pcout << "Final number of iterations: " << solver_control->last_step() << std::endl;
+        pcout << "Final function value: " << solver_control->last_value() << std::endl;
+        pcout << "Intermediate results saved to weights" << std::endl;
 
         // Re-throw the exception
         throw;
@@ -546,8 +577,8 @@ void Convex2Convex<dim>::run_sot()
     catch (std::exception &exc)
     {
         timer.stop();
-        std::cout << "Total solver time: " << timer.wall_time() << " seconds" << std::endl;
-        std::cerr << "Error in SOT computation: " << exc.what() << std::endl;
+        pcout << "Total solver time: " << timer.wall_time() << " seconds" << std::endl;
+        pcout << "Error in SOT computation: " << exc.what() << std::endl;
     }
 }
 
@@ -555,22 +586,28 @@ template <int dim>
 void Convex2Convex<dim>::save_results(const Vector<double> &weights,
                                      const std::string &filename)
 {
-    // Create epsilon-specific directory
-    std::string eps_dir = "output/epsilon_" + std::to_string(solver_params.regularization_param);
-    fs::create_directories(eps_dir);
+    // Only rank 0 should create directories and write files
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+        // Create epsilon-specific directory
+        std::string eps_dir = "output/epsilon_" + std::to_string(solver_params.regularization_param);
+        fs::create_directories(eps_dir);
 
-    // Save weights
-    std::vector<double> weights_vec(weights.begin(), weights.end());
-    Utils::write_vector(weights_vec, eps_dir + "/" + filename, io_coding);
+        // Save weights
+        std::vector<double> weights_vec(weights.begin(), weights.end());
+        Utils::write_vector(weights_vec, eps_dir + "/" + filename, io_coding);
 
-    // Save convergence info if solver_control exists
-    if (solver_control) {
-        std::ofstream conv_info(eps_dir + "/convergence_info.txt");
-        conv_info << "Regularization parameter (λ): " << solver_params.regularization_param << "\n";
-        conv_info << "Number of iterations: " << solver_control->last_step() << "\n";
-        conv_info << "Final function value: " << solver_control->last_value() << "\n";
-        conv_info << "Convergence achieved: " << (solver_control->last_check() == SolverControl::success) << "\n";
+        // Save convergence info if solver_control exists
+        if (solver_control) {
+            std::ofstream conv_info(eps_dir + "/convergence_info.txt");
+            conv_info << "Regularization parameter (λ): " << solver_params.regularization_param << "\n";
+            conv_info << "Number of iterations: " << solver_control->last_step() << "\n";
+            conv_info << "Final function value: " << solver_control->last_value() << "\n";
+            conv_info << "Convergence achieved: " << (solver_control->last_check() == SolverControl::success) << "\n";
+        }
     }
+    
+    // Make sure all processes wait for rank 0 to finish writing
+    MPI_Barrier(mpi_communicator);
 }
 
 template <int dim>
@@ -584,24 +621,24 @@ void Convex2Convex<dim>::compute_power_diagram()
     try {
         selected_folders = Utils::select_folder();
     } catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
+        pcout << "Error: " << e.what() << std::endl;
         return;
     }
 
     // Process each selected folder
     for (const auto& selected_folder : selected_folders) {
-        std::cout << "\nProcessing folder: " << selected_folder << std::endl;
+        pcout << "\nProcessing folder: " << selected_folder << std::endl;
 
         // Read weights from selected folder's results
         std::vector<double> weights_vec;
         bool success = Utils::read_vector(weights_vec, "output/" + selected_folder + "/weights", io_coding);
         if (!success) {
-            std::cerr << "Failed to read weights from output/" << selected_folder << "/weights" << std::endl;
+            pcout << "Failed to read weights from output/" << selected_folder << "/weights" << std::endl;
             continue; // Skip to next folder
         }
 
         if (weights_vec.size() != target_points.size()) {
-            std::cerr << "Error: Mismatch between weights size (" << weights_vec.size()
+            pcout << "Error: Mismatch between weights size (" << weights_vec.size()
                       << ") and target points size (" << target_points.size() << ")" << std::endl;
             continue; // Skip to next folder
         }
@@ -625,10 +662,10 @@ void Convex2Convex<dim>::compute_power_diagram()
                         nullptr, 
                         "output/data_mesh/source.msh"
                     );
-                    std::cout << "Using Geogram implementation for power diagram" << std::endl;
+                    pcout << "Using Geogram implementation for power diagram" << std::endl;
                 } else {
-                    std::cerr << "Geogram implementation is only available for 3D problems" << std::endl;
-                    std::cout << "Falling back to Deal.II implementation" << std::endl;
+                    pcout << "Geogram implementation is only available for 3D problems" << std::endl;
+                    pcout << "Falling back to Deal.II implementation" << std::endl;
                     power_diagram = PowerDiagramSpace::create_power_diagram<dim>(
                         "dealii", 
                         &source_mesh
@@ -639,13 +676,13 @@ void Convex2Convex<dim>::compute_power_diagram()
                     "dealii", 
                     &source_mesh
                 );
-                std::cout << "Using Deal.II implementation for power diagram" << std::endl;
+                pcout << "Using Deal.II implementation for power diagram" << std::endl;
             }
         } catch (const std::exception& e) {
-            std::cerr << "Failed to initialize " << power_diagram_params.implementation 
+            pcout << "Failed to initialize " << power_diagram_params.implementation 
                       << " implementation: " << e.what() << std::endl;
             if (power_diagram_params.implementation == "geogram") {
-                std::cout << "Falling back to Deal.II implementation" << std::endl;
+                pcout << "Falling back to Deal.II implementation" << std::endl;
                 power_diagram = PowerDiagramSpace::create_power_diagram<dim>(
                     "dealii", 
                     &source_mesh
@@ -664,12 +701,12 @@ void Convex2Convex<dim>::compute_power_diagram()
         power_diagram->save_centroids_to_file(output_dir + "/centroids");
         power_diagram->output_vtu(output_dir + "/power_diagram");
 
-        std::cout << "Power diagram computation completed for " << selected_folder << std::endl;
-        std::cout << "Results saved in " << output_dir << std::endl;
+        pcout << "Power diagram computation completed for " << selected_folder << std::endl;
+        pcout << "Results saved in " << output_dir << std::endl;
     }
 
     if (selected_folders.size() > 1) {
-        std::cout << "\nCompleted power diagram computation for all selected folders." << std::endl;
+        pcout << "\nCompleted power diagram computation for all selected folders." << std::endl;
     }
 }
 
@@ -677,20 +714,20 @@ template <int dim>
 template <int d>
 typename std::enable_if<d == 3>::type Convex2Convex<dim>::run_exact_sot()
 {
-    std::cout << "Running exact SOT computation..." << std::endl;
+    pcout << "Running exact SOT computation..." << std::endl;
 
     ExactSot exact_solver;
 
     // Set source mesh and target points
     if (!exact_solver.set_source_mesh("output/data_mesh/source.msh")) {
-        std::cerr << "Failed to load source mesh for exact SOT" << std::endl;
+        pcout << "Failed to load source mesh for exact SOT" << std::endl;
         return;
     }
 
     // Load target points from the same location as used in setup_finite_elements
     const std::string directory = "output/data_points";
     if (!exact_solver.set_target_points(directory + "/target_points", io_coding)) {
-        std::cerr << "Failed to load target points for exact SOT" << std::endl;
+        pcout << "Failed to load target points for exact SOT" << std::endl;
         return;
     }
 
@@ -706,7 +743,7 @@ typename std::enable_if<d == 3>::type Convex2Convex<dim>::run_exact_sot()
 
     // Run the solver
     if (!exact_solver.run()) {
-        std::cerr << "Exact SOT computation failed" << std::endl;
+        pcout << "Exact SOT computation failed" << std::endl;
         return;
     }
 
@@ -714,11 +751,11 @@ typename std::enable_if<d == 3>::type Convex2Convex<dim>::run_exact_sot()
     if (!exact_solver.save_results(
             output_dir + "/weights",
             output_dir + "/points")) {
-        std::cerr << "Failed to save exact SOT results" << std::endl;
+        pcout << "Failed to save exact SOT results" << std::endl;
         return;
     }
 
-    std::cout << "Exact SOT computation completed successfully" << std::endl;
+    pcout << "Exact SOT computation completed successfully" << std::endl;
 }
 
 template <int dim>
@@ -791,9 +828,9 @@ void Convex2Convex<dim>::save_discrete_measures()
          << "Using tetrahedral mesh: " << source_params.use_tetrahedral_mesh << "\n";
     meta.close();
 
-    std::cout << "Discrete measures data saved in " << directory << std::endl;
-    std::cout << "Total quadrature points: " << total_q_points << std::endl;
-    std::cout << "Number of target points: " << target_points.size() << std::endl;
+    pcout << "Discrete measures data saved in " << directory << std::endl;
+    pcout << "Total quadrature points: " << total_q_points << std::endl;
+    pcout << "Number of target points: " << target_points.size() << std::endl;
 }
 
 template <int dim>
@@ -821,7 +858,7 @@ void Convex2Convex<dim>::run()
             setup_finite_elements();
             run_exact_sot();
         } else {
-            std::cerr << "Exact SOT is only available for 3D problems" << std::endl;
+            pcout << "Exact SOT is only available for 3D problems" << std::endl;
         }
     }
     else if (selected_task == "power_diagram")
@@ -834,7 +871,54 @@ void Convex2Convex<dim>::run()
     }
     else
     {
-        std::cout << "No valid task selected" << std::endl;
+        pcout << "No valid task selected" << std::endl;
+    }
+}
+
+template <int dim>
+void Convex2Convex<dim>::broadcast_vector(std::vector<Point<dim>>& vec)
+{
+    if (this_mpi_process == 0) {
+        std::vector<double> flat_data;
+        flat_data.reserve(vec.size() * dim);
+        for (const auto& point : vec) {
+            for (unsigned int d = 0; d < dim; ++d) {
+                flat_data.push_back(point[d]);
+            }
+        }
+        unsigned int size = flat_data.size();
+        MPI_Bcast(const_cast<unsigned int*>(&size), 1, MPI_UNSIGNED, 0, mpi_communicator);
+        MPI_Bcast(flat_data.data(), size, MPI_DOUBLE, 0, mpi_communicator);
+    } else {
+        unsigned int size;
+        MPI_Bcast(&size, 1, MPI_UNSIGNED, 0, mpi_communicator);
+        std::vector<double> flat_data(size);
+        MPI_Bcast(flat_data.data(), size, MPI_DOUBLE, 0, mpi_communicator);
+        
+        vec.clear();
+        vec.reserve(size / dim);
+        for (unsigned int i = 0; i < size; i += dim) {
+            Point<dim> point;
+            for (unsigned int d = 0; d < dim; ++d) {
+                point[d] = flat_data[i + d];
+            }
+            vec.push_back(point);
+        }
+    }
+}
+
+template <int dim>
+void Convex2Convex<dim>::broadcast_vector(std::vector<double>& vec)
+{
+    if (this_mpi_process == 0) {
+        unsigned int size = vec.size();
+        MPI_Bcast(const_cast<unsigned int*>(&size), 1, MPI_UNSIGNED, 0, mpi_communicator);
+        MPI_Bcast(vec.data(), size, MPI_DOUBLE, 0, mpi_communicator);
+    } else {
+        unsigned int size;
+        MPI_Bcast(&size, 1, MPI_UNSIGNED, 0, mpi_communicator);
+        vec.resize(size);
+        MPI_Bcast(vec.data(), size, MPI_DOUBLE, 0, mpi_communicator);
     }
 }
 

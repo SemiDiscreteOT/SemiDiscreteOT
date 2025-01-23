@@ -26,7 +26,6 @@ subsection Convex2Convex
     set verbose_output = true
     set solver_type = BFGS
     set quadrature_order = 3
-    set number_of_threads = 0  # 0 means use all available cores
   end
 
   subsection power_diagram_parameters

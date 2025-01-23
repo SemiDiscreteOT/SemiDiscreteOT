@@ -2,6 +2,7 @@
 #define RSOT_H
 
 #include <deal.II/grid/tria.h>
+#include <deal.II/distributed/tria.h>
 #include <deal.II/grid/grid_generator.h>
 #include <deal.II/grid/grid_out.h>
 #include <deal.II/grid/grid_in.h>
@@ -17,10 +18,14 @@
 #include <deal.II/base/quadrature_lib.h>
 #include <deal.II/base/quadrature.h>
 #include <deal.II/lac/vector.h>
+#include <deal.II/lac/la_parallel_vector.h>
 #include <deal.II/numerics/vector_tools.h>
 #include <deal.II/optimization/solver_bfgs.h>
 #include <deal.II/base/work_stream.h>
 #include <deal.II/base/multithread_info.h>
+#include <deal.II/base/mpi.h>
+#include <deal.II/base/utilities.h>
+#include <deal.II/base/conditional_ostream.h>
 
 #include <filesystem>
 #include <memory>
@@ -31,11 +36,17 @@ using namespace dealii;
 template <int dim>
 class Convex2Convex : public ParameterAcceptor {
 public:
-    Convex2Convex();
+    Convex2Convex(const MPI_Comm &mpi_communicator);
     void run();
     void save_discrete_measures();
 
 private:
+    // MPI-related members
+    MPI_Comm mpi_communicator;
+    const unsigned int n_mpi_processes;
+    const unsigned int this_mpi_process;
+    ConditionalOStream pcout;
+
     // Scratch data for parallel assembly
     struct ScratchData {
         ScratchData(const FiniteElement<dim> &fe,
@@ -75,7 +86,7 @@ private:
     // Mutex for thread-safe updates
     mutable std::mutex assembly_mutex;
     double global_functional{0.0};
-    Vector<double> global_gradient;
+    LinearAlgebra::distributed::Vector<double> global_gradient;
     const Vector<double>* current_weights{nullptr};
     double current_lambda{0.0};
 
@@ -100,13 +111,13 @@ private:
     MeshParameters source_params;
     MeshParameters target_params;
 
-    Triangulation<dim> source_mesh;
-    Triangulation<dim> target_mesh;
+    parallel::distributed::Triangulation<dim> source_mesh;
+    Triangulation<dim> target_mesh;  // Target mesh stays serial
     DoFHandler<dim> dof_handler_source;
     DoFHandler<dim> dof_handler_target;
     std::unique_ptr<FiniteElement<dim>> fe_system;
     std::unique_ptr<Mapping<dim>> mapping;
-    Vector<double> source_density;
+    LinearAlgebra::distributed::Vector<double> source_density;
     std::vector<Point<dim>> target_points;
     std::vector<Point<dim>> source_points;
     Vector<double> target_density;
@@ -133,15 +144,23 @@ private:
         std::string implementation = "dealii";  // Options: dealii/geogram
     } power_diagram_params;
 
-    void generate_mesh(Triangulation<dim> &tria,
+    // Template version of generate_mesh to handle both types of triangulation
+    template <typename TriangulationType>
+    void generate_mesh(TriangulationType &tria,
                       const std::string &grid_generator_function,
                       const std::string &grid_generator_arguments,
                       const unsigned int n_refinements,
                       const bool use_tetrahedral_mesh);
+
     void save_meshes();
     void setup_finite_elements();
     double evaluate_sot_functional(const Vector<double>& weights, Vector<double>& gradient);
     void save_results(const Vector<double>& weights, const std::string& filename);
+
+    // Helper functions for parallel I/O
+    void broadcast_vector(std::vector<Point<dim>>& vec);
+    void broadcast_vector(std::vector<double>& vec);
+    void broadcast_string(std::string& str);
 };
 
 #endif
