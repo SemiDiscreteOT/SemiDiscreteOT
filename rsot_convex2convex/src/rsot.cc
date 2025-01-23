@@ -77,6 +77,10 @@ Convex2Convex<dim>::Convex2Convex(const MPI_Comm &comm)
         add_parameter("quadrature_order",
                      solver_params.quadrature_order,
                      "Order of quadrature formula for numerical integration");
+
+        add_parameter("number_of_threads",
+                     solver_params.number_of_threads,
+                     "Number of threads to use for parallel SOT");
     }
     leave_subsection();
 
@@ -112,6 +116,7 @@ void Convex2Convex<dim>::print_parameters()
     pcout << "  Verbose Output: " << (solver_params.verbose_output ? "Yes" : "No") << std::endl;
     pcout << "  Solver Type: " << solver_params.solver_type << std::endl;
     pcout << "  Quadrature Order: " << solver_params.quadrature_order << std::endl;
+    pcout << "  Number of Threads: " << solver_params.number_of_threads << std::endl;
 }
 
 template <int dim>
@@ -339,8 +344,7 @@ void Convex2Convex<dim>::setup_finite_elements()
         target_points_vec.push_back(point);
     }
 
-    pcout << "Setup complete with " << source_points.size() << " source points and "
-          << target_points.size() << " target points" << std::endl;
+    pcout << "Setup complete with " << target_points.size() << " target points" << std::endl;
 }
 
 template <int dim>
@@ -404,22 +408,6 @@ void Convex2Convex<dim>::local_assemble_sot(
     }
 }
 
-template <int dim>
-void Convex2Convex<dim>::copy_local_to_global(const CopyData &copy_data)
-{
-    std::lock_guard<std::mutex> lock(assembly_mutex);
-    global_functional += copy_data.functional_value;
-    
-    // Convert Vector to distributed Vector
-    LinearAlgebra::distributed::Vector<double> temp_gradient;
-    temp_gradient.reinit(global_gradient);
-    for (unsigned int i = 0; i < copy_data.gradient_values.size(); ++i) {
-        if (global_gradient.in_local_range(i)) {
-            temp_gradient[i] = copy_data.gradient_values[i];
-        }
-    }
-    global_gradient += temp_gradient;
-}
 
 template <int dim>
 double Convex2Convex<dim>::evaluate_sot_functional(const Vector<double> &weights, Vector<double> &gradient)
@@ -428,10 +416,10 @@ double Convex2Convex<dim>::evaluate_sot_functional(const Vector<double> &weights
     current_weights = &weights;
     current_lambda = solver_params.regularization_param;
     
-    // Reset global values
-    global_functional = 0.0;
-    global_gradient.reinit(target_points.size());
-
+    // Reset global values for this MPI process
+    double local_process_functional = 0.0;
+    Vector<double> local_process_gradient(target_points.size());
+    
     // Pre-compute vectorized weights
     const unsigned int vectorization_width = VectorizedArray<double>::size();
     current_weights_vec.clear();
@@ -456,25 +444,36 @@ double Convex2Convex<dim>::evaluate_sot_functional(const Vector<double> &weights
     ScratchData scratch_data(*fe_system, *mapping, *quadrature);
     CopyData copy_data(target_points.size());
 
-    // Local assembly over owned cells
-    double local_functional = 0.0;
-    Vector<double> local_gradient(target_points.size());
-    
-    for (const auto &cell : dof_handler_source.active_cell_iterators()) {
-        if (!cell->is_locally_owned())
-            continue;
-            
-        local_assemble_sot(cell, scratch_data, copy_data);
-        local_functional += copy_data.functional_value;
-        local_gradient += copy_data.gradient_values;
-    }
+    // Create filtered iterator for locally owned cells
+    FilteredIterator<typename DoFHandler<dim>::active_cell_iterator> 
+        begin_filtered(IteratorFilters::LocallyOwnedCell(),
+                      dof_handler_source.begin_active()),
+        end_filtered(IteratorFilters::LocallyOwnedCell(),
+                    dof_handler_source.end());
 
-    // Sum up contributions across all processes
-    global_functional = Utilities::MPI::sum(local_functional, mpi_communicator);
+    // Run parallel assembly using WorkStream
+    WorkStream::run(begin_filtered,
+                   end_filtered,
+                   [this](const typename DoFHandler<dim>::active_cell_iterator &cell,
+                         ScratchData &scratch_data,
+                         CopyData &copy_data) {
+                       this->local_assemble_sot(cell, scratch_data, copy_data);
+                   },
+                   [&local_process_functional, &local_process_gradient, this]
+                   (const CopyData &copy_data) {
+                       std::lock_guard<std::mutex> lock(this->assembly_mutex);
+                       local_process_functional += copy_data.functional_value;
+                       local_process_gradient += copy_data.gradient_values;
+                   },
+                   scratch_data,
+                   copy_data);
+
+    // Sum up contributions across all MPI processes
+    global_functional = Utilities::MPI::sum(local_process_functional, mpi_communicator);
     
     // Convert to regular Vector for gradient
     gradient = 0;  // Reset gradient
-    Utilities::MPI::sum(local_gradient, mpi_communicator, gradient);
+    Utilities::MPI::sum(local_process_gradient, mpi_communicator, gradient);
 
     // Add linear term (only on root process to avoid duplication)
     if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
@@ -496,6 +495,27 @@ double Convex2Convex<dim>::evaluate_sot_functional(const Vector<double> &weights
 template <int dim>
 void Convex2Convex<dim>::run_sot()
 {
+    // Set number of threads based on parameter
+    unsigned int n_threads = solver_params.number_of_threads;
+    const unsigned int n_mpi_processes = Utilities::MPI::n_mpi_processes(mpi_communicator);
+    
+    if (n_threads == 0) {
+        // Divide available cores by number of MPI processes
+        n_threads = std::max(1U, MultithreadInfo::n_cores() / n_mpi_processes);
+    }
+    MultithreadInfo::set_thread_limit(n_threads);
+    
+    // Get MPI information
+    const unsigned int this_mpi_process = Utilities::MPI::this_mpi_process(mpi_communicator);
+    const unsigned int total_threads = n_threads * n_mpi_processes;
+    
+    pcout << "Parallel Configuration:" << std::endl
+          << "  MPI Processes: " << n_mpi_processes 
+          << " (Current rank: " << this_mpi_process << ")" << std::endl
+          << "  Available cores: " << MultithreadInfo::n_cores() << std::endl
+          << "  Threads per process: " << n_threads << std::endl
+          << "  Total parallel units: " << total_threads << std::endl;
+
     Timer timer;
     timer.start();
 
