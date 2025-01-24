@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <deal.II/base/vectorization.h>
 #include <deal.II/lac/vector_operations_internal.h>
+#include <deal.II/grid/grid_tools.h>
 namespace fs = std::filesystem;
 
 template <int dim>

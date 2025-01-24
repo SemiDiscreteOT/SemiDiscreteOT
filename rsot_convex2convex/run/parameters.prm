@@ -1,7 +1,7 @@
 subsection Convex2Convex
 
   set selected_task = sot  # Options: mesh_generation, load_meshes, sot, exact_sot, power_diagram
-  set io_coding = txt
+  set io_coding = bin
 
   subsection mesh_generation
     subsection source
