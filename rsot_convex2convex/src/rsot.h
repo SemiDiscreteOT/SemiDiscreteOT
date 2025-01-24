@@ -2,6 +2,9 @@
 #define RSOT_H
 
 #include <deal.II/grid/tria.h>
+#include <deal.II/distributed/tria.h>
+#include <deal.II/distributed/fully_distributed_tria.h>
+#include <deal.II/distributed/tria_base.h>
 #include <deal.II/grid/grid_generator.h>
 #include <deal.II/grid/grid_out.h>
 #include <deal.II/grid/grid_in.h>
@@ -17,27 +20,39 @@
 #include <deal.II/base/quadrature_lib.h>
 #include <deal.II/base/quadrature.h>
 #include <deal.II/lac/vector.h>
+#include <deal.II/lac/la_parallel_vector.h>
 #include <deal.II/numerics/vector_tools.h>
 #include <deal.II/optimization/solver_bfgs.h>
 #include <deal.II/base/work_stream.h>
 #include <deal.II/base/multithread_info.h>
+#include <deal.II/base/mpi.h>
+#include <deal.II/base/utilities.h>
+#include <deal.II/base/conditional_ostream.h>
 #include <deal.II/numerics/rtree.h>
 
 #include <filesystem>
 #include <memory>
 #include <mutex>
 #include <atomic>
+#include <boost/geometry/index/rtree.hpp>
+
 
 using namespace dealii;
 
 template <int dim>
 class Convex2Convex : public ParameterAcceptor {
 public:
-    Convex2Convex();
+    Convex2Convex(const MPI_Comm &mpi_communicator);
     void run();
     void save_discrete_measures();
 
 private:
+    // MPI-related members
+    MPI_Comm mpi_communicator;
+    const unsigned int n_mpi_processes;
+    const unsigned int this_mpi_process;
+    ConditionalOStream pcout;
+
     // Scratch data for parallel assembly
     struct ScratchData {
         ScratchData(const FiniteElement<dim> &fe,
@@ -77,7 +92,7 @@ private:
     // Mutex for thread-safe updates
     mutable std::mutex assembly_mutex;
     double global_functional{0.0};
-    Vector<double> global_gradient;
+    LinearAlgebra::distributed::Vector<double> global_gradient;
     const Vector<double>* current_weights{nullptr};
     double current_lambda{0.0};
 
@@ -93,7 +108,7 @@ private:
     void compute_power_diagram();
 
     std::string selected_task;
-    std::string io_coding = "txt"; 
+    std::string io_coding = "txt";
 
     struct MeshParameters {
         unsigned int n_refinements = 0;
@@ -105,18 +120,23 @@ private:
     MeshParameters source_params;
     MeshParameters target_params;
 
-    Triangulation<dim> source_mesh;
-    Triangulation<dim> target_mesh;
+    parallel::fullydistributed::Triangulation<dim> source_mesh;
+    Triangulation<dim> target_mesh;  // Target mesh stays serial
     DoFHandler<dim> dof_handler_source;
     DoFHandler<dim> dof_handler_target;
     std::unique_ptr<FiniteElement<dim>> fe_system;
     std::unique_ptr<Mapping<dim>> mapping;
-    Vector<double> source_density;
+    LinearAlgebra::distributed::Vector<double> source_density;
     std::vector<Point<dim>> target_points;
     std::vector<Point<dim>> source_points;
-    Vector<double> target_weights;
+    Vector<double> target_density;
 
     std::unique_ptr<SolverControl> solver_control;
+
+    // Vectorized data members
+    std::vector<VectorizedArray<double>> target_density_vec;
+    std::vector<VectorizedArray<double>> current_weights_vec;
+    std::vector<std::array<VectorizedArray<double>, dim>> target_points_vec;
 
     struct SolverParameters {
         unsigned int max_iterations = 1000;
@@ -124,7 +144,6 @@ private:
         double regularization_param = 1e-3;
         double epsilon = 1e-8;  // Parameter for truncation criterion
         bool verbose_output = true;
-        bool debug = false;  // Debug flag for additional output
         std::string solver_type = "BFGS";
         unsigned int quadrature_order = 3;
         unsigned int nb_points = 1000;
@@ -135,29 +154,32 @@ private:
         std::string implementation = "dealii";  // Options: dealii/geogram
     } power_diagram_params;
 
-    void generate_mesh(Triangulation<dim> &tria,
+    // Template version of generate_mesh to handle both types of triangulation
+    template <typename TriangulationType>
+    void generate_mesh(TriangulationType &tria,
                       const std::string &grid_generator_function,
                       const std::string &grid_generator_arguments,
                       const unsigned int n_refinements,
                       const bool use_tetrahedral_mesh);
+
     void save_meshes();
     void setup_finite_elements();
     double evaluate_sot_functional(const Vector<double>& weights, Vector<double>& gradient);
     void save_results(const Vector<double>& weights, const std::string& filename);
 
+
     // RTree for spatial queries on target points
     using IndexedPoint = std::pair<Point<dim>, std::size_t>;
-    RTree<IndexedPoint> target_points_rtree;
-    
+    using RTreeParams = boost::geometry::index::rstar<8>;
+    using RTree = boost::geometry::index::rtree<IndexedPoint, RTreeParams>;
+    RTree target_points_rtree;
+
     // Computed distance threshold for current iteration
     mutable double current_distance_threshold{0.0};
-    
     // Compute the distance threshold based on current weights and parameters
     void compute_distance_threshold() const;
-    
     // Helper function for nearest neighbor queries
     std::vector<std::size_t> find_nearest_target_points(const Point<dim>& query_point) const;
-    
     // Helper function for range queries
     std::vector<std::size_t> find_target_points_in_box(const BoundingBox<dim>& box) const;
 };
