@@ -3,6 +3,8 @@
 
 #include <deal.II/grid/tria.h>
 #include <deal.II/distributed/tria.h>
+#include <deal.II/distributed/fully_distributed_tria.h>
+#include <deal.II/distributed/tria_base.h>
 #include <deal.II/grid/grid_generator.h>
 #include <deal.II/grid/grid_out.h>
 #include <deal.II/grid/grid_in.h>
@@ -115,7 +117,7 @@ private:
     MeshParameters source_params;
     MeshParameters target_params;
 
-    parallel::distributed::Triangulation<dim> source_mesh;
+    parallel::fullydistributed::Triangulation<dim> source_mesh;
     Triangulation<dim> target_mesh;  // Target mesh stays serial
     DoFHandler<dim> dof_handler_source;
     DoFHandler<dim> dof_handler_target;
