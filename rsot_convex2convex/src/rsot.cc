@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <deal.II/base/vectorization.h>
 #include <deal.II/lac/vector_operations_internal.h>
+#include <deal.II/grid/grid_tools.h>
 namespace fs = std::filesystem;
 
 template <int dim>
@@ -15,7 +16,7 @@ Convex2Convex<dim>::Convex2Convex(const MPI_Comm &comm)
       n_mpi_processes(Utilities::MPI::n_mpi_processes(comm)),
       this_mpi_process(Utilities::MPI::this_mpi_process(comm)),
       pcout(std::cout, Utilities::MPI::this_mpi_process(comm) == 0),
-      source_mesh(comm),
+      source_mesh(comm),  // fullydistributed triangulation only takes MPI comm
       target_mesh(),  // Regular triangulation without MPI
       dof_handler_source(source_mesh),
       dof_handler_target(target_mesh)
@@ -131,16 +132,45 @@ void Convex2Convex<dim>::generate_mesh(TriangulationType &tria,
                                      const unsigned int n_refinements,
                                      const bool use_tetrahedral_mesh)
 {
-    GridGenerator::generate_from_name_and_arguments(
-        tria,
-        grid_generator_function,
-        grid_generator_arguments);
+    if constexpr (std::is_same_v<TriangulationType, parallel::fullydistributed::Triangulation<dim>>) {
+        // For fullydistributed triangulation, first create a serial triangulation
+        Triangulation<dim> serial_tria;
+        GridGenerator::generate_from_name_and_arguments(
+            serial_tria,
+            grid_generator_function,
+            grid_generator_arguments);
 
-    if (use_tetrahedral_mesh && dim == 3) {
-        GridGenerator::convert_hypercube_to_simplex_mesh(tria, tria);
+        if (use_tetrahedral_mesh && dim == 3) {
+            GridGenerator::convert_hypercube_to_simplex_mesh(serial_tria, serial_tria);
+        }
+
+        serial_tria.refine_global(n_refinements);
+
+        // Set up the partitioner to use z-order curve
+        tria.set_partitioner([](Triangulation<dim> &tria_to_partition, const unsigned int n_partitions) {
+            GridTools::partition_triangulation_zorder(n_partitions, tria_to_partition);
+        }, TriangulationDescription::Settings::construct_multigrid_hierarchy);
+
+        // Create the construction data
+        auto construction_data = TriangulationDescription::Utilities::create_description_from_triangulation(
+            serial_tria, mpi_communicator,
+            TriangulationDescription::Settings::construct_multigrid_hierarchy);
+
+        // Actually create the distributed triangulation
+        tria.create_triangulation(construction_data);
+    } else {
+        // For regular triangulation, use the original code
+        GridGenerator::generate_from_name_and_arguments(
+            tria,
+            grid_generator_function,
+            grid_generator_arguments);
+
+        if (use_tetrahedral_mesh && dim == 3) {
+            GridGenerator::convert_hypercube_to_simplex_mesh(tria, tria);
+        }
+
+        tria.refine_global(n_refinements);
     }
-
-    tria.refine_global(n_refinements);
 }
 
 template <int dim>
@@ -183,9 +213,10 @@ void Convex2Convex<dim>::load_meshes()
 {
     const std::string directory = "output/data_mesh";
 
-    // Try loading source mesh
+    // First load source mesh into a serial triangulation
+    Triangulation<dim> serial_source;
     GridIn<dim> grid_in_source;
-    grid_in_source.attach_triangulation(source_mesh);
+    grid_in_source.attach_triangulation(serial_source);
     bool source_loaded = false;
 
     // First try VTK
@@ -196,7 +227,7 @@ void Convex2Convex<dim>::load_meshes()
             source_loaded = true;
             pcout << "Source mesh loaded from VTK format" << std::endl;
         } catch (const std::exception& e) {
-            pcout << "Failed to load source mesh from VTK: " << e.what() << std::endl;
+            pcout << "Failed to load source mesh from VTK format: " << e.what() << std::endl;
         }
     }
 
@@ -209,7 +240,7 @@ void Convex2Convex<dim>::load_meshes()
                 source_loaded = true;
                 pcout << "Source mesh loaded from MSH format" << std::endl;
             } catch (const std::exception& e) {
-                std::cerr << "Failed to load source mesh from MSH: " << e.what() << std::endl;
+                pcout << "Failed to load source mesh from MSH format: " << e.what() << std::endl;
             }
         }
     }
@@ -218,12 +249,21 @@ void Convex2Convex<dim>::load_meshes()
         throw std::runtime_error("Failed to load source mesh from either VTK or MSH format");
     }
 
-    // Try loading target mesh
+    // Partition the serial source mesh using z-order curve
+    GridTools::partition_triangulation_zorder(n_mpi_processes, serial_source);
+
+    // Convert serial source mesh to fullydistributed without multigrid hierarchy
+    auto construction_data = TriangulationDescription::Utilities::create_description_from_triangulation(
+        serial_source, mpi_communicator,
+        TriangulationDescription::Settings::default_setting);
+    source_mesh.create_triangulation(construction_data);
+
+    // Load target mesh (stays serial)
     GridIn<dim> grid_in_target;
     grid_in_target.attach_triangulation(target_mesh);
     bool target_loaded = false;
 
-    // First try VTK
+    // Try VTK for target
     std::ifstream in_vtk_target(directory + "/target.vtk");
     if (in_vtk_target.good()) {
         try {
@@ -231,11 +271,11 @@ void Convex2Convex<dim>::load_meshes()
             target_loaded = true;
             pcout << "Target mesh loaded from VTK format" << std::endl;
         } catch (const std::exception& e) {
-            pcout << "Failed to load target mesh from VTK: " << e.what() << std::endl;
+            pcout << "Failed to load target mesh from VTK format: " << e.what() << std::endl;
         }
     }
 
-    // If VTK failed, try MSH
+    // If VTK failed, try MSH for target
     if (!target_loaded) {
         std::ifstream in_msh_target(directory + "/target.msh");
         if (in_msh_target.good()) {
@@ -244,7 +284,7 @@ void Convex2Convex<dim>::load_meshes()
                 target_loaded = true;
                 pcout << "Target mesh loaded from MSH format" << std::endl;
             } catch (const std::exception& e) {
-                std::cerr << "Failed to load target mesh from MSH: " << e.what() << std::endl;
+                pcout << "Failed to load target mesh from MSH format: " << e.what() << std::endl;
             }
         }
     }
@@ -256,7 +296,6 @@ void Convex2Convex<dim>::load_meshes()
     pcout << "Source mesh: " << source_mesh.n_active_cells() << " cells, " << source_mesh.n_vertices() << " vertices" << std::endl;
     pcout << "Target mesh: " << target_mesh.n_active_cells() << " cells, " << target_mesh.n_vertices() << " vertices" << std::endl;
 }
-
 
 template <int dim>
 void Convex2Convex<dim>::setup_finite_elements()
