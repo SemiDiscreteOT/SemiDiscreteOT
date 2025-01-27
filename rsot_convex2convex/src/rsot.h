@@ -106,6 +106,7 @@ private:
     template <int d = dim>
     typename std::enable_if<d == 3>::type run_exact_sot();  // Only available for dim=3
     void compute_power_diagram();
+    void compute_transport_map();  // New function
 
     std::string selected_task;
     std::string io_coding = "txt";
@@ -153,6 +154,12 @@ private:
     struct PowerDiagramParameters {
         std::string implementation = "dealii";  // Options: dealii/geogram
     } power_diagram_params;
+
+    struct TransportMapParameters {
+        unsigned int n_neighbors = 10;
+        double kernel_width = 0.1;
+        std::string interpolation_type = "linear";
+    } transport_map_params;
 
     // Template version of generate_mesh to handle both types of triangulation
     template <typename TriangulationType>

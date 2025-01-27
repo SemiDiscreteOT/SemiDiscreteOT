@@ -2,6 +2,7 @@
 #include "PowerDiagram.h"
 #include "utils.h"
 #include "ExactSot.h"
+#include "OptimalTransportPlan.h"
 #include <deal.II/base/timer.h>
 #include <filesystem>
 #include <deal.II/base/vectorization.h>
@@ -94,6 +95,20 @@ Convex2Convex<dim>::Convex2Convex(const MPI_Comm &comm)
         add_parameter("implementation",
                      power_diagram_params.implementation,
                      "Implementation to use for power diagram computation (dealii/geogram)");
+    }
+    leave_subsection();
+
+    enter_subsection("transport_map_parameters");
+    {
+        add_parameter("n_neighbors",
+                     transport_map_params.n_neighbors,
+                     "Number of neighbors for local methods");
+        add_parameter("kernel_width",
+                     transport_map_params.kernel_width,
+                     "Kernel width for smooth approximations");
+        add_parameter("interpolation_type",
+                     transport_map_params.interpolation_type,
+                     "Type of interpolation");
     }
     leave_subsection();
 }
@@ -1082,6 +1097,103 @@ std::vector<std::size_t> Convex2Convex<dim>::find_target_points_in_box(
 }
 
 template <int dim>
+void Convex2Convex<dim>::compute_transport_map()
+{
+    load_meshes();
+    setup_finite_elements();
+
+    // Let user select which folder(s) to use
+    std::vector<std::string> selected_folders;
+    try {
+        selected_folders = Utils::select_folder();
+    } catch (const std::exception& e) {
+        pcout << "Error: " << e.what() << std::endl;
+        return;
+    }
+
+    // Create transport map approximator
+    OptimalTransportPlanSpace::OptimalTransportPlan<dim> transport_plan;
+
+    // Get source points and density (serial version)
+    std::vector<Point<dim>> source_points;
+    std::vector<double> source_density_vec;
+    {
+        // Get support points
+        std::map<types::global_dof_index, Point<dim>> support_points_source;
+        DoFTools::map_dofs_to_support_points(*mapping, dof_handler_source, support_points_source);
+        
+        // Convert to vectors maintaining order
+        source_points.reserve(support_points_source.size());
+        source_density_vec.reserve(support_points_source.size());
+        
+        for (const auto& point_pair : support_points_source) {
+            source_points.push_back(point_pair.second);
+            source_density_vec.push_back(1.0); // Initialize with uniform density
+        }
+        
+        // Normalize source density
+        double total_mass = std::accumulate(source_density_vec.begin(), source_density_vec.end(), 0.0);
+        for (auto& density : source_density_vec) {
+            density /= total_mass;
+        }
+    }
+
+    // Convert target density to standard vector (already serial)
+    std::vector<double> target_density_vec(target_density.begin(), target_density.end());
+
+    // Process each selected folder
+    for (const auto& selected_folder : selected_folders) {
+        pcout << "\nProcessing folder: " << selected_folder << std::endl;
+
+        // Read weights from selected folder's results
+        std::vector<double> weights_vec;
+        bool success = Utils::read_vector(weights_vec, "output/" + selected_folder + "/weights", io_coding);
+        if (!success) {
+            pcout << "Failed to read weights from output/" + selected_folder + "/weights" << std::endl;
+            continue; // Skip to next folder
+        }
+
+        if (weights_vec.size() != target_points.size()) {
+            pcout << "Error: Mismatch between weights size (" << weights_vec.size()
+                      << ") and target points size (" << target_points.size() << ")" << std::endl;
+            continue; // Skip to next folder
+        }
+
+        // Extract regularization parameter from folder name
+        std::string eps_str = selected_folder.substr(selected_folder.find("epsilon_") + 8);
+        double regularization_param = std::stod(eps_str);
+
+        // Create output directory
+        const std::string output_dir = "output/" + selected_folder + "/transport_map";
+        fs::create_directories(output_dir);
+
+        // Convert weights to dealii::Vector format
+        Vector<double> weights_dealii(weights_vec.size());
+        std::copy(weights_vec.begin(), weights_vec.end(), weights_dealii.begin());
+
+        // Set up the transport plan
+        transport_plan.set_source_measure(source_points, source_density_vec);
+        transport_plan.set_target_measure(target_points, target_density_vec);
+        transport_plan.set_potential(weights_dealii, regularization_param);
+
+        // Try different strategies and save results
+        for (const auto& strategy : transport_plan.get_available_strategies()) {
+            pcout << "Computing transport map using " << strategy << " strategy..." << std::endl;
+            
+            transport_plan.set_strategy(strategy);
+            transport_plan.compute_map();
+            transport_plan.save_map(output_dir + "/" + strategy);
+            
+            pcout << "Results saved in " << output_dir + "/" + strategy << std::endl;
+        }
+    }
+
+    if (selected_folders.size() > 1) {
+        pcout << "\nCompleted transport map computation for all selected folders." << std::endl;
+    }
+}
+
+template <int dim>
 void Convex2Convex<dim>::run()
 {
     print_parameters();
@@ -1113,6 +1225,10 @@ void Convex2Convex<dim>::run()
     {
         compute_power_diagram();
     }
+    else if (selected_task == "map")
+    {
+        compute_transport_map();
+    }
     else if (selected_task == "save_discrete_measures")
     {
         save_discrete_measures();
@@ -1122,8 +1238,6 @@ void Convex2Convex<dim>::run()
         pcout << "No valid task selected" << std::endl;
     }
 }
-
-
 
 template class Convex2Convex<2>;
 template class Convex2Convex<3>;

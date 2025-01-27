@@ -5,6 +5,7 @@ SET(TARGET_SRC
   src/PowerDiagramDealII.cc
   src/PowerDiagramGeogram.cc
   src/ExactSot.cc
+  src/OptimalTransportPlan.cc
 )
 
 SET(GEOGRAM_DIR "/scratch/mkhamlic/lib/geogram")
