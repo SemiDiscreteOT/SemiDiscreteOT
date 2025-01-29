@@ -111,6 +111,26 @@ Convex2Convex<dim>::Convex2Convex(const MPI_Comm &comm)
                      "Type of interpolation");
     }
     leave_subsection();
+
+    enter_subsection("multilevel_parameters");
+    {
+        add_parameter("min_vertices",
+                     multilevel_params.min_vertices,
+                     "Minimum number of vertices for the coarsest level");
+        
+        add_parameter("max_vertices",
+                     multilevel_params.max_vertices,
+                     "Maximum number of vertices for level 1 mesh");
+        
+        add_parameter("hierarchy_output_dir",
+                     multilevel_params.hierarchy_output_dir,
+                     "Directory to store the mesh hierarchy");
+
+        add_parameter("output_prefix",
+                     multilevel_params.output_prefix,
+                     "Directory prefix for multilevel SOT results");
+    }
+    leave_subsection();
 }
 
 template <int dim>
@@ -206,25 +226,7 @@ void Convex2Convex<dim>::save_meshes()
 }
 
 template <int dim>
-void Convex2Convex<dim>::mesh_generation()
-{
-    generate_mesh(source_mesh,
-                 source_params.grid_generator_function,
-                 source_params.grid_generator_arguments,
-                 source_params.n_refinements,
-                 source_params.use_tetrahedral_mesh);
-
-    generate_mesh(target_mesh,
-                 target_params.grid_generator_function,
-                 target_params.grid_generator_arguments,
-                 target_params.n_refinements,
-                 target_params.use_tetrahedral_mesh);
-
-    save_meshes();
-}
-
-template <int dim>
-void Convex2Convex<dim>::load_meshes()
+void Convex2Convex<dim>::load_mesh_source()
 {
     const std::string directory = "output/data_mesh";
 
@@ -272,7 +274,18 @@ void Convex2Convex<dim>::load_meshes()
         serial_source, mpi_communicator,
         TriangulationDescription::Settings::default_setting);
     source_mesh.create_triangulation(construction_data);
+}
 
+template <int dim>
+void Convex2Convex<dim>::load_mesh_target()
+{
+    // Only rank 0 loads the target mesh
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) != 0) {
+        return;
+    }
+
+    const std::string directory = "output/data_mesh";
+    
     // Load target mesh (stays serial)
     GridIn<dim> grid_in_target;
     grid_in_target.attach_triangulation(target_mesh);
@@ -307,13 +320,48 @@ void Convex2Convex<dim>::load_meshes()
     if (!target_loaded) {
         throw std::runtime_error("Failed to load target mesh from either VTK or MSH format");
     }
-
-    pcout << "Source mesh: " << source_mesh.n_active_cells() << " cells, " << source_mesh.n_vertices() << " vertices" << std::endl;
-    pcout << "Target mesh: " << target_mesh.n_active_cells() << " cells, " << target_mesh.n_vertices() << " vertices" << std::endl;
 }
 
 template <int dim>
-void Convex2Convex<dim>::setup_finite_elements()
+void Convex2Convex<dim>::load_meshes()
+{
+    load_mesh_source();
+    load_mesh_target();
+
+    // Print mesh statistics
+    const unsigned int n_global_cells = 
+        Utilities::MPI::sum(source_mesh.n_locally_owned_active_cells(), mpi_communicator);
+    const unsigned int n_global_vertices = 
+        Utilities::MPI::sum(source_mesh.n_vertices(), mpi_communicator);
+
+    pcout << "Source mesh: " << n_global_cells << " cells, " 
+          << n_global_vertices << " vertices" << std::endl;
+
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+        pcout << "Target mesh: " << target_mesh.n_active_cells() << " cells, " 
+              << target_mesh.n_vertices() << " vertices" << std::endl;
+    }
+}
+template <int dim>
+void Convex2Convex<dim>::mesh_generation()
+{
+    generate_mesh(source_mesh,
+                 source_params.grid_generator_function,
+                 source_params.grid_generator_arguments,
+                 source_params.n_refinements,
+                 source_params.use_tetrahedral_mesh);
+
+    generate_mesh(target_mesh,
+                 target_params.grid_generator_function,
+                 target_params.grid_generator_arguments,
+                 target_params.n_refinements,
+                 target_params.use_tetrahedral_mesh);
+
+    save_meshes();
+}
+
+template <int dim>
+void Convex2Convex<dim>::setup_source_finite_elements()
 {
     // Check if we're using tetrahedral meshes
     bool use_simplex = (source_params.use_tetrahedral_mesh || target_params.use_tetrahedral_mesh);
@@ -327,7 +375,6 @@ void Convex2Convex<dim>::setup_finite_elements()
     }
 
     dof_handler_source.distribute_dofs(*fe_system);
-    dof_handler_target.distribute_dofs(*fe_system);
 
     IndexSet locally_owned_dofs = dof_handler_source.locally_owned_dofs();
     IndexSet locally_relevant_dofs;
@@ -390,7 +437,12 @@ void Convex2Convex<dim>::setup_finite_elements()
         Utilities::MPI::sum(local_l1_norm, mpi_communicator);
     pcout << "Source density L1 norm: " << global_l1_norm << std::endl;
     source_density /= global_l1_norm; // Normalize to mass 1
+}
 
+template <int dim>
+void Convex2Convex<dim>::setup_target_finite_elements()
+{
+    dof_handler_target.distribute_dofs(*fe_system);
     // Load or compute target points (shared across all processes)
     const std::string directory = "output/data_points";
     bool points_loaded = false;
@@ -472,6 +524,13 @@ void Convex2Convex<dim>::setup_finite_elements()
 
     pcout << "RTree initialized for target points" << std::endl;
     pcout << n_levels(target_points_rtree) << std::endl;
+}
+
+template <int dim>
+void Convex2Convex<dim>::setup_finite_elements()
+{
+    setup_source_finite_elements();
+    setup_target_finite_elements();
 }
 
 template <int dim>
@@ -1194,6 +1253,347 @@ void Convex2Convex<dim>::compute_transport_map()
 }
 
 template <int dim>
+void Convex2Convex<dim>::prepare_multilevel()
+{
+    pcout << "Preparing multilevel mesh hierarchy..." << std::endl;
+
+    // Create MeshHierarchyManager instance
+    MeshHierarchy::MeshHierarchyManager hierarchy_manager(
+        multilevel_params.min_vertices,
+        multilevel_params.max_vertices
+    );
+
+    // Ensure source mesh exists
+    const std::string source_mesh_file = "output/data_mesh/source.msh";
+    if (!std::filesystem::exists(source_mesh_file)) {
+        pcout << "Source mesh file not found. Please run mesh_generation first." << std::endl;
+        return;
+    }
+
+    try {
+        // Create output directory if it doesn't exist
+        const std::string hierarchy_dir = "output/data_mesh/multilevel";
+        fs::create_directories(hierarchy_dir);
+
+        // Generate hierarchy
+        int num_levels = hierarchy_manager.generateHierarchyFromFile(
+            source_mesh_file,
+            hierarchy_dir
+        );
+
+        pcout << "Successfully generated mesh hierarchy with " << num_levels << " levels" << std::endl;
+        pcout << "Mesh hierarchy saved in: " << hierarchy_dir << std::endl;
+        pcout << "Level 1 (finest) vertices: " << multilevel_params.max_vertices << std::endl;
+        pcout << "Coarsest level vertices: ~" << multilevel_params.min_vertices << std::endl;
+
+    } catch (const std::exception& e) {
+        pcout << "Error generating mesh hierarchy: " << e.what() << std::endl;
+    }
+}
+
+template <int dim>
+std::vector<std::string> Convex2Convex<dim>::get_mesh_hierarchy_files() const
+{
+    std::vector<std::string> mesh_files;
+    const std::string dir = "output/data_mesh/multilevel";
+    
+    // List all .msh files in the hierarchy directory
+    for (const auto& entry : fs::directory_iterator(dir)) {
+        if (entry.path().extension() == ".msh") {
+            mesh_files.push_back(entry.path().string());
+        }
+    }
+    
+    // Sort in reverse order (coarsest to finest)
+    std::sort(mesh_files.begin(), mesh_files.end(), std::greater<std::string>());
+    return mesh_files;
+}
+
+template <int dim>
+void Convex2Convex<dim>::load_mesh_at_level(const std::string& mesh_file)
+{
+    pcout << "Attempting to load mesh from: " << mesh_file << std::endl;
+    
+    // Check if file exists
+    if (!std::filesystem::exists(mesh_file)) {
+        throw std::runtime_error("Mesh file does not exist: " + mesh_file);
+    }
+
+    // Check if file is readable and non-empty
+    std::ifstream input(mesh_file);
+    if (!input.good()) {
+        throw std::runtime_error("Cannot open mesh file: " + mesh_file);
+    }
+    
+    input.seekg(0, std::ios::end);
+    if (input.tellg() == 0) {
+        throw std::runtime_error("Mesh file is empty: " + mesh_file);
+    }
+    input.seekg(0, std::ios::beg);
+
+    try {
+        // First load into a serial triangulation
+        Triangulation<dim> serial_source;
+        GridIn<dim> grid_in;
+        grid_in.attach_triangulation(serial_source);
+        
+        grid_in.read_msh(input);
+        
+        // Verify the mesh was loaded properly
+        if (serial_source.n_active_cells() == 0) {
+            throw std::runtime_error("Loaded mesh contains no cells");
+        }
+        
+        pcout << "Successfully loaded serial mesh with "
+              << serial_source.n_active_cells() << " cells and "
+              << serial_source.n_vertices() << " vertices" << std::endl;
+        
+        // Partition the serial mesh using z-order curve
+        GridTools::partition_triangulation_zorder(n_mpi_processes, serial_source);
+        
+        // Convert to fullydistributed triangulation
+        auto construction_data = TriangulationDescription::Utilities::create_description_from_triangulation(
+            serial_source, mpi_communicator,
+            TriangulationDescription::Settings::default_setting);
+        
+        // Clear old DoFHandler first
+        dof_handler_source.clear();
+        // Then clear and recreate triangulation
+        source_mesh.clear();
+        source_mesh.create_triangulation(construction_data);
+        
+        // DoFHandler is automatically reinitialized since it's connected to source_mesh
+        
+        // Verify the distributed mesh
+        const unsigned int n_global_active_cells = 
+            Utilities::MPI::sum(source_mesh.n_locally_owned_active_cells(), mpi_communicator);
+            
+        if (n_global_active_cells == 0) {
+            throw std::runtime_error("Distributed mesh contains no cells");
+        }
+        
+        pcout << "Successfully created distributed mesh with "
+              << n_global_active_cells << " total cells across "
+              << n_mpi_processes << " processes" << std::endl;
+        
+    } catch (const std::exception& e) {
+        throw std::runtime_error("Failed to load mesh from " + mesh_file + 
+                               "\nError: " + e.what());
+    }
+}
+
+template <int dim>
+void Convex2Convex<dim>::setup_target_points()
+{
+    load_mesh_target();
+    setup_target_finite_elements();
+}
+
+template <int dim>
+void Convex2Convex<dim>::setup_multilevel_finite_elements()
+{
+    // Check if we're using tetrahedral meshes
+    bool use_simplex = (source_params.use_tetrahedral_mesh || target_params.use_tetrahedral_mesh);
+    // Only distribute DoFs for source mesh
+    dof_handler_source.distribute_dofs(*fe_system);
+
+    // Initialize source density
+    IndexSet locally_owned_dofs = dof_handler_source.locally_owned_dofs();
+    IndexSet locally_relevant_dofs;
+    DoFTools::extract_locally_relevant_dofs(dof_handler_source, locally_relevant_dofs);
+
+    source_density.reinit(locally_owned_dofs, locally_relevant_dofs, mpi_communicator);
+    source_density = 1.0;
+    source_density.update_ghost_values();
+
+    // Normalize source density
+    double local_l1_norm = 0.0;
+    std::unique_ptr<Quadrature<dim>> quadrature;
+    if (use_simplex) {
+        quadrature = std::make_unique<QGaussSimplex<dim>>(solver_params.quadrature_order);
+    } else {
+        quadrature = std::make_unique<QGauss<dim>>(solver_params.quadrature_order);
+    }
+
+    FEValues<dim> fe_values(*mapping, *fe_system, *quadrature,
+                           update_values | update_JxW_values);
+    std::vector<double> density_values(quadrature->size());
+
+    for (const auto &cell : dof_handler_source.active_cell_iterators()) {
+        if (!cell->is_locally_owned())
+            continue;
+
+        fe_values.reinit(cell);
+        fe_values.get_function_values(source_density, density_values);
+
+        for (unsigned int q = 0; q < quadrature->size(); ++q) {
+            local_l1_norm += std::abs(density_values[q]) * fe_values.JxW(q);
+        }
+    }
+
+    const double global_l1_norm = Utilities::MPI::sum(local_l1_norm, mpi_communicator);
+    source_density /= global_l1_norm;
+    source_density.update_ghost_values();
+
+    pcout << "Source mesh finite elements initialized with " 
+          << dof_handler_source.n_dofs() << " DoFs" << std::endl;
+}
+
+template <int dim>
+void Convex2Convex<dim>::run_multilevel_sot()
+{
+    pcout << "Starting multilevel SOT computation..." << std::endl;
+    
+    // Get mesh hierarchy files (sorted from coarsest to finest)
+    std::vector<std::string> mesh_files = get_mesh_hierarchy_files();
+    if (mesh_files.empty()) {
+        pcout << "No mesh hierarchy found. Please run prepare_multilevel first." << std::endl;
+        return;
+    }
+    
+    // Store original solver parameters
+    const unsigned int original_max_iterations = solver_params.max_iterations;
+    const double original_tolerance = solver_params.tolerance;
+    const double original_regularization = solver_params.regularization_param;
+    
+    // Create epsilon directory with multilevel subdirectory
+    std::string eps_dir = "output/epsilon_" + std::to_string(original_regularization);
+    std::string multilevel_dir = "multilevel";
+    fs::create_directories(eps_dir+"/multilevel");
+
+    // Check if we're using tetrahedral meshes
+    bool use_simplex = (source_params.use_tetrahedral_mesh || target_params.use_tetrahedral_mesh);
+
+    if (use_simplex) {
+        fe_system = std::make_unique<FE_SimplexP<dim>>(1);
+        mapping = std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
+    } else {
+        fe_system = std::make_unique<FE_Q<dim>>(1);
+        mapping = std::make_unique<MappingQ1<dim>>();
+    }
+
+    // Set up target points and RTree (only needs to be done once)
+    setup_target_points();
+    
+    // Vector to store previous level's solution
+    Vector<double> previous_weights;
+    Vector<double> final_weights;
+    
+    // Process each level from coarsest to finest
+    for (size_t level = 0; level < mesh_files.size(); ++level) {
+        pcout << "\nProcessing level " << level << " (mesh: " << mesh_files[level] << ")" << std::endl;
+        
+        // Load the mesh for this level
+        load_mesh_at_level(mesh_files[level]);
+        setup_multilevel_finite_elements();  // Use specialized setup
+        
+        // Adjust solver parameters based on level
+        solver_params.max_iterations = original_max_iterations;
+        
+        // Adjust tolerance based on level:
+        // level 0 (coarsest): tolerance * 10^(num_levels-0)
+        // level 1: tolerance * 10^(num_levels-1)
+        // level 2 (finest): tolerance * 10^(num_levels-2)
+        double num_levels = static_cast<double>(mesh_files.size());
+
+        double tolerance_exponent = static_cast<double>(level) - num_levels + 1.0;
+        pcout << "tolerance_exponent: " << tolerance_exponent << std::endl;
+        solver_params.tolerance = original_tolerance * std::pow(2.0, tolerance_exponent);
+        
+        pcout << "\nLevel " << level << " solver parameters:" << std::endl;
+        pcout << "  Level: " << level << " of " << num_levels << std::endl;
+        pcout << "  Tolerance: " << solver_params.tolerance << std::endl;
+        pcout << "  Max iterations: " << solver_params.max_iterations << std::endl;
+        
+        // Initialize weights - either from previous level or zero
+        Vector<double> current_weights(target_points.size());
+        if (level > 0) {
+            current_weights = previous_weights;
+            pcout << "Initialized weights from previous level solution" << std::endl;
+        }
+        
+        // Run SOT at current level
+        try {
+            Timer level_timer;
+            level_timer.start();
+            
+            // Create a verbose solver control that displays iteration info
+            class VerboseSolverControl : public SolverControl
+            {
+            public:
+                VerboseSolverControl(unsigned int n, double tol, ConditionalOStream& pcout_)
+                    : SolverControl(n, tol), pcout(pcout_) {}
+
+                virtual State check(unsigned int step, double value) override
+                {
+                    pcout << "Iteration " << step
+                          << " - Function value: " << value
+                          << " - Relative residual: " << value / initial_value() << std::endl;
+                    return SolverControl::check(step, value);
+                }
+            private:
+                ConditionalOStream& pcout;
+            };
+
+            solver_control = std::make_unique<VerboseSolverControl>(
+                solver_params.max_iterations,
+                solver_params.tolerance,
+                pcout
+            );
+            
+            if (!solver_params.verbose_output) {
+                solver_control->log_history(false);
+                solver_control->log_result(false);
+            }
+            
+            SolverBFGS<Vector<double>> solver(*solver_control);
+            solver.solve(
+                [&](const Vector<double> &w, Vector<double> &grad) {
+                    return evaluate_sot_functional(w, grad);
+                },
+                current_weights
+            );
+            
+            level_timer.stop();
+            
+            // Save results for this level in the multilevel directory
+            std::string level_dir = multilevel_dir + "/level_" + std::to_string(level);
+            fs::create_directories(level_dir);
+            save_results(current_weights, level_dir + "/weights");
+            
+            // Store current solution for next level and as final result
+            previous_weights = current_weights;
+            if (level == mesh_files.size() - 1) {
+                final_weights = current_weights;
+            }
+            
+            pcout << "\nLevel " << level << " summary:" << std::endl;
+            pcout << "  Status: Completed successfully" << std::endl;
+            pcout << "  Time taken: " << level_timer.wall_time() << " seconds" << std::endl;
+            pcout << "  Final number of iterations: " << solver_control->last_step() << std::endl;
+            pcout << "  Final function value: " << solver_control->last_value() << std::endl;
+            pcout << "  Results saved in: " << level_dir << std::endl;
+            
+        } catch (const std::exception& e) {
+            pcout << "Error at level " << level << ": " << e.what() << std::endl;
+            if (level == 0) return;  // If coarsest level fails, abort
+            // Otherwise continue to next level with zero initialization
+        }
+    }
+    
+    // Save final results in the multilevel directory
+    save_results(final_weights, multilevel_dir + "/weights");  // Save final results in multilevel directory
+    
+    pcout << "\nMultilevel SOT computation summary:" << std::endl;
+    pcout << "  Total levels processed: " << mesh_files.size() << std::endl;
+    pcout << "  Original regularization parameter (λ): " << original_regularization << std::endl;
+    pcout << "  Original tolerance: " << original_tolerance << std::endl;
+    pcout << "  All results (including final) saved in: " << multilevel_dir << std::endl;
+    
+    pcout << "\nMultilevel SOT computation completed" << std::endl;
+}
+
+template <int dim>
 void Convex2Convex<dim>::run()
 {
     print_parameters();
@@ -1232,6 +1632,14 @@ void Convex2Convex<dim>::run()
     else if (selected_task == "save_discrete_measures")
     {
         save_discrete_measures();
+    }
+    else if (selected_task == "prepare_multilevel")
+    {
+        prepare_multilevel();
+    }
+    else if (selected_task == "multilevel_sot")
+    {
+        run_multilevel_sot();
     }
     else
     {

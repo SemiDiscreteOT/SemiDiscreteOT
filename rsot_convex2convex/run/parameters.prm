@@ -1,7 +1,7 @@
 subsection Convex2Convex
 
-  set selected_task = sot  # Options: mesh_generation, load_meshes, sot, exact_sot, power_diagram
-  set io_coding = bin
+  set selected_task = multilevel_sot   # Options: mesh_generation, load_meshes, sot, exact_sot, power_diagram, map, prepare_multilevel, multilevel_sot
+  set io_coding = txt
 
   subsection mesh_generation
     subsection source
@@ -21,17 +21,30 @@ subsection Convex2Convex
 
   subsection rsot_solver
     set max_iterations = 10000
-    set tolerance = 1e-5
-    set regularization_parameter = 1e-2
+    set tolerance = 1e-3
+    set regularization_parameter = 1e-1
     set epsilon = 1e-15
     set verbose_output = true
     set solver_type = BFGS
     set quadrature_order = 3
     set number_of_threads = 0
+    set verbose_output = true
   end
 
   subsection power_diagram_parameters
     set implementation = geogram  # Options: dealii/geogram
+  end
+
+  subsection transport_map_parameters
+    set n_neighbors = 10          # Number of neighbors for local methods
+    set kernel_width = 0.1        # Kernel width for smooth approximations
+    set interpolation_type = linear # Type of interpolation
+  end
+
+  subsection multilevel_parameters
+    set min_vertices = 500          # Minimum vertices for coarsest level
+    set max_vertices = 2000         # Maximum vertices for finest level
+    set hierarchy_output_dir = output/multilevel/meshes  # Output directory
   end
 
 end

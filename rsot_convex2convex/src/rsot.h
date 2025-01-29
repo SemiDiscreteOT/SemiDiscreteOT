@@ -29,6 +29,7 @@
 #include <deal.II/base/utilities.h>
 #include <deal.II/base/conditional_ostream.h>
 #include <deal.II/numerics/rtree.h>
+#include "MeshHierarchy.h"
 
 #include <filesystem>
 #include <memory>
@@ -101,7 +102,9 @@ private:
 
     void mesh_generation();
     void print_parameters();
-    void load_meshes();
+    void load_mesh_source();
+    void load_mesh_target();
+    void load_meshes();  // Kept for backward compatibility
     void run_sot();
     template <int d = dim>
     typename std::enable_if<d == 3>::type run_exact_sot();  // Only available for dim=3
@@ -170,7 +173,11 @@ private:
                       const bool use_tetrahedral_mesh);
 
     void save_meshes();
+    void setup_source_finite_elements();
+    void setup_target_finite_elements();
     void setup_finite_elements();
+    void setup_multilevel_finite_elements();  // New specialized setup for multilevel
+    void setup_target_points();  // New helper to set up target points and RTree once
     double evaluate_sot_functional(const Vector<double>& weights, Vector<double>& gradient);
     void save_results(const Vector<double>& weights, const std::string& filename);
 
@@ -189,6 +196,18 @@ private:
     std::vector<std::size_t> find_nearest_target_points(const Point<dim>& query_point) const;
     // Helper function for range queries
     std::vector<std::size_t> find_target_points_in_box(const BoundingBox<dim>& box) const;
+
+    struct MultilevelParameters {
+        int min_vertices = 1000;
+        int max_vertices = 10000;
+        std::string hierarchy_output_dir = "output/multilevel/meshes";
+        std::string output_prefix = "output/multilevel/sot";  // Where to save multilevel results
+    } multilevel_params;
+
+    void prepare_multilevel();
+    void run_multilevel_sot();
+    void load_mesh_at_level(const std::string& mesh_file);
+    std::vector<std::string> get_mesh_hierarchy_files() const;
 };
 
 #endif
