@@ -160,6 +160,9 @@ private:
         unsigned int quadrature_order = 3;
         unsigned int nb_points = 1000;
         unsigned int number_of_threads = 0;  // 0 means use all available cores
+        bool use_epsilon_scaling = false;  // Whether to use epsilon scaling strategy
+        double epsilon_scaling_factor = 2.0;  // Factor by which to reduce epsilon in each step
+        unsigned int epsilon_scaling_steps = 5;  // Number of epsilon scaling steps
     } solver_params;
 
     struct PowerDiagramParameters {

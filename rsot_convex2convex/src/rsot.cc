@@ -87,6 +87,18 @@ Convex2Convex<dim>::Convex2Convex(const MPI_Comm &comm)
         add_parameter("number_of_threads",
                      solver_params.number_of_threads,
                      "Number of threads to use for parallel SOT");
+
+        add_parameter("use_epsilon_scaling",
+                     solver_params.use_epsilon_scaling,
+                     "Enable epsilon scaling strategy");
+
+        add_parameter("epsilon_scaling_factor",
+                     solver_params.epsilon_scaling_factor,
+                     "Factor by which to reduce epsilon in each scaling step");
+
+        add_parameter("epsilon_scaling_steps",
+                     solver_params.epsilon_scaling_steps,
+                     "Number of epsilon scaling steps");
     }
     leave_subsection();
 
@@ -781,7 +793,6 @@ std::vector<std::size_t> Convex2Convex<dim>::find_target_points_in_box(
     return indices;
 }
 
-
 template <int dim>
 void Convex2Convex<dim>::run_sot()
 {
@@ -817,6 +828,16 @@ void Convex2Convex<dim>::run_sot()
     Vector<double> weights(target_points.size());
     Vector<double> gradient(target_points.size());
 
+    // Store original regularization parameter
+    const double original_lambda = solver_params.regularization_param;
+
+    if (solver_params.use_epsilon_scaling) {
+        pcout << "Using epsilon scaling strategy with:" << std::endl
+              << "  Initial epsilon: " << original_lambda << std::endl
+              << "  Scaling factor: " << solver_params.epsilon_scaling_factor << std::endl
+              << "  Number of steps: " << solver_params.epsilon_scaling_steps << std::endl;
+    }
+
     // Define VerboseSolverControl class
     class VerboseSolverControl : public SolverControl
     {
@@ -848,49 +869,97 @@ void Convex2Convex<dim>::run_sot()
         solver_control->log_result(false);
     }
 
-    SolverBFGS<Vector<double>> solver(*solver_control);
-
-    try
-    {
-        pcout << "Using regularization parameter λ = "
-                  << solver_params.regularization_param << std::endl;
-        solver.solve(
-            [&](const Vector<double> &w, Vector<double> &grad) {
-                return evaluate_sot_functional(w, grad);
-            },
-            weights
+    // Function to run a single optimization with current epsilon
+    auto run_single_optimization = [&](double current_lambda) {
+        // Create solver control for current optimization
+        solver_control = std::make_unique<VerboseSolverControl>(
+            solver_params.max_iterations,
+            solver_params.tolerance,
+            pcout
         );
 
-        timer.stop();
+        if (!solver_params.verbose_output) {
+            solver_control->log_history(false);
+            solver_control->log_result(false);
+        }
+
+        SolverBFGS<Vector<double>> solver(*solver_control);
+
+        try {
+            pcout << "Using regularization parameter λ = " << current_lambda << std::endl;
+            solver_params.regularization_param = current_lambda;  // Set current lambda for functional evaluation
+
+            solver.solve(
+                [&](const Vector<double> &w, Vector<double> &grad) {
+                    return evaluate_sot_functional(w, grad);
+                },
+                weights  // Use current weights as initial guess
+            );
+
+            pcout << "Optimization step completed:" << std::endl
+                  << "  Number of iterations: " << solver_control->last_step() << std::endl
+                  << "  Final function value: " << solver_control->last_value() << std::endl;
+
+            return true;
+        } catch (SolverControl::NoConvergence &exc) {
+            pcout << "Warning: Optimization did not converge for λ = " << current_lambda << std::endl;
+            return false;
+        }
+    };
+
+    bool success = false;
+
+    if (solver_params.use_epsilon_scaling) {
+        // Compute sequence of epsilon values
+        std::vector<double> epsilon_sequence;
+        epsilon_sequence.reserve(solver_params.epsilon_scaling_steps);
+        
+        for (int i = 0; i < solver_params.epsilon_scaling_steps; ++i) {
+            double scale_factor = std::pow(solver_params.epsilon_scaling_factor, 
+                                         solver_params.epsilon_scaling_steps - 1 - i);
+            epsilon_sequence.push_back(original_lambda * scale_factor);
+        }
+
+        // Run optimization for each epsilon value
+        for (size_t i = 0; i < epsilon_sequence.size(); ++i) {
+            pcout << "\nEpsilon scaling step " << i + 1 << "/" << epsilon_sequence.size()
+                  << " (λ = " << epsilon_sequence[i] << ")" << std::endl;
+
+            success = run_single_optimization(epsilon_sequence[i]);
+
+            // Save intermediate results
+            save_results(weights, "weights_eps_" + std::to_string(epsilon_sequence[i]));
+
+            if (!success && i < epsilon_sequence.size() - 1) {
+                pcout << "Warning: Optimization failed at step " << i + 1 
+                      << ", continuing with next epsilon value" << std::endl;
+            }
+        }
+    } else {
+        // Run single optimization with original epsilon
+        success = run_single_optimization(original_lambda);
+    }
+
+    timer.stop();
+
+    if (success) {
         pcout << "\nOptimization completed successfully!" << std::endl;
-        pcout << "Total solver time: " << timer.wall_time() << " seconds" << std::endl;
-        pcout << "Final number of iterations: " << solver_control->last_step() << std::endl;
-        pcout << "Final function value: " << solver_control->last_value() << std::endl;
+    } else {
+        pcout << "\nOptimization completed with warnings." << std::endl;
+    }
 
-        save_results(weights, "weights");
-        pcout << "Results saved to weights" << std::endl;
-    }
-    catch (SolverControl::NoConvergence &exc)
-    {
-        timer.stop();
-        // Save results before reporting the error
-        save_results(weights, "weights");
-        pcout << "\nMaximum iterations reached without convergence." << std::endl;
-        pcout << "Total solver time: " << timer.wall_time() << " seconds" << std::endl;
-        pcout << "Final number of iterations: " << solver_control->last_step() << std::endl;
-        pcout << "Final function value: " << solver_control->last_value() << std::endl;
-        pcout << "Intermediate results saved to weights" << std::endl;
+    pcout << "Total solver time: " << timer.wall_time() << " seconds" << std::endl;
+    pcout << "Final number of iterations: " << solver_control->last_step() << std::endl;
+    pcout << "Final function value: " << solver_control->last_value() << std::endl;
 
-        // Re-throw the exception
-        throw;
-    }
-    catch (std::exception &exc)
-    {
-        timer.stop();
-        pcout << "Total solver time: " << timer.wall_time() << " seconds" << std::endl;
-        pcout << "Error in SOT computation: " << exc.what() << std::endl;
-    }
+    // Save final results
+    save_results(weights, "weights");
+    pcout << "Final results saved to weights" << std::endl;
+
+    // Restore original regularization parameter
+    solver_params.regularization_param = original_lambda;
 }
+
 
 template <int dim>
 void Convex2Convex<dim>::prepare_multilevel()
@@ -1498,30 +1567,40 @@ void Convex2Convex<dim>::compute_transport_map()
 
     // Get source points and density (serial version)
     std::vector<Point<dim>> source_points;
-    std::vector<double> source_density_vec;
+    Vector<double> source_density;
+
+    const std::string directory = "output/data_points";
+    bool points_loaded = false;
+    if (Utils::read_vector(source_points, directory + "/source_points", io_coding))
     {
-        // Get support points
-        std::map<types::global_dof_index, Point<dim>> support_points_source;
-        DoFTools::map_dofs_to_support_points(*mapping, dof_handler_source, support_points_source);
-        
-        // Convert to vectors maintaining order
-        source_points.reserve(support_points_source.size());
-        source_density_vec.reserve(support_points_source.size());
-        
-        for (const auto& point_pair : support_points_source) {
-            source_points.push_back(point_pair.second);
-            source_density_vec.push_back(1.0); // Initialize with uniform density
-        }
-        
-        // Normalize source density
-        double total_mass = std::accumulate(source_density_vec.begin(), source_density_vec.end(), 0.0);
-        for (auto& density : source_density_vec) {
-            density /= total_mass;
-        }
+        points_loaded = true;
+        std::cout << "Source points loaded from file" << std::endl;
     }
 
-    // Convert target density to standard vector
+    if (!points_loaded)
+    {
+        std::map<types::global_dof_index, Point<dim>> support_points_source;
+        DoFTools::map_dofs_to_support_points(*mapping, dof_handler_source, support_points_source);
+        source_points.clear();
+        for (const auto &point_pair : support_points_source)
+        {
+            source_points.push_back(point_pair.second);
+        }
+
+        // Save the computed points
+        Utils::write_vector(source_points, directory + "/source_points", io_coding);
+        std::cout << "Source points computed and saved to file" << std::endl;
+    }
+
+    source_density.reinit(source_points.size());
+    source_density = 1.0 / source_points.size();
+
+    // Convert densities to vectors
+    std::vector<double> source_density_vec(source_density.begin(), source_density.end());
     std::vector<double> target_density_vec(target_density.begin(), target_density.end());
+
+    std::cout << "Setup complete with " << source_points.size() << " source points and "
+              << target_points.size() << " target points" << std::endl;
 
     // Process each selected folder
     for (const auto& selected_folder : selected_folders) {

@@ -239,7 +239,8 @@ void BarycentricStrategy<dim>::compute_map(
             }
 
             // Use Gaussian kernel for weights
-            weights[j] = std::exp(-(squared_dist + potential[idx]) / regularization_param);
+            // weights[j] = std::exp(-(squared_dist + potential[idx]) / regularization_param);
+            weights[j] = std::exp((potential[idx] - 0.5 * squared_dist) / regularization_param);
             total_weight += weights[j];
         }
 
