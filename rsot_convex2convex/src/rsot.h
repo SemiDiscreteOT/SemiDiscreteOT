@@ -29,6 +29,7 @@
 #include <deal.II/base/utilities.h>
 #include <deal.II/base/conditional_ostream.h>
 #include <deal.II/numerics/rtree.h>
+#include "MeshHierarchy.h"
 
 #include <filesystem>
 #include <memory>
@@ -105,6 +106,20 @@ private:
     void load_mesh_target();
     void load_meshes(); 
     void run_sot();
+
+    // Multilevel parameters
+    struct MultilevelParameters {
+        int min_vertices = 1000;
+        int max_vertices = 10000;
+        std::string hierarchy_output_dir = "output/multilevel/meshes";
+        std::string output_prefix = "output/multilevel/sot";  // Where to save multilevel results
+    } multilevel_params;
+
+    void prepare_multilevel();
+    void run_multilevel_sot();
+    void load_mesh_at_level(const std::string& mesh_file);
+    std::vector<std::string> get_mesh_hierarchy_files() const;
+
     template <int d = dim>
     typename std::enable_if<d == 3>::type run_exact_sot();  // Only available for dim=3
     void compute_power_diagram();
@@ -169,6 +184,8 @@ private:
     void setup_source_finite_elements();
     void setup_target_finite_elements();
     void setup_finite_elements();
+    void setup_target_points();  // New helper to set up target points and RTree once
+    void setup_multilevel_finite_elements();  
     double evaluate_sot_functional(const Vector<double>& weights, Vector<double>& gradient);
     void save_results(const Vector<double>& weights, const std::string& filename);
 

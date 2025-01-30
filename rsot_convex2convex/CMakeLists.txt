@@ -6,6 +6,7 @@ SET(TARGET_SRC
   src/PowerDiagramGeogram.cc
   src/ExactSot.cc
   src/OptimalTransportPlan.cc
+  src/MeshHierarchy.cc
 )
 
 SET(GEOGRAM_DIR "/scratch/mkhamlic/lib/geogram")
@@ -13,8 +14,8 @@ SET(GEOGRAM_DIR "/scratch/mkhamlic/lib/geogram")
 # Geogram setup
 INCLUDE_DIRECTORIES(${GEOGRAM_DIR}/src/lib)
 SET(CMAKE_MODULE_PATH ${GEOGRAM_DIR}/cmake)
-SET(GEOGRAM_LIBS 
-    ${GEOGRAM_DIR}/build/Linux64-gcc-dynamic-Release/lib/libgeogram.so 
+SET(GEOGRAM_LIBS
+    ${GEOGRAM_DIR}/build/Linux64-gcc-dynamic-Release/lib/libgeogram.so
     ${GEOGRAM_DIR}/build/Linux64-gcc-dynamic-Release/lib/libexploragram.so
 )
 
@@ -36,7 +37,7 @@ DEAL_II_INITIALIZE_CACHED_VARIABLES()
 PROJECT(${TARGET})
 
 # Set output directory
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/run_new)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/run)
 
 # Setup Deal.II target
 DEAL_II_INVOKE_AUTOPILOT()
