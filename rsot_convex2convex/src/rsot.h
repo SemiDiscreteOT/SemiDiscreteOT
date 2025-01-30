@@ -101,7 +101,9 @@ private:
 
     void mesh_generation();
     void print_parameters();
-    void load_meshes();
+    void load_mesh_source();
+    void load_mesh_target();
+    void load_meshes(); 
     void run_sot();
     template <int d = dim>
     typename std::enable_if<d == 3>::type run_exact_sot();  // Only available for dim=3
@@ -133,12 +135,6 @@ private:
     Vector<double> target_density;
 
     std::unique_ptr<SolverControl> solver_control;
-
-    // Vectorized data members
-    std::vector<VectorizedArray<double>> target_density_vec;
-    std::vector<VectorizedArray<double>> current_weights_vec;
-    std::vector<std::array<VectorizedArray<double>, dim>> target_points_vec;
-
     struct SolverParameters {
         unsigned int max_iterations = 1000;
         double tolerance = 1e-8;
@@ -170,6 +166,8 @@ private:
                       const bool use_tetrahedral_mesh);
 
     void save_meshes();
+    void setup_source_finite_elements();
+    void setup_target_finite_elements();
     void setup_finite_elements();
     double evaluate_sot_functional(const Vector<double>& weights, Vector<double>& gradient);
     void save_results(const Vector<double>& weights, const std::string& filename);

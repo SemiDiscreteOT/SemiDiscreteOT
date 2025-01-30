@@ -224,7 +224,7 @@ void Convex2Convex<dim>::mesh_generation()
 }
 
 template <int dim>
-void Convex2Convex<dim>::load_meshes()
+void Convex2Convex<dim>::load_mesh_source()
 {
     const std::string directory = "output/data_mesh";
 
@@ -272,7 +272,18 @@ void Convex2Convex<dim>::load_meshes()
         serial_source, mpi_communicator,
         TriangulationDescription::Settings::default_setting);
     source_mesh.create_triangulation(construction_data);
+}
 
+template <int dim>
+void Convex2Convex<dim>::load_mesh_target()
+{
+    // Only rank 0 loads the target mesh
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) != 0) {
+        return;
+    }
+
+    const std::string directory = "output/data_mesh";
+    
     // Load target mesh (stays serial)
     GridIn<dim> grid_in_target;
     grid_in_target.attach_triangulation(target_mesh);
@@ -307,13 +318,31 @@ void Convex2Convex<dim>::load_meshes()
     if (!target_loaded) {
         throw std::runtime_error("Failed to load target mesh from either VTK or MSH format");
     }
-
-    pcout << "Source mesh: " << source_mesh.n_active_cells() << " cells, " << source_mesh.n_vertices() << " vertices" << std::endl;
-    pcout << "Target mesh: " << target_mesh.n_active_cells() << " cells, " << target_mesh.n_vertices() << " vertices" << std::endl;
 }
 
 template <int dim>
-void Convex2Convex<dim>::setup_finite_elements()
+void Convex2Convex<dim>::load_meshes()
+{
+    load_mesh_source();
+    load_mesh_target();
+
+    // Print mesh statistics
+    const unsigned int n_global_cells = 
+        Utilities::MPI::sum(source_mesh.n_locally_owned_active_cells(), mpi_communicator);
+    const unsigned int n_global_vertices = 
+        Utilities::MPI::sum(source_mesh.n_vertices(), mpi_communicator);
+
+    pcout << "Source mesh: " << n_global_cells << " cells, " 
+          << n_global_vertices << " vertices" << std::endl;
+
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+        pcout << "Target mesh: " << target_mesh.n_active_cells() << " cells, " 
+              << target_mesh.n_vertices() << " vertices" << std::endl;
+    }
+}
+
+template <int dim>
+void Convex2Convex<dim>::setup_source_finite_elements()
 {
     // Check if we're using tetrahedral meshes
     bool use_simplex = (source_params.use_tetrahedral_mesh || target_params.use_tetrahedral_mesh);
@@ -327,7 +356,6 @@ void Convex2Convex<dim>::setup_finite_elements()
     }
 
     dof_handler_source.distribute_dofs(*fe_system);
-    dof_handler_target.distribute_dofs(*fe_system);
 
     IndexSet locally_owned_dofs = dof_handler_source.locally_owned_dofs();
     IndexSet locally_relevant_dofs;
@@ -390,7 +418,12 @@ void Convex2Convex<dim>::setup_finite_elements()
         Utilities::MPI::sum(local_l1_norm, mpi_communicator);
     pcout << "Source density L1 norm: " << global_l1_norm << std::endl;
     source_density /= global_l1_norm; // Normalize to mass 1
+}
 
+template <int dim>
+void Convex2Convex<dim>::setup_target_finite_elements()
+{
+    dof_handler_target.distribute_dofs(*fe_system);
     // Load or compute target points (shared across all processes)
     const std::string directory = "output/data_points";
     bool points_loaded = false;
@@ -439,27 +472,6 @@ void Convex2Convex<dim>::setup_finite_elements()
     // Initialize target density (shared across all processes)
     target_density.reinit(target_points.size());
     target_density = 1.0 / target_points.size();
-
-    // Pre-compute vectorized target data (identical on all processes)
-    const unsigned int vectorization_width = VectorizedArray<double>::size();
-
-    target_density_vec.clear();
-    target_points_vec.clear();
-
-    for (unsigned int i = 0; i < target_points.size(); i += vectorization_width) {
-        VectorizedArray<double> weight;
-        std::array<VectorizedArray<double>, dim> point;
-
-        for (unsigned int v = 0; v < vectorization_width && (i + v) < target_points.size(); ++v) {
-            weight[v] = target_density[i + v];
-            for (unsigned int d = 0; d < dim; ++d) {
-                point[d][v] = target_points[i + v][d];
-            }
-        }
-        target_density_vec.push_back(weight);
-        target_points_vec.push_back(point);
-    }
-
     pcout << "Setup complete with " << target_points.size() << " target points" << std::endl;
 
     // Initialize RTree with target points and their indices
@@ -472,6 +484,13 @@ void Convex2Convex<dim>::setup_finite_elements()
 
     pcout << "RTree initialized for target points" << std::endl;
     pcout << n_levels(target_points_rtree) << std::endl;
+}
+
+template <int dim>
+void Convex2Convex<dim>::setup_finite_elements()
+{
+    setup_source_finite_elements();
+    setup_target_finite_elements();
 }
 
 template <int dim>
@@ -602,18 +621,6 @@ double Convex2Convex<dim>::evaluate_sot_functional(const Vector<double> &weights
     // Reset global values for this MPI process
     double local_process_functional = 0.0;
     Vector<double> local_process_gradient(target_points.size());
-
-    // Pre-compute vectorized weights
-    const unsigned int vectorization_width = VectorizedArray<double>::size();
-    current_weights_vec.clear();
-
-    for (unsigned int i = 0; i < target_points.size(); i += vectorization_width) {
-        VectorizedArray<double> curr_weight;
-        for (unsigned int v = 0; v < vectorization_width && (i + v) < target_points.size(); ++v) {
-            curr_weight[v] = (*current_weights)[i + v];
-        }
-        current_weights_vec.push_back(curr_weight);
-    }
 
     // Use appropriate quadrature
     std::unique_ptr<Quadrature<dim>> quadrature;
@@ -1138,7 +1145,7 @@ void Convex2Convex<dim>::compute_transport_map()
         }
     }
 
-    // Convert target density to standard vector (already serial)
+    // Convert target density to standard vector
     std::vector<double> target_density_vec(target_density.begin(), target_density.end());
 
     // Process each selected folder
