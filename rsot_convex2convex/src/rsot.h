@@ -193,25 +193,19 @@ private:
     double evaluate_sot_functional(const Vector<double>& weights, Vector<double>& gradient);
     void save_results(const Vector<double>& weights, const std::string& filename);
 
-    // Cache structure for each cell
+    // Cache for local assembly computations
     struct CellCache {
-        std::vector<std::size_t> target_indices;  // Indices of relevant target points
-        std::vector<double> exp_terms;            // Cached exponential terms for each quad point
-        std::vector<double> denominators;         // Cached sum of exp terms for each quad point
-        bool is_valid;                            // Flag to indicate if cache is valid
-        
+        // Weight-independent data (can be cached)
+        std::vector<std::size_t> target_indices;
+        std::vector<double> precomputed_exp_terms;  // density * exp(-0.5*dist2/lambda) for each q_point and target
+        bool is_valid;
+
         CellCache() : is_valid(false) {}
+        void invalidate() { is_valid = false; }
     };
-    
-    // Cache map using CellId as key, need to convert cell->id() to string for proper hashing
-    mutable std::unordered_map<std::string, CellCache> cell_cache;
-    mutable std::mutex cache_mutex;  // Mutex for thread-safe cache access
-    
-    // Helper function to compute and cache terms for a cell
-    void compute_cell_cache_terms(
-        const typename DoFHandler<dim>::active_cell_iterator &cell,
-        const std::vector<Point<dim>> &q_points,
-        CellCache &cache) const;
+    // mutable std::map<typename DoFHandler<dim>::active_cell_iterator, CellCache> cell_caches;
+    mutable std::unordered_map<std::string, CellCache> cell_caches;
+    mutable std::mutex cache_mutex;
 
     // RTree for spatial queries on target points
     using IndexedPoint = std::pair<Point<dim>, std::size_t>;

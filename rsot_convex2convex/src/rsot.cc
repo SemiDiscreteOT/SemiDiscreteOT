@@ -557,9 +557,6 @@ void Convex2Convex<dim>::local_assemble_sot(
     if (!cell->is_locally_owned())
         return;
 
-    using VectorizedDouble = VectorizedArray<double>;
-    constexpr unsigned int vectorization_width = VectorizedArray<double>::size();
-
     scratch_data.fe_values.reinit(cell);
     const std::vector<Point<dim>> &q_points = scratch_data.fe_values.get_quadrature_points();
     scratch_data.fe_values.get_function_values(source_density, scratch_data.density_values);
@@ -567,32 +564,38 @@ void Convex2Convex<dim>::local_assemble_sot(
     copy_data.functional_value = 0.0;
     copy_data.gradient_values = 0;
 
-    // Get cell center for target point filtering
+    const unsigned int n_q_points = q_points.size();
+
+    // Get cell center
     Point<dim> cell_center = cell->center();
-    
-    // Compute cell bounding box with padding based on distance threshold
-    // BoundingBox<dim> padded_box = cell->bounding_box();
-    // for (unsigned int d = 0; d < dim; ++d) {
-    //     padded_box.get_boundary_points().first[d] -= current_distance_threshold;
-    //     padded_box.get_boundary_points().second[d] += current_distance_threshold;
-    // }
-    // Get relevant target points using the R-tree
-    // std::vector<std::size_t> cell_target_indices = find_target_points_in_box(padded_box);
 
-    std::vector<std::size_t> cell_target_indices = find_nearest_target_points(cell_center);
+    // Check if we can use cached results
+    bool use_cache = solver_params.use_caching && is_caching_active;
+    CellCache& cell_cache = [&]() -> CellCache& {
+        std::lock_guard<std::mutex> lock(cache_mutex);
+        return cell_caches[cell->id().to_string()];
+    }();
 
+    std::vector<std::size_t> cell_target_indices;
+    bool need_computation = true;
 
-    // Early exit if no target points are relevant for this cell
-    if (cell_target_indices.empty()) {
-        return;
+    if (use_cache && cell_cache.is_valid) {
+        // Reuse cached weight-independent data
+        cell_target_indices = cell_cache.target_indices;
+        need_computation = false;
+    } else {
+        // Find target points near the cell center
+        cell_target_indices = find_nearest_target_points(cell_center);
+        
+        if (use_cache) {
+            // Initialize cache for this cell
+            cell_cache.target_indices = cell_target_indices;
+            cell_cache.precomputed_exp_terms.resize(n_q_points*cell_target_indices.size());
+            }
     }
 
-
-    // Cache frequently accessed values
+    using VectorizedDouble = VectorizedArray<double>;
     const double lambda_inv = 1.0 / current_lambda;
-    const double threshold_sq = current_distance_threshold * current_distance_threshold;
-    
-    // Create vectors for vectorized operations
     const unsigned int n_target_points = cell_target_indices.size();
     std::vector<VectorizedDouble> exp_terms(n_target_points);
     std::vector<Point<dim>> target_positions(n_target_points);
@@ -607,42 +610,57 @@ void Convex2Convex<dim>::local_assemble_sot(
         weight_values[i] = (*current_weights)[idx];
     }
 
-    // Process quadrature points in blocks for vectorization
-    const unsigned int n_q_points = q_points.size();
+    // Process quadrature points
     for (unsigned int q = 0; q < n_q_points; ++q) {
         const Point<dim> &x = q_points[q];
         const double density_value = scratch_data.density_values[q];
         const double JxW = scratch_data.fe_values.JxW(q);
 
-        double sum_exp = 0.0;
+        double total_sum_exp = 0.0;
         std::vector<double> active_exp_terms(n_target_points, 0.0);
 
-        // Compute exponential terms for each target point
-        #pragma omp simd reduction(+:sum_exp)
-        for (size_t i = 0; i < n_target_points; ++i) {
-            const double dist2 = (x - target_positions[i]).norm_square();
-            // if (dist2 <= threshold_sq) {
-                const double exp_term = target_densities[i] * 
-                    std::exp((weight_values[i] - 0.5 * dist2) * lambda_inv);
-                active_exp_terms[i] = exp_term;
-                sum_exp += exp_term;
-            // }
-        }
-
-        // Skip if no points contribute
-        if (sum_exp <= 0.0) continue;
-
-        // Update functional value
-        copy_data.functional_value += density_value * current_lambda * std::log(sum_exp) * JxW;
-
-        // Update gradient values
-        const double scale = density_value * JxW / sum_exp;
-        #pragma omp simd
-        for (size_t i = 0; i < n_target_points; ++i) {
-            if (active_exp_terms[i] > 0.0) {
-                copy_data.gradient_values[cell_target_indices[i]] += scale * active_exp_terms[i];
+        const unsigned int base_idx = q * n_target_points;
+        if (need_computation) {
+            // Compute and cache only the weight-independent part
+            #pragma omp simd reduction(+:total_sum_exp)
+            for (size_t i = 0; i < n_target_points; ++i) {
+                const double local_dist2 = (x - target_positions[i]).norm_square();
+                // Cache only weight-independent terms: density * exp(-0.5*dist2/lambda)
+                const double precomputed_term = target_densities[i] * 
+                    std::exp(-0.5 * local_dist2 * lambda_inv);
+                
+                if (use_cache) {
+                    cell_cache.precomputed_exp_terms[base_idx + i] = precomputed_term;
+                }
+                
+                // For current computation, include weight term
+                active_exp_terms[i] = precomputed_term * std::exp(weight_values[i] * lambda_inv);
+                total_sum_exp += active_exp_terms[i];
+            }
+        } else {
+            // Use cached weight-independent terms
+            #pragma omp simd reduction(+:total_sum_exp)
+            for (size_t i = 0; i < n_target_points; ++i) {
+                const double cached_term = cell_cache.precomputed_exp_terms[base_idx + i];
+                // Add weight-dependent part to cached term
+                active_exp_terms[i] = cached_term * std::exp(weight_values[i] * lambda_inv);
+                total_sum_exp += active_exp_terms[i];
             }
         }
+
+        // Accumulate functional value
+        copy_data.functional_value += density_value * current_lambda * std::log(total_sum_exp) * JxW;
+
+        // Accumulate gradient values
+        const double scale = density_value * JxW / total_sum_exp;
+        #pragma omp simd
+        for (size_t i = 0; i < n_target_points; ++i) {
+            copy_data.gradient_values[cell_target_indices[i]] += scale * active_exp_terms[i];
+        }
+    }
+
+    if (use_cache && need_computation) {
+        cell_cache.is_valid = true;
     }
 }
 
@@ -721,67 +739,6 @@ double Convex2Convex<dim>::evaluate_sot_functional(const Vector<double> &weights
     return global_functional;
 }
 
-// template <int dim>
-// void Convex2Convex<dim>::compute_distance_threshold() const
-// {
-//     // Compute the maximum weight (ψⱼ) from current_weights if available
-//     double max_weight = 0.0;
-//     if (current_weights != nullptr) {
-//         max_weight = *std::max_element(current_weights->begin(), current_weights->end());
-//     }
-
-//     // Find the minimum target weight (νⱼ)
-//     double min_target_weight = *std::min_element(target_density.begin(), target_density.end());
-
-//     // Compute the actual distance threshold based on the formula
-//     // |x-yⱼ|² ≥ -2λlog(ε/νⱼ) + 2ψⱼ
-//     double lambda = solver_params.regularization_param;
-//     double epsilon = solver_params.epsilon;
-
-//     // Using the most conservative case:
-//     // - maximum weight (ψⱼ) for positive contribution
-//     // - minimum target weight (νⱼ) for the log term
-//     double squared_threshold = -2.0 * lambda * std::log(epsilon/min_target_weight) + 2.0 * max_weight;
-//     double computed_threshold = std::sqrt(std::max(0.0, squared_threshold));
-
-//     if (!solver_params.use_caching) {
-//         // If caching is disabled, just use the computed threshold directly
-//         current_distance_threshold = computed_threshold;
-//         is_caching_active = false;
-//         if (solver_params.verbose_output) {
-//             pcout << "Using threshold without caching: " << current_distance_threshold << std::endl;
-//         }
-//         return;
-//     }
-
-//     // If we have an active cache and the computed threshold is smaller,
-//     // we can keep using the effective threshold
-//     if (is_caching_active && computed_threshold <= effective_distance_threshold) {
-//         current_distance_threshold = effective_distance_threshold;
-//         if (solver_params.verbose_output) {
-//             pcout << "Using cached threshold: " << current_distance_threshold << std::endl;
-//         }
-//         return;
-//     }
-
-//     // Either cache is not active or computed threshold is larger than effective threshold
-//     // Update both thresholds and enable caching
-//     current_distance_threshold = computed_threshold;
-//     effective_distance_threshold = computed_threshold * 1.1;  // 10% increase
-//     is_caching_active = true;
-    
-//     if (solver_params.verbose_output) {
-//         pcout << "Updated thresholds - Current: " << current_distance_threshold 
-//               << ", Effective: " << effective_distance_threshold << std::endl;
-//     }
-
-//     // Clear the cache when the threshold changes
-//     if (solver_params.use_caching) {
-//         std::lock_guard<std::mutex> lock(cache_mutex);
-//         cell_cache.clear();
-//     }
-// }
-
 template <int dim>
 void Convex2Convex<dim>::compute_distance_threshold() const
 {
@@ -835,14 +792,7 @@ void Convex2Convex<dim>::compute_distance_threshold() const
         pcout << "Updated thresholds - Current: " << current_distance_threshold 
               << ", Effective: " << effective_distance_threshold << std::endl;
     }
-
-    // Clear the cache when the threshold changes
-    if (solver_params.use_caching) {
-        std::lock_guard<std::mutex> lock(cache_mutex);
-        cell_cache.clear();
-    }
 }
-
 
 template <int dim>
 std::vector<std::size_t> Convex2Convex<dim>::find_nearest_target_points(
@@ -1001,7 +951,7 @@ void Convex2Convex<dim>::run_sot()
         std::vector<double> epsilon_sequence;
         epsilon_sequence.reserve(solver_params.epsilon_scaling_steps);
         
-        for (int i = 0; i < solver_params.epsilon_scaling_steps; ++i) {
+        for (unsigned int i = 0; i < solver_params.epsilon_scaling_steps; ++i) {
             double scale_factor = std::pow(solver_params.epsilon_scaling_factor, 
                                          solver_params.epsilon_scaling_steps - 1 - i);
             epsilon_sequence.push_back(original_lambda * scale_factor);
@@ -1739,6 +1689,15 @@ void Convex2Convex<dim>::compute_transport_map()
     if (selected_folders.size() > 1) {
         pcout << "\nCompleted transport map computation for all selected folders." << std::endl;
     }
+}
+
+template <int dim>
+void Convex2Convex<dim>::reset_distance_threshold_cache() const
+{
+    is_caching_active = false;
+    current_distance_threshold = 0.0;
+    effective_distance_threshold = 0.0;
+    cell_caches.clear();
 }
 
 template <int dim>

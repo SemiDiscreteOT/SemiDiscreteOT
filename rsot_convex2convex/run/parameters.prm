@@ -8,30 +8,30 @@ subsection Convex2Convex
       set number of refinements = 4
       set grid generator function = hyper_cube
       set grid generator arguments = -1 : 1 : false
-      set use tetrahedral mesh = true
+      set use tetrahedral mesh = false
     end
 
     subsection target
       set number of refinements = 3
       set grid generator function = hyper_ball
       set grid generator arguments = 0, 0, 0 : 1 : true
-      set use tetrahedral mesh = true
+      set use tetrahedral mesh = false
     end
   end
 
   subsection rsot_solver
     set max_iterations = 10000
-    set tolerance = 1e-2
+    set tolerance = 1e-3
     set regularization_parameter = 1e-2
     set epsilon = 1e-15
-    set verbose_output = true
+    set verbose_output = false
     set solver_type = BFGS
     set quadrature_order = 3
     set number_of_threads = 0
     set use_epsilon_scaling = false
     set epsilon_scaling_factor = 10
     set epsilon_scaling_steps = 2
-    # set use_caching = false
+    # set use_caching = true
   end
 
   subsection power_diagram_parameters
