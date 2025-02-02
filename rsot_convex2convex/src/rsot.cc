@@ -99,6 +99,10 @@ Convex2Convex<dim>::Convex2Convex(const MPI_Comm &comm)
         add_parameter("epsilon_scaling_steps",
                      solver_params.epsilon_scaling_steps,
                      "Number of epsilon scaling steps");
+
+        add_parameter("use_caching",
+                     solver_params.use_caching,
+                     "Enable distance threshold caching");
     }
     leave_subsection();
 
@@ -563,102 +567,86 @@ void Convex2Convex<dim>::local_assemble_sot(
     copy_data.functional_value = 0.0;
     copy_data.gradient_values = 0;
 
-    const unsigned int n_q_points = q_points.size();
-
-    // // Get cell bounding box and extend it by the current distance threshold
-    // Point<dim> min_point = cell->vertex(0);
-    // Point<dim> max_point = min_point;
-
-    // // Find bounding box of the cell
-    // const unsigned int vertices_per_cell = (source_params.use_tetrahedral_mesh || target_params.use_tetrahedral_mesh) ? 4 : GeometryInfo<dim>::vertices_per_cell;
-    // for (unsigned int v = 1; v < vertices_per_cell; ++v) {
-    //     const Point<dim>& vertex = cell->vertex(v);
-    //     for (unsigned int d = 0; d < dim; ++d) {
-    //         min_point[d] = std::min(min_point[d], vertex[d]);
-    //         max_point[d] = std::max(max_point[d], vertex[d]);
-    //     }
-    // }
-
-    // // Extend bounding box by the distance threshold
-    // for (unsigned int d = 0; d < dim; ++d) {
-    //     min_point[d] -= current_distance_threshold;
-    //     max_point[d] += current_distance_threshold;
-    // }
-
-    // // Find target points within the extended bounding box
-    // std::vector<std::size_t> cell_target_indices;
-    // BoundingBox<dim> extended_box(std::make_pair(min_point, max_point));
-    // cell_target_indices = find_target_points_in_box(extended_box);
-
-    // In alternativa potrei lavorare solo sul centro
-    // Get cell center
+    // Get cell center for target point filtering
     Point<dim> cell_center = cell->center();
-    // Find target points near the cell center
+    
+    // Compute cell bounding box with padding based on distance threshold
+    // BoundingBox<dim> padded_box = cell->bounding_box();
+    // for (unsigned int d = 0; d < dim; ++d) {
+    //     padded_box.get_boundary_points().first[d] -= current_distance_threshold;
+    //     padded_box.get_boundary_points().second[d] += current_distance_threshold;
+    // }
+    // Get relevant target points using the R-tree
+    // std::vector<std::size_t> cell_target_indices = find_target_points_in_box(padded_box);
+
     std::vector<std::size_t> cell_target_indices = find_nearest_target_points(cell_center);
 
-    // Process quadrature points
+
+    // Early exit if no target points are relevant for this cell
+    if (cell_target_indices.empty()) {
+        return;
+    }
+
+
+    // Cache frequently accessed values
+    const double lambda_inv = 1.0 / current_lambda;
+    const double threshold_sq = current_distance_threshold * current_distance_threshold;
+    
+    // Create vectors for vectorized operations
+    const unsigned int n_target_points = cell_target_indices.size();
+    std::vector<VectorizedDouble> exp_terms(n_target_points);
+    std::vector<Point<dim>> target_positions(n_target_points);
+    std::vector<double> target_densities(n_target_points);
+    std::vector<double> weight_values(n_target_points);
+    
+    // Preload target data
+    for (size_t i = 0; i < n_target_points; ++i) {
+        const size_t idx = cell_target_indices[i];
+        target_positions[i] = target_points[idx];
+        target_densities[i] = target_density[idx];
+        weight_values[i] = (*current_weights)[idx];
+    }
+
+    // Process quadrature points in blocks for vectorization
+    const unsigned int n_q_points = q_points.size();
     for (unsigned int q = 0; q < n_q_points; ++q) {
         const Point<dim> &x = q_points[q];
-        double total_sum_exp = 0.0;
-        std::vector<double> exp_terms(cell_target_indices.size(), 0.0);
+        const double density_value = scratch_data.density_values[q];
+        const double JxW = scratch_data.fe_values.JxW(q);
 
-        // Process points in SIMD chunks
-        for (size_t base_idx = 0; base_idx < cell_target_indices.size(); base_idx += vectorization_width) {
-            VectorizedDouble dist2 = VectorizedDouble();
-            VectorizedDouble weight = VectorizedDouble();
-            VectorizedDouble density = VectorizedDouble();
+        double sum_exp = 0.0;
+        std::vector<double> active_exp_terms(n_target_points, 0.0);
 
-            // Load a chunk of points into SIMD vectors
-            for (unsigned int v = 0; v < vectorization_width; ++v) {
-                const size_t i = base_idx + v;
-                if (i < cell_target_indices.size()) {
-                    const size_t target_idx = cell_target_indices[i];
-
-                    // Load weight and density directly
-                    weight[v] = (*current_weights)[target_idx];
-                    density[v] = target_density[target_idx];
-
-                    // Compute squared distance
-                    double local_dist2 = 0.0;
-                    for (unsigned int d = 0; d < dim; ++d) {
-                        double diff = target_points[target_idx][d] - x[d];
-                        local_dist2 += diff * diff;
-                    }
-                    dist2[v] = local_dist2;
-                } else {
-                    // Pad with zeros for incomplete chunks
-                    weight[v] = 0.0;
-                    density[v] = 0.0;
-                    dist2[v] = std::numeric_limits<double>::infinity();
-                }
-            }
-
-            // Vectorized computation for the entire chunk
-            VectorizedDouble exp_term = density *
-                std::exp((weight - 0.5 * dist2) / current_lambda);
-
-            // Store results for this chunk
-            for (unsigned int v = 0; v < vectorization_width; ++v) {
-                const size_t i = base_idx + v;
-                if (i < cell_target_indices.size()) {
-                    exp_terms[i] = exp_term[v];
-                    total_sum_exp += exp_term[v];
-                }
-            }
+        // Compute exponential terms for each target point
+        #pragma omp simd reduction(+:sum_exp)
+        for (size_t i = 0; i < n_target_points; ++i) {
+            const double dist2 = (x - target_positions[i]).norm_square();
+            // if (dist2 <= threshold_sq) {
+                const double exp_term = target_densities[i] * 
+                    std::exp((weight_values[i] - 0.5 * dist2) * lambda_inv);
+                active_exp_terms[i] = exp_term;
+                sum_exp += exp_term;
+            // }
         }
 
-        // Accumulate functional value
-        copy_data.functional_value += scratch_data.density_values[q] *
-            current_lambda * std::log(total_sum_exp) * scratch_data.fe_values.JxW(q);
+        // Skip if no points contribute
+        if (sum_exp <= 0.0) continue;
 
-        // Accumulate gradient values
-        for (size_t i = 0; i < cell_target_indices.size(); ++i) {
-            const size_t target_idx = cell_target_indices[i];
-            copy_data.gradient_values[target_idx] +=
-                scratch_data.density_values[q] * (exp_terms[i] / total_sum_exp) * scratch_data.fe_values.JxW(q);
+        // Update functional value
+        copy_data.functional_value += density_value * current_lambda * std::log(sum_exp) * JxW;
+
+        // Update gradient values
+        const double scale = density_value * JxW / sum_exp;
+        #pragma omp simd
+        for (size_t i = 0; i < n_target_points; ++i) {
+            if (active_exp_terms[i] > 0.0) {
+                copy_data.gradient_values[cell_target_indices[i]] += scale * active_exp_terms[i];
+            }
         }
     }
 }
+
+
 
 template <int dim>
 double Convex2Convex<dim>::evaluate_sot_functional(const Vector<double> &weights, Vector<double> &gradient)
@@ -733,6 +721,67 @@ double Convex2Convex<dim>::evaluate_sot_functional(const Vector<double> &weights
     return global_functional;
 }
 
+// template <int dim>
+// void Convex2Convex<dim>::compute_distance_threshold() const
+// {
+//     // Compute the maximum weight (ψⱼ) from current_weights if available
+//     double max_weight = 0.0;
+//     if (current_weights != nullptr) {
+//         max_weight = *std::max_element(current_weights->begin(), current_weights->end());
+//     }
+
+//     // Find the minimum target weight (νⱼ)
+//     double min_target_weight = *std::min_element(target_density.begin(), target_density.end());
+
+//     // Compute the actual distance threshold based on the formula
+//     // |x-yⱼ|² ≥ -2λlog(ε/νⱼ) + 2ψⱼ
+//     double lambda = solver_params.regularization_param;
+//     double epsilon = solver_params.epsilon;
+
+//     // Using the most conservative case:
+//     // - maximum weight (ψⱼ) for positive contribution
+//     // - minimum target weight (νⱼ) for the log term
+//     double squared_threshold = -2.0 * lambda * std::log(epsilon/min_target_weight) + 2.0 * max_weight;
+//     double computed_threshold = std::sqrt(std::max(0.0, squared_threshold));
+
+//     if (!solver_params.use_caching) {
+//         // If caching is disabled, just use the computed threshold directly
+//         current_distance_threshold = computed_threshold;
+//         is_caching_active = false;
+//         if (solver_params.verbose_output) {
+//             pcout << "Using threshold without caching: " << current_distance_threshold << std::endl;
+//         }
+//         return;
+//     }
+
+//     // If we have an active cache and the computed threshold is smaller,
+//     // we can keep using the effective threshold
+//     if (is_caching_active && computed_threshold <= effective_distance_threshold) {
+//         current_distance_threshold = effective_distance_threshold;
+//         if (solver_params.verbose_output) {
+//             pcout << "Using cached threshold: " << current_distance_threshold << std::endl;
+//         }
+//         return;
+//     }
+
+//     // Either cache is not active or computed threshold is larger than effective threshold
+//     // Update both thresholds and enable caching
+//     current_distance_threshold = computed_threshold;
+//     effective_distance_threshold = computed_threshold * 1.1;  // 10% increase
+//     is_caching_active = true;
+    
+//     if (solver_params.verbose_output) {
+//         pcout << "Updated thresholds - Current: " << current_distance_threshold 
+//               << ", Effective: " << effective_distance_threshold << std::endl;
+//     }
+
+//     // Clear the cache when the threshold changes
+//     if (solver_params.use_caching) {
+//         std::lock_guard<std::mutex> lock(cache_mutex);
+//         cell_cache.clear();
+//     }
+// }
+
 template <int dim>
 void Convex2Convex<dim>::compute_distance_threshold() const
 {
@@ -754,8 +803,46 @@ void Convex2Convex<dim>::compute_distance_threshold() const
     // - maximum weight (ψⱼ) for positive contribution
     // - minimum target weight (νⱼ) for the log term
     double squared_threshold = -2.0 * lambda * std::log(epsilon/min_target_weight) + 2.0 * max_weight;
-    current_distance_threshold = std::sqrt(std::max(0.0, squared_threshold));
+    double computed_threshold = std::sqrt(std::max(0.0, squared_threshold));
+
+    if (!solver_params.use_caching) {
+        // If caching is disabled, just use the computed threshold directly
+        current_distance_threshold = computed_threshold;
+        is_caching_active = false;
+        if (solver_params.verbose_output) {
+            pcout << "Using threshold without caching: " << current_distance_threshold << std::endl;
+        }
+        return;
+    }
+
+    // If we have an active cache and the computed threshold is smaller,
+    // we can keep using the effective threshold
+    if (is_caching_active && computed_threshold <= effective_distance_threshold) {
+        current_distance_threshold = effective_distance_threshold;
+        if (solver_params.verbose_output) {
+            pcout << "Using cached threshold: " << current_distance_threshold << std::endl;
+        }
+        return;
+    }
+
+    // Either cache is not active or computed threshold is larger than effective threshold
+    // Update both thresholds and enable caching
+    current_distance_threshold = computed_threshold;
+    effective_distance_threshold = computed_threshold * 1.1;  // 10% increase
+    is_caching_active = true;
+    
+    if (solver_params.verbose_output) {
+        pcout << "Updated thresholds - Current: " << current_distance_threshold 
+              << ", Effective: " << effective_distance_threshold << std::endl;
+    }
+
+    // Clear the cache when the threshold changes
+    if (solver_params.use_caching) {
+        std::lock_guard<std::mutex> lock(cache_mutex);
+        cell_cache.clear();
+    }
 }
+
 
 template <int dim>
 std::vector<std::size_t> Convex2Convex<dim>::find_nearest_target_points(

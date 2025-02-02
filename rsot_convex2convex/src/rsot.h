@@ -163,6 +163,7 @@ private:
         bool use_epsilon_scaling = false;  // Whether to use epsilon scaling strategy
         double epsilon_scaling_factor = 2.0;  // Factor by which to reduce epsilon in each step
         unsigned int epsilon_scaling_steps = 5;  // Number of epsilon scaling steps
+        bool use_caching = false;  // Whether to enable caching of computations
     } solver_params;
 
     struct PowerDiagramParameters {
@@ -192,6 +193,25 @@ private:
     double evaluate_sot_functional(const Vector<double>& weights, Vector<double>& gradient);
     void save_results(const Vector<double>& weights, const std::string& filename);
 
+    // Cache structure for each cell
+    struct CellCache {
+        std::vector<std::size_t> target_indices;  // Indices of relevant target points
+        std::vector<double> exp_terms;            // Cached exponential terms for each quad point
+        std::vector<double> denominators;         // Cached sum of exp terms for each quad point
+        bool is_valid;                            // Flag to indicate if cache is valid
+        
+        CellCache() : is_valid(false) {}
+    };
+    
+    // Cache map using CellId as key, need to convert cell->id() to string for proper hashing
+    mutable std::unordered_map<std::string, CellCache> cell_cache;
+    mutable std::mutex cache_mutex;  // Mutex for thread-safe cache access
+    
+    // Helper function to compute and cache terms for a cell
+    void compute_cell_cache_terms(
+        const typename DoFHandler<dim>::active_cell_iterator &cell,
+        const std::vector<Point<dim>> &q_points,
+        CellCache &cache) const;
 
     // RTree for spatial queries on target points
     using IndexedPoint = std::pair<Point<dim>, std::size_t>;
@@ -199,10 +219,16 @@ private:
     using RTree = boost::geometry::index::rtree<IndexedPoint, RTreeParams>;
     RTree target_points_rtree;
 
+    // Caching-related members
+    mutable double effective_distance_threshold{0.0};  // 10% increased threshold for caching
+    mutable bool is_caching_active{false};  // Whether caching is currently active
+
     // Computed distance threshold for current iteration
     mutable double current_distance_threshold{0.0};
     // Compute the distance threshold based on current weights and parameters
     void compute_distance_threshold() const;
+    // Reset the caching state and thresholds
+    void reset_distance_threshold_cache() const;
     // Helper function for nearest neighbor queries
     std::vector<std::size_t> find_nearest_target_points(const Point<dim>& query_point) const;
     // Helper function for range queries
