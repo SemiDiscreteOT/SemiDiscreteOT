@@ -31,7 +31,7 @@ subsection Convex2Convex
     set use_epsilon_scaling = false
     set epsilon_scaling_factor = 10
     set epsilon_scaling_steps = 2
-    # set use_caching = true
+    set use_caching = false
   end
 
   subsection power_diagram_parameters

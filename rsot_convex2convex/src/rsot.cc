@@ -565,104 +565,364 @@ void Convex2Convex<dim>::local_assemble_sot(
     copy_data.gradient_values = 0;
 
     const unsigned int n_q_points = q_points.size();
-
-    // Get cell center
-    Point<dim> cell_center = cell->center();
-
-    // Check if we can use cached results
-    bool use_cache = solver_params.use_caching && is_caching_active;
-    CellCache& cell_cache = [&]() -> CellCache& {
-        std::lock_guard<std::mutex> lock(cache_mutex);
-        return cell_caches[cell->id().to_string()];
-    }();
-
-    std::vector<std::size_t> cell_target_indices;
-    bool need_computation = true;
-
-    if (use_cache && cell_cache.is_valid) {
-        // Reuse cached weight-independent data
-        cell_target_indices = cell_cache.target_indices;
-        need_computation = false;
-    } else {
-        // Find target points near the cell center
-        cell_target_indices = find_nearest_target_points(cell_center);
-        
-        if (use_cache) {
-            // Initialize cache for this cell
-            cell_cache.target_indices = cell_target_indices;
-            cell_cache.precomputed_exp_terms.resize(n_q_points*cell_target_indices.size());
-            }
-    }
-
-    using VectorizedDouble = VectorizedArray<double>;
     const double lambda_inv = 1.0 / current_lambda;
-    const unsigned int n_target_points = cell_target_indices.size();
-    std::vector<VectorizedDouble> exp_terms(n_target_points);
-    std::vector<Point<dim>> target_positions(n_target_points);
-    std::vector<double> target_densities(n_target_points);
-    std::vector<double> weight_values(n_target_points);
-    
-    // Preload target data
-    for (size_t i = 0; i < n_target_points; ++i) {
-        const size_t idx = cell_target_indices[i];
-        target_positions[i] = target_points[idx];
-        target_densities[i] = target_density[idx];
-        weight_values[i] = (*current_weights)[idx];
-    }
+    const double threshold_sq = current_distance_threshold * current_distance_threshold;
 
-    // Process quadrature points
-    for (unsigned int q = 0; q < n_q_points; ++q) {
-        const Point<dim> &x = q_points[q];
-        const double density_value = scratch_data.density_values[q];
-        const double JxW = scratch_data.fe_values.JxW(q);
+    if (solver_params.use_caching && is_caching_active) {
+        // Caching path
+        CellCache& cell_cache = [&]() -> CellCache& {
+            std::lock_guard<std::mutex> lock(cache_mutex);
+            return cell_caches[cell->id().to_string()];
+        }();
 
-        double total_sum_exp = 0.0;
-        std::vector<double> active_exp_terms(n_target_points, 0.0);
+        std::vector<std::size_t> cell_target_indices;
+        bool need_computation = true;
 
-        const unsigned int base_idx = q * n_target_points;
+        if (cell_cache.is_valid) {
+            cell_target_indices = cell_cache.target_indices;
+            need_computation = false;
+        } else {
+            cell_target_indices = find_nearest_target_points(cell->center());
+            if (cell_target_indices.empty()) return;
+            
+            cell_cache.target_indices = cell_target_indices;
+            cell_cache.precomputed_exp_terms.resize(n_q_points * cell_target_indices.size());
+        }
+
+        const unsigned int n_target_points = cell_target_indices.size();
+        // Preload target data for vectorization
+        std::vector<Point<dim>> target_positions(n_target_points);
+        std::vector<double> target_densities(n_target_points);
+        std::vector<double> weight_values(n_target_points);
+        
+        for (size_t i = 0; i < n_target_points; ++i) {
+            const size_t idx = cell_target_indices[i];
+            target_positions[i] = target_points[idx];
+            target_densities[i] = target_density[idx];
+            weight_values[i] = (*current_weights)[idx];
+        }
+
+        // Process quadrature points with caching
+        for (unsigned int q = 0; q < n_q_points; ++q) {
+            const Point<dim> &x = q_points[q];
+            const double density_value = scratch_data.density_values[q];
+            const double JxW = scratch_data.fe_values.JxW(q);
+
+            double total_sum_exp = 0.0;
+            std::vector<double> active_exp_terms(n_target_points, 0.0);
+
+            const unsigned int base_idx = q * n_target_points;
+            if (need_computation) {
+                #pragma omp simd reduction(+:total_sum_exp)
+                for (size_t i = 0; i < n_target_points; ++i) {
+                    const double local_dist2 = (x - target_positions[i]).norm_square();
+                    if (local_dist2 <= threshold_sq) {
+                        const double precomputed_term = target_densities[i] * 
+                            std::exp(-0.5 * local_dist2 * lambda_inv);
+                        
+                        cell_cache.precomputed_exp_terms[base_idx + i] = precomputed_term;
+                        active_exp_terms[i] = precomputed_term * std::exp(weight_values[i] * lambda_inv);
+                        total_sum_exp += active_exp_terms[i];
+                    }
+                }
+            } else {
+                #pragma omp simd reduction(+:total_sum_exp)
+                for (size_t i = 0; i < n_target_points; ++i) {
+                    const double cached_term = cell_cache.precomputed_exp_terms[base_idx + i];
+                    if (cached_term > 0.0) {
+                        active_exp_terms[i] = cached_term * std::exp(weight_values[i] * lambda_inv);
+                        total_sum_exp += active_exp_terms[i];
+                    }
+                }
+            }
+
+            if (total_sum_exp <= 0.0) continue;
+
+            copy_data.functional_value += density_value * current_lambda * 
+                std::log(total_sum_exp) * JxW;
+
+            const double scale = density_value * JxW / total_sum_exp;
+            #pragma omp simd
+            for (size_t i = 0; i < n_target_points; ++i) {
+                if (active_exp_terms[i] > 0.0) {
+                    copy_data.gradient_values[cell_target_indices[i]] += 
+                        scale * active_exp_terms[i];
+                }
+            }
+        }
+
         if (need_computation) {
-            // Compute and cache only the weight-independent part
+            cell_cache.is_valid = true;
+        }
+
+    } else {
+        // Direct computation path without caching overhead
+        std::vector<std::size_t> cell_target_indices = find_nearest_target_points(cell->center());
+        const unsigned int n_target_points = cell_target_indices.size();
+        std::vector<Point<dim>> target_positions(n_target_points);
+        std::vector<double> target_densities(n_target_points);
+        std::vector<double> weight_values(n_target_points);
+        
+        for (size_t i = 0; i < n_target_points; ++i) {
+            const size_t idx = cell_target_indices[i];
+            target_positions[i] = target_points[idx];
+            target_densities[i] = target_density[idx];
+            weight_values[i] = (*current_weights)[idx];
+        }
+        for (unsigned int q = 0; q < n_q_points; ++q) {
+            const Point<dim> &x = q_points[q];
+            const double density_value = scratch_data.density_values[q];
+            const double JxW = scratch_data.fe_values.JxW(q);
+            
+            if (cell_target_indices.empty()) continue;
+
+            double total_sum_exp = 0.0;
+            std::vector<double> exp_terms(n_target_points);
+
             #pragma omp simd reduction(+:total_sum_exp)
             for (size_t i = 0; i < n_target_points; ++i) {
                 const double local_dist2 = (x - target_positions[i]).norm_square();
-                // Cache only weight-independent terms: density * exp(-0.5*dist2/lambda)
-                const double precomputed_term = target_densities[i] * 
-                    std::exp(-0.5 * local_dist2 * lambda_inv);
-                
-                if (use_cache) {
-                    cell_cache.precomputed_exp_terms[base_idx + i] = precomputed_term;
+                if (local_dist2 <= threshold_sq) {
+                    exp_terms[i] = target_densities[i] * 
+                        std::exp((weight_values[i] - 0.5 * local_dist2) * lambda_inv);
+                    total_sum_exp += exp_terms[i];
                 }
-                
-                // For current computation, include weight term
-                active_exp_terms[i] = precomputed_term * std::exp(weight_values[i] * lambda_inv);
-                total_sum_exp += active_exp_terms[i];
             }
-        } else {
-            // Use cached weight-independent terms
-            #pragma omp simd reduction(+:total_sum_exp)
+
+            if (total_sum_exp <= 0.0) continue;
+
+            copy_data.functional_value += density_value * current_lambda * 
+                std::log(total_sum_exp) * JxW;
+
+            const double scale = density_value * JxW / total_sum_exp;
+            #pragma omp simd
             for (size_t i = 0; i < n_target_points; ++i) {
-                const double cached_term = cell_cache.precomputed_exp_terms[base_idx + i];
-                // Add weight-dependent part to cached term
-                active_exp_terms[i] = cached_term * std::exp(weight_values[i] * lambda_inv);
-                total_sum_exp += active_exp_terms[i];
+                if (exp_terms[i] > 0.0) {
+                    copy_data.gradient_values[cell_target_indices[i]] += scale * exp_terms[i];
+                }
             }
         }
-
-        // Accumulate functional value
-        copy_data.functional_value += density_value * current_lambda * std::log(total_sum_exp) * JxW;
-
-        // Accumulate gradient values
-        const double scale = density_value * JxW / total_sum_exp;
-        #pragma omp simd
-        for (size_t i = 0; i < n_target_points; ++i) {
-            copy_data.gradient_values[cell_target_indices[i]] += scale * active_exp_terms[i];
-        }
-    }
-
-    if (use_cache && need_computation) {
-        cell_cache.is_valid = true;
     }
 }
+
+
+// versione veloce con cache, lenta senza
+// template <int dim>
+// void Convex2Convex<dim>::local_assemble_sot(
+//     const typename DoFHandler<dim>::active_cell_iterator &cell,
+//     ScratchData &scratch_data,
+//     CopyData &copy_data)
+// {
+//     if (!cell->is_locally_owned())
+//         return;
+
+//     scratch_data.fe_values.reinit(cell);
+//     const std::vector<Point<dim>> &q_points = scratch_data.fe_values.get_quadrature_points();
+//     scratch_data.fe_values.get_function_values(source_density, scratch_data.density_values);
+
+//     copy_data.functional_value = 0.0;
+//     copy_data.gradient_values = 0;
+
+//     const unsigned int n_q_points = q_points.size();
+
+//     // Get cell center
+//     Point<dim> cell_center = cell->center();
+
+//     // Check if we can use cached results
+//     bool use_cache = solver_params.use_caching && is_caching_active;
+//     CellCache& cell_cache = [&]() -> CellCache& {
+//         std::lock_guard<std::mutex> lock(cache_mutex);
+//         return cell_caches[cell->id().to_string()];
+//     }();
+
+//     std::vector<std::size_t> cell_target_indices;
+//     bool need_computation = true;
+
+//     if (use_cache && cell_cache.is_valid) {
+//         // Reuse cached weight-independent data
+//         cell_target_indices = cell_cache.target_indices;
+//         need_computation = false;
+//     } else {
+//         // Find target points near the cell center
+//         cell_target_indices = find_nearest_target_points(cell_center);
+        
+//         if (use_cache) {
+//             // Initialize cache for this cell
+//             cell_cache.target_indices = cell_target_indices;
+//             cell_cache.precomputed_exp_terms.resize(n_q_points*cell_target_indices.size());
+//             }
+//     }
+
+//     using VectorizedDouble = VectorizedArray<double>;
+//     const double lambda_inv = 1.0 / current_lambda;
+//     const unsigned int n_target_points = cell_target_indices.size();
+//     std::vector<VectorizedDouble> exp_terms(n_target_points);
+//     std::vector<Point<dim>> target_positions(n_target_points);
+//     std::vector<double> target_densities(n_target_points);
+//     std::vector<double> weight_values(n_target_points);
+    
+//     // Preload target data
+//     for (size_t i = 0; i < n_target_points; ++i) {
+//         const size_t idx = cell_target_indices[i];
+//         target_positions[i] = target_points[idx];
+//         target_densities[i] = target_density[idx];
+//         weight_values[i] = (*current_weights)[idx];
+//     }
+
+//     // Process quadrature points
+//     for (unsigned int q = 0; q < n_q_points; ++q) {
+//         const Point<dim> &x = q_points[q];
+//         const double density_value = scratch_data.density_values[q];
+//         const double JxW = scratch_data.fe_values.JxW(q);
+
+//         double total_sum_exp = 0.0;
+//         std::vector<double> active_exp_terms(n_target_points, 0.0);
+
+//         const unsigned int base_idx = q * n_target_points;
+//         if (need_computation) {
+//             // Compute and cache only the weight-independent part
+//             #pragma omp simd reduction(+:total_sum_exp)
+//             for (size_t i = 0; i < n_target_points; ++i) {
+//                 const double local_dist2 = (x - target_positions[i]).norm_square();
+//                 // Cache only weight-independent terms: density * exp(-0.5*dist2/lambda)
+//                 const double precomputed_term = target_densities[i] * 
+//                     std::exp(-0.5 * local_dist2 * lambda_inv);
+                
+//                 if (use_cache) {
+//                     cell_cache.precomputed_exp_terms[base_idx + i] = precomputed_term;
+//                 }
+                
+//                 // For current computation, include weight term
+//                 active_exp_terms[i] = precomputed_term * std::exp(weight_values[i] * lambda_inv);
+//                 total_sum_exp += active_exp_terms[i];
+//             }
+//         } else {
+//             // Use cached weight-independent terms
+//             #pragma omp simd reduction(+:total_sum_exp)
+//             for (size_t i = 0; i < n_target_points; ++i) {
+//                 const double cached_term = cell_cache.precomputed_exp_terms[base_idx + i];
+//                 // Add weight-dependent part to cached term
+//                 active_exp_terms[i] = cached_term * std::exp(weight_values[i] * lambda_inv);
+//                 total_sum_exp += active_exp_terms[i];
+//             }
+//         }
+
+//         // Accumulate functional value
+//         copy_data.functional_value += density_value * current_lambda * std::log(total_sum_exp) * JxW;
+
+//         // Accumulate gradient values
+//         const double scale = density_value * JxW / total_sum_exp;
+//         #pragma omp simd
+//         for (size_t i = 0; i < n_target_points; ++i) {
+//             copy_data.gradient_values[cell_target_indices[i]] += scale * active_exp_terms[i];
+//         }
+//     }
+
+//     if (use_cache && need_computation) {
+//         cell_cache.is_valid = true;
+//     }
+// }
+
+
+
+// versione senza cache veloce
+// template <int dim>
+// void Convex2Convex<dim>::local_assemble_sot(
+//     const typename DoFHandler<dim>::active_cell_iterator &cell,
+//     ScratchData &scratch_data,
+//     CopyData &copy_data)
+// {
+//     if (!cell->is_locally_owned())
+//         return;
+
+//     using VectorizedDouble = VectorizedArray<double>;
+//     constexpr unsigned int vectorization_width = VectorizedArray<double>::size();
+
+//     scratch_data.fe_values.reinit(cell);
+//     const std::vector<Point<dim>> &q_points = scratch_data.fe_values.get_quadrature_points();
+//     scratch_data.fe_values.get_function_values(source_density, scratch_data.density_values);
+
+//     copy_data.functional_value = 0.0;
+//     copy_data.gradient_values = 0;
+
+//     // Get cell center for target point filtering
+//     Point<dim> cell_center = cell->center();
+    
+//     // Compute cell bounding box with padding based on distance threshold
+//     // BoundingBox<dim> padded_box = cell->bounding_box();
+//     // for (unsigned int d = 0; d < dim; ++d) {
+//     //     padded_box.get_boundary_points().first[d] -= current_distance_threshold;
+//     //     padded_box.get_boundary_points().second[d] += current_distance_threshold;
+//     // }
+//     // Get relevant target points using the R-tree
+//     // std::vector<std::size_t> cell_target_indices = find_target_points_in_box(padded_box);
+
+//     std::vector<std::size_t> cell_target_indices = find_nearest_target_points(cell_center);
+
+
+//     // Early exit if no target points are relevant for this cell
+//     if (cell_target_indices.empty()) {
+//         return;
+//     }
+
+
+//     // Cache frequently accessed values
+//     const double lambda_inv = 1.0 / current_lambda;
+//     const double threshold_sq = current_distance_threshold * current_distance_threshold;
+    
+//     // Create vectors for vectorized operations
+//     const unsigned int n_target_points = cell_target_indices.size();
+//     std::vector<VectorizedDouble> exp_terms(n_target_points);
+//     std::vector<Point<dim>> target_positions(n_target_points);
+//     std::vector<double> target_densities(n_target_points);
+//     std::vector<double> weight_values(n_target_points);
+    
+//     // Preload target data
+//     for (size_t i = 0; i < n_target_points; ++i) {
+//         const size_t idx = cell_target_indices[i];
+//         target_positions[i] = target_points[idx];
+//         target_densities[i] = target_density[idx];
+//         weight_values[i] = (*current_weights)[idx];
+//     }
+
+//     // Process quadrature points in blocks for vectorization
+//     const unsigned int n_q_points = q_points.size();
+//     for (unsigned int q = 0; q < n_q_points; ++q) {
+//         const Point<dim> &x = q_points[q];
+//         const double density_value = scratch_data.density_values[q];
+//         const double JxW = scratch_data.fe_values.JxW(q);
+
+//         double sum_exp = 0.0;
+//         std::vector<double> active_exp_terms(n_target_points, 0.0);
+
+//         // Compute exponential terms for each target point
+//         #pragma omp simd reduction(+:sum_exp)
+//         for (size_t i = 0; i < n_target_points; ++i) {
+//             const double dist2 = (x - target_positions[i]).norm_square();
+//             // if (dist2 <= threshold_sq) {
+//                 const double exp_term = target_densities[i] * 
+//                     std::exp((weight_values[i] - 0.5 * dist2) * lambda_inv);
+//                 active_exp_terms[i] = exp_term;
+//                 sum_exp += exp_term;
+//             // }
+//         }
+
+//         // Skip if no points contribute
+//         if (sum_exp <= 0.0) continue;
+
+//         // Update functional value
+//         copy_data.functional_value += density_value * current_lambda * std::log(sum_exp) * JxW;
+
+//         // Update gradient values
+//         const double scale = density_value * JxW / sum_exp;
+//         #pragma omp simd
+//         for (size_t i = 0; i < n_target_points; ++i) {
+//             if (active_exp_terms[i] > 0.0) {
+//                 copy_data.gradient_values[cell_target_indices[i]] += scale * active_exp_terms[i];
+//             }
+//         }
+//     }
+// }
 
 
 
