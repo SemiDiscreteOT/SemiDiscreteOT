@@ -227,6 +227,9 @@ private:
     std::vector<std::size_t> find_nearest_target_points(const Point<dim>& query_point) const;
     // Helper function for range queries
     std::vector<std::size_t> find_target_points_in_box(const BoundingBox<dim>& box) const;
+
+    // Calculate the total size of the cache in MB
+    double calculate_cache_size_mb() const;
 };
 
 #endif

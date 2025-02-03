@@ -1961,6 +1961,25 @@ void Convex2Convex<dim>::reset_distance_threshold_cache() const
 }
 
 template <int dim>
+double Convex2Convex<dim>::calculate_cache_size_mb() const {
+    double total_size_bytes = 0.0;
+    
+    for (const auto& cache_entry : cell_caches) {
+        // Size of target indices vector
+        total_size_bytes += cache_entry.second.target_indices.size() * sizeof(std::size_t);
+        // Size of precomputed exp terms vector
+        total_size_bytes += cache_entry.second.precomputed_exp_terms.size() * sizeof(double);
+        // Size of bool flag and other overhead
+        total_size_bytes += sizeof(bool) + sizeof(CellCache);
+        // Size of string key in unordered_map
+        total_size_bytes += cache_entry.first.capacity() * sizeof(char);
+    }
+    
+    // Convert to MB
+    return total_size_bytes / (1024.0 * 1024.0);
+}
+
+template <int dim>
 void Convex2Convex<dim>::run()
 {
     print_parameters();
