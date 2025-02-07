@@ -1339,6 +1339,8 @@ void Convex2Convex<dim>::run_multilevel_sot()
             if (level == mesh_files.size() - 1) {
                 final_weights = current_weights;
             }
+
+            reset_distance_threshold_cache();
             
             pcout << "\nLevel " << level << " summary:" << std::endl;
             pcout << "  Status: Completed successfully" << std::endl;
@@ -1346,6 +1348,7 @@ void Convex2Convex<dim>::run_multilevel_sot()
             pcout << "  Final number of iterations: " << solver_control->last_step() << std::endl;
             pcout << "  Final function value: " << solver_control->last_value() << std::endl;
             pcout << "  Results saved in: " << level_dir << std::endl;
+
             
         } catch (const std::exception& e) {
             pcout << "Error at level " << level << ": " << e.what() << std::endl;
