@@ -46,6 +46,10 @@ public:
     Convex2Convex(const MPI_Comm &mpi_communicator);
     void run();
     void save_discrete_measures();
+    
+    // New overload of run_sot that allows specifying target points directly
+    void run_sot(const std::vector<Point<dim>>& custom_target_points, 
+                 const std::vector<double>& custom_target_weights);
 
 private:
     // MPI-related members
@@ -78,9 +82,12 @@ private:
     struct CopyData {
         double functional_value{0.0};
         Vector<double> gradient_values;
+        double C_integral{0.0};  // Added: contribution to the C integral
+        Vector<double> weight_values;  // Added: for softmax refinement
 
         CopyData(const unsigned int n_target_points)
-            : gradient_values(n_target_points) {}
+            : gradient_values(n_target_points),
+              weight_values(n_target_points) {}
     };
 
     // Helper functions for parallel assembly
@@ -93,6 +100,7 @@ private:
     // Mutex for thread-safe updates
     mutable std::mutex assembly_mutex;
     double global_functional{0.0};
+    double global_C_integral{0.0};  // Added: global C integral value
     LinearAlgebra::distributed::Vector<double> global_gradient;
     const Vector<double>* current_weights{nullptr};
     double current_lambda{0.0};
@@ -107,18 +115,36 @@ private:
     void load_meshes(); 
     void run_sot();
 
-    // Multilevel parameters
+    // Multilevel parameters for source mesh
     struct MultilevelParameters {
         int min_vertices = 1000;
         int max_vertices = 10000;
         std::string hierarchy_output_dir = "output/multilevel/meshes";
         std::string output_prefix = "output/multilevel/sot";  // Where to save multilevel results
     } multilevel_params;
+    
+    // Multilevel parameters for target point cloud
+    struct TargetMultilevelParameters {
+        int min_points = 100;
+        int max_points = 1000;
+        std::string hierarchy_output_dir = "output/target_multilevel";
+        std::string output_prefix = "output/target_multilevel/sot";  // Where to save multilevel results
+        bool enabled = false;  // Whether to use target multilevel approach
+        bool use_softmax_weight_transfer = true;  // Whether to use softmax-based weight transfer
+        double softmax_epsilon = 1e-3;  // Regularization parameter for softmax weight transfer
+    } target_multilevel_params;
 
+    // Source mesh multilevel methods
     void prepare_multilevel();
     void run_multilevel_sot();
     void load_mesh_at_level(const std::string& mesh_file);
     std::vector<std::string> get_mesh_hierarchy_files() const;
+    
+    // Target point cloud multilevel methods
+    void prepare_target_multilevel();
+    void run_target_multilevel_sot();
+    void load_target_points_at_level(const std::string& points_file, const std::string& weights_file);
+    std::vector<std::pair<std::string, std::string>> get_target_hierarchy_files() const;
 
     template <int d = dim>
     typename std::enable_if<d == 3>::type run_exact_sot();  // Only available for dim=3
@@ -155,6 +181,7 @@ private:
         double tolerance = 1e-8;
         double regularization_param = 1e-3;
         double epsilon = 1e-8;  // Parameter for truncation criterion
+        double tau = 1e-8;  // Truncation error tolerance for integral radius bound
         bool verbose_output = true;
         std::string solver_type = "BFGS";
         unsigned int quadrature_order = 3;
@@ -189,9 +216,17 @@ private:
     void setup_target_finite_elements();
     void setup_finite_elements();
     void setup_target_points();  // New helper to set up target points and RTree once
+    void setup_custom_target_points(const std::vector<Point<dim>>& custom_target_points,
+                                   const std::vector<double>& custom_target_weights);
     void setup_multilevel_finite_elements();  
     double evaluate_sot_functional(const Vector<double>& weights, Vector<double>& gradient);
     void save_results(const Vector<double>& weights, const std::string& filename);
+    
+    // Map weights from one target point set to another (for multilevel transfer)
+    // void interpolate_weights(const std::vector<Point<dim>>& source_points,
+    //                         const Vector<double>& source_weights,
+    //                         const std::vector<Point<dim>>& target_points,
+    //                         Vector<double>& target_weights);
 
     // Cache for local assembly computations
     struct CellCache {
@@ -217,6 +252,24 @@ private:
     mutable double effective_distance_threshold{0.0};  // 10% increased threshold for caching
     mutable bool is_caching_active{false};  // Whether caching is currently active
 
+    // Softmax refinement members
+    std::vector<Point<dim>> target_points_coarse;  // Coarse level target points
+    std::vector<Point<dim>> target_points_fine;  // Fine level target points
+    Vector<double> weights_fine;  // Fine level weights
+    Vector<double> target_density_coarse;  // Coarse level densities
+    const Vector<double>* weights_coarse{nullptr};  // Pointer to coarse level weights
+    int current_level{0};  // Current level in hierarchy
+
+    // Softmax refinement methods
+    Vector<double> softmax_refinement(const Vector<double>& weights);
+    void local_assemble_softmax_refinement(
+        const typename DoFHandler<dim>::active_cell_iterator &cell,
+        ScratchData &scratch_data,
+        CopyData &copy_data);
+
+    // Weight transfer between hierarchy levels using softmax refinement
+    void assign_weights_by_hierarchy(Vector<double>& weights, int coarse_level, int fine_level, const Vector<double>& prev_weights);
+
     // Computed distance threshold for current iteration
     mutable double current_distance_threshold{0.0};
     // Compute the distance threshold based on current weights and parameters
@@ -227,6 +280,26 @@ private:
     std::vector<std::size_t> find_nearest_target_points(const Point<dim>& query_point) const;
     // Helper function for range queries
     std::vector<std::size_t> find_target_points_in_box(const BoundingBox<dim>& box) const;
+
+    // Compute the tau integral radius bound for truncation
+    double compute_tau_integral_radius(const double tau, const double M, const double C, const double F_phi) const;
+    
+    // Calculate the total size of the cache in MB
+    double calculate_cache_size_mb() const;
+
+    // Solve optimization problem for a specific level
+    // void solve_level(int level);
+    
+    // Parent-child relationship data structures
+    std::vector<std::vector<std::vector<size_t>>> parent_indices_;
+    std::vector<std::vector<std::vector<size_t>>> child_indices_;
+    bool has_hierarchy_data_{false};
+    
+    // Find target points using parent-child relationships
+    std::vector<std::size_t> find_target_points_by_hierarchy(const Point<dim>& query_point, int level) const;
+    
+    // Load hierarchy data from files
+    void load_hierarchy_data(const std::string& hierarchy_dir);
 };
 
 #endif

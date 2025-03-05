@@ -7,6 +7,7 @@ SET(TARGET_SRC
   src/ExactSot.cc
   src/OptimalTransportPlan.cc
   src/MeshHierarchy.cc
+  src/PointCloudHierarchy.cc
 )
 
 SET(GEOGRAM_DIR "/scratch/mkhamlic/lib/geogram")

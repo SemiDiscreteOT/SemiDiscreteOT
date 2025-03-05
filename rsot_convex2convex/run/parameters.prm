@@ -1,6 +1,6 @@
 subsection Convex2Convex
 
-  set selected_task = sot    # Options: mesh_generation, load_meshes, sot, exact_sot, power_diagram, map, prepare_multilevel, multilevel_sot
+  set selected_task = sot    # Options: mesh_generation, load_meshes, sot, exact_sot, power_diagram, map, prepare_multilevel, multilevel_sot, target_multilevel_sot, prepare_target_multilevel
   set io_coding = txt
 
   subsection mesh_generation
@@ -21,17 +21,18 @@ subsection Convex2Convex
 
   subsection rsot_solver
     set max_iterations = 10000
-    set tolerance = 1e-3
-    set regularization_parameter = 1e-3
-    set epsilon = 1e-15
-    set verbose_output = false
+    set tolerance = 1e-4
+    set regularization_parameter = 1e-2
+    set epsilon = 1e-20
+    set tau = 1e-4  # Truncation error tolerance for integral radius bound
+    set verbose_output = true
     set solver_type = BFGS
     set quadrature_order = 3
     set number_of_threads = 0
     set use_epsilon_scaling = false
     set epsilon_scaling_factor = 10
     set epsilon_scaling_steps = 2
-    set use_caching = true
+    set use_caching = false
   end
 
   subsection power_diagram_parameters
@@ -48,6 +49,14 @@ subsection Convex2Convex
     set min_vertices = 100          # Minimum vertices for coarsest level
     set max_vertices = 1000         # Maximum vertices for finest level
     set hierarchy_output_dir = output/multilevel/meshes  # Output directory
+  end
+  
+  subsection target_multilevel_parameters
+    set min_points = 10          # Minimum points for coarsest level
+    set max_points = 2000         # Maximum points for finest level
+    set hierarchy_output_dir = output/target_multilevel  # Output directory
+    set output_prefix = output/target_multilevel/sot    # Where to save results
+    set enabled = true           # Whether to use target multilevel approach
   end
 
 end
