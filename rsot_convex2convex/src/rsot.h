@@ -173,7 +173,6 @@ private:
     std::vector<Point<dim>> target_points;
     std::vector<Point<dim>> source_points;
     Vector<double> target_density;
-
     std::unique_ptr<SolverControl> solver_control;
     struct SolverParameters {
         unsigned int max_iterations = 1000;
@@ -252,10 +251,10 @@ private:
     mutable bool is_caching_active{false};  // Whether caching is currently active
 
     // Softmax refinement members
-    std::vector<Point<dim>> target_points_coarse;  // Coarse level target points
     std::vector<Point<dim>> target_points_fine;  // Fine level target points
     Vector<double> weights_fine;  // Fine level weights
     Vector<double> target_density_coarse;  // Coarse level densities
+    std::vector<Point<dim>> target_points_coarse;  // Coarse level target points
     const Vector<double>* weights_coarse{nullptr};  // Pointer to coarse level weights
     int current_level{0};  // Current level in hierarchy
 
@@ -298,7 +297,7 @@ private:
     std::vector<std::size_t> find_target_points_by_hierarchy(const Point<dim>& query_point, int level) const;
     
     // Load hierarchy data from files
-    void load_hierarchy_data(const std::string& hierarchy_dir);
+    void load_hierarchy_data(const std::string& hierarchy_dir, int specific_level = -1);
 };
 
 #endif
