@@ -79,7 +79,7 @@ std::tuple<std::vector<Point<dim>>, std::vector<double>, std::vector<int>>
 PointCloudHierarchyManager::kmeansClustering(
     const std::vector<Point<dim>>& points,
     const std::vector<double>& weights,
-    int k) {
+    size_t k) {
     
     if (points.size() <= k) {
         // If fewer points than clusters, return original points
@@ -96,23 +96,23 @@ PointCloudHierarchyManager::kmeansClustering(
     // Initialize centers randomly from the input points
     std::random_device rd;
     std::mt19937 gen(rd());
-    std::uniform_int_distribution<> distrib(0, n_points - 1);
+    std::uniform_int_distribution<size_t> distrib(0, n_points - 1);
     
     // Use k-means++ initialization
     // Choose first center randomly
-    int first_center_idx = distrib(gen);
+    size_t first_center_idx = distrib(gen);
     centers[0] = points[first_center_idx];
     
     // Choose remaining centers with probability proportional to squared distance
-    for (int i = 1; i < k; ++i) {
+    for (size_t i = 1; i < k; ++i) {
         std::vector<double> distances(n_points, std::numeric_limits<double>::max());
         double sum_distances = 0.0;
         
         // Calculate minimum distance to existing centers for each point
         for (size_t j = 0; j < n_points; ++j) {
-            for (int c = 0; c < i; ++c) {
+            for (size_t c = 0; c < i; ++c) {
                 double dist = 0.0;
-                for (int d = 0; d < dim; ++d) {
+                for (size_t d = 0; d < dim; ++d) {
                     double diff = points[j][d] - centers[c][d];
                     dist += diff * diff;
                 }
@@ -127,7 +127,7 @@ PointCloudHierarchyManager::kmeansClustering(
         std::uniform_real_distribution<> dist_distrib(0, sum_distances);
         double rand_val = dist_distrib(gen);
         double cumulative = 0.0;
-        int next_center_idx = 0;
+        size_t next_center_idx = 0;
         
         for (size_t j = 0; j < n_points; ++j) {
             cumulative += distances[j];
@@ -142,8 +142,8 @@ PointCloudHierarchyManager::kmeansClustering(
     
     // Main k-means loop
     bool changed = true;
-    int max_iterations = 100;
-    int iter = 0;
+    size_t max_iterations = 100;
+    size_t iter = 0;
     
     while (changed && iter < max_iterations) {
         changed = false;
@@ -154,9 +154,9 @@ PointCloudHierarchyManager::kmeansClustering(
             double min_dist = std::numeric_limits<double>::max();
             int closest_center = -1;
             
-            for (int j = 0; j < k; ++j) {
+            for (size_t j = 0; j < k; ++j) {
                 double dist = 0.0;
-                for (int d = 0; d < dim; ++d) {
+                for (size_t d = 0; d < dim; ++d) {
                     double diff = points[i][d] - centers[j][d];
                     dist += diff * diff;
                 }
@@ -177,8 +177,8 @@ PointCloudHierarchyManager::kmeansClustering(
         std::vector<Point<dim>> new_centers(k);
         std::vector<double> cluster_total_weight(k, 0.0);
         
-        for (int j = 0; j < k; ++j) {
-            for (int d = 0; d < dim; ++d) {
+        for (size_t j = 0; j < k; ++j) {
+            for (size_t d = 0; d < dim; ++d) {
                 new_centers[j][d] = 0.0;
             }
         }
@@ -187,16 +187,16 @@ PointCloudHierarchyManager::kmeansClustering(
             int cluster = assignments[i];
             double point_weight = (weights.empty()) ? 1.0 : weights[i];
             
-            for (int d = 0; d < dim; ++d) {
+            for (size_t d = 0; d < dim; ++d) {
                 new_centers[cluster][d] += points[i][d] * point_weight;
             }
             cluster_total_weight[cluster] += point_weight;
         }
         
         // Normalize by total weight in cluster
-        for (int j = 0; j < k; ++j) {
+        for (size_t j = 0; j < k; ++j) {
             if (cluster_total_weight[j] > 0.0) {
-                for (int d = 0; d < dim; ++d) {
+                for (size_t d = 0; d < dim; ++d) {
                     new_centers[j][d] /= cluster_total_weight[j];
                 }
             } else {
@@ -222,7 +222,7 @@ PointCloudHierarchyManager::kmeansClustering(
     std::vector<int> cluster_mapping(k, -1);
     std::vector<int> final_assignments(n_points, -1);
     
-    for (int j = 0; j < k; ++j) {
+    for (size_t j = 0; j < k; ++j) {
         if (center_weights[j] > 0.0) {
             cluster_mapping[j] = final_centers.size();
             final_centers.push_back(centers[j]);
@@ -412,9 +412,9 @@ template int PointCloudHierarchyManager::generateHierarchy<3>(
 
 template std::tuple<std::vector<Point<2>>, std::vector<double>, std::vector<int>> 
 PointCloudHierarchyManager::kmeansClustering<2>(
-    const std::vector<Point<2>>&, const std::vector<double>&, int);
+    const std::vector<Point<2>>&, const std::vector<double>&, size_t);
 template std::tuple<std::vector<Point<3>>, std::vector<double>, std::vector<int>> 
 PointCloudHierarchyManager::kmeansClustering<3>(
-    const std::vector<Point<3>>&, const std::vector<double>&, int);
+    const std::vector<Point<3>>&, const std::vector<double>&, size_t);
 
 } // namespace PointCloudHierarchy

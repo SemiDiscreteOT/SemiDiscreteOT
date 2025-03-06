@@ -131,7 +131,6 @@ private:
         std::string output_prefix = "output/target_multilevel/sot";  // Where to save multilevel results
         bool enabled = false;  // Whether to use target multilevel approach
         bool use_softmax_weight_transfer = true;  // Whether to use softmax-based weight transfer
-        double softmax_epsilon = 1e-3;  // Regularization parameter for softmax weight transfer
     } target_multilevel_params;
 
     // Source mesh multilevel methods

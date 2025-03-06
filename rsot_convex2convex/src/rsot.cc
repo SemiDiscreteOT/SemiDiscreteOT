@@ -86,6 +86,8 @@ Convex2Convex<dim>::Convex2Convex(const MPI_Comm &comm)
                      "Prefix for target multilevel outputs");
         add_parameter("enabled", target_multilevel_params.enabled,
                      "Whether to use target multilevel approach");
+        add_parameter("use_softmax_weight_transfer", target_multilevel_params.use_softmax_weight_transfer,
+                     "Whether to use softmax-based weight transfer");
     }
     leave_subsection();
 
@@ -607,7 +609,6 @@ void Convex2Convex<dim>::local_assemble_sot(
 
     const unsigned int n_q_points = q_points.size();
     const double lambda_inv = 1.0 / current_lambda;
-    const double threshold_sq = current_distance_threshold * current_distance_threshold;
 
     if (solver_params.use_caching && is_caching_active) {
         // Caching path
@@ -925,6 +926,7 @@ void Convex2Convex<dim>::local_assemble_softmax_refinement(
 template <int dim>
 double Convex2Convex<dim>::evaluate_sot_functional(const Vector<double> &weights, Vector<double> &gradient)
 {
+    compute_distance_threshold();
     // Store current weights and lambda for parallel access
     current_weights = &weights;
     current_lambda = solver_params.regularization_param;
@@ -992,7 +994,7 @@ double Convex2Convex<dim>::evaluate_sot_functional(const Vector<double> &weights
     gradient = Utilities::MPI::broadcast(mpi_communicator, gradient, 0);
     global_C_integral = Utilities::MPI::broadcast(mpi_communicator, global_C_integral, 0);  // Broadcast C integral
 
-    compute_distance_threshold();
+    // compute_distance_threshold();
     
 
     return global_functional;
@@ -2054,8 +2056,8 @@ template <int dim>
 void Convex2Convex<dim>::reset_distance_threshold_cache() const
 {
     is_caching_active = false;
-    current_distance_threshold = 0.0;
-    effective_distance_threshold = 0.0;
+    // current_distance_threshold = 0.0;
+    // effective_distance_threshold = 0.0;
     cell_caches.clear();
 }
 
@@ -2249,13 +2251,15 @@ std::vector<std::pair<std::string, std::string>> Convex2Convex<dim>::get_target_
         if (entry.path().filename().string().find("level_") == 0 && 
             entry.path().filename().string().find("_points.txt") != std::string::npos) {
             std::string points_file = entry.path().string();
+            points_file = points_file.substr(0, points_file.length() - 4);
+            
             std::string level_num = points_file.substr(
                 points_file.find("level_") + 6, 
-                points_file.find("_points.txt") - points_file.find("level_") - 6
+                points_file.find("_points") - points_file.find("level_") - 6
             );
-            std::string weights_file = dir + "/level_" + level_num + "_weights.txt";
+            std::string weights_file = dir + "/level_" + level_num + "_weights";
             
-            if (fs::exists(weights_file)) {
+            if (fs::exists(weights_file + ".txt")) {
                 files.push_back({points_file, weights_file});
             }
         }
@@ -2263,7 +2267,6 @@ std::vector<std::pair<std::string, std::string>> Convex2Convex<dim>::get_target_
     
     // Sort in reverse order (coarsest to finest)
     std::sort(files.begin(), files.end(), [](const auto& a, const auto& b) {
-        // Extract level numbers for comparison
         int level_a = std::stoi(a.first.substr(a.first.find("level_") + 6, 1));
         int level_b = std::stoi(b.first.substr(b.first.find("level_") + 6, 1));
         return level_a > level_b;
@@ -2280,56 +2283,58 @@ void Convex2Convex<dim>::load_target_points_at_level(
     pcout << "Loading target points from: " << points_file << std::endl;
     pcout << "Loading target weights from: " << weights_file << std::endl;
     
-    // Clear existing target points
-    target_points.clear();
+    std::vector<Point<dim>> local_target_points;
+    std::vector<double> local_weights;
+    bool load_success = true;
     
-    // Read points from file
-    std::ifstream points_in(points_file);
-    if (!points_in.good()) {
-        throw std::runtime_error("Cannot open points file: " + points_file);
-    }
-    
-    std::string line;
-    while (std::getline(points_in, line)) {
-        std::istringstream iss(line);
-        Point<dim> p;
-        for (unsigned int d = 0; d < dim; ++d) {
-            if (!(iss >> p[d])) {
-                throw std::runtime_error("Error parsing point coordinates in file: " + points_file);
-            }
+    // Only rank 0 reads files
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+        // Read points
+        if (!Utils::read_vector(local_target_points, points_file, io_coding)) {
+            pcout << "Error: Cannot read points file: " << points_file << std::endl;
+            load_success = false;
         }
-        target_points.push_back(p);
-    }
-    
-    // Read weights from file
-    std::ifstream weights_in(weights_file);
-    if (!weights_in.good()) {
-        throw std::runtime_error("Cannot open weights file: " + weights_file);
-    }
-    
-    // Initialize target density vector
-    target_density.reinit(target_points.size());
-    
-    // Read weights from file
-    double w;
-    unsigned int idx = 0;
-    while (idx < target_points.size() && weights_in >> w) {
-        target_density[idx++] = w;
-    }
-    
-    if (idx < target_points.size()) {
-        pcout << "Warning: Not enough weights found in file " << weights_file 
-              << ". Read " << idx << " weights for " << target_points.size() << " points." << std::endl;
-        pcout << "Initializing remaining weights uniformly..." << std::endl;
         
-        // Initialize remaining weights uniformly
-        double uniform_weight = 1.0 / (target_points.size() - idx);
-        for (unsigned int i = idx; i < target_points.size(); ++i) {
-            target_density[i] = uniform_weight;
+        // Read weights
+        if (load_success && !Utils::read_vector(local_weights, weights_file, io_coding)) {
+            pcout << "Error: Cannot read weights file: " << weights_file << std::endl;
+            load_success = false;
         }
     }
     
-    pcout << "Loaded " << target_points.size() << " target points at this level" << std::endl;
+    // Broadcast success status
+    load_success = Utilities::MPI::broadcast(mpi_communicator, load_success, 0);
+    if (!load_success) {
+        throw std::runtime_error("Failed to load target points or weights");
+    }
+    
+    // Broadcast sizes
+    unsigned int n_points = 0;
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+        n_points = local_target_points.size();
+    }
+    n_points = Utilities::MPI::broadcast(mpi_communicator, n_points, 0);
+    
+    // Resize containers on non-root ranks
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) != 0) {
+        local_target_points.resize(n_points);
+        local_weights.resize(n_points);
+    }
+    
+    // Broadcast data
+    for (unsigned int i = 0; i < n_points; ++i) {
+        local_target_points[i] = Utilities::MPI::broadcast(mpi_communicator, local_target_points[i], 0);
+        local_weights[i] = Utilities::MPI::broadcast(mpi_communicator, local_weights[i], 0);
+    }
+    
+    // Update class members
+    target_points = std::move(local_target_points);
+    target_density.reinit(n_points);
+    for (unsigned int i = 0; i < n_points; ++i) {
+        target_density[i] = local_weights[i];
+    }
+    
+    pcout << "Successfully loaded " << n_points << " target points at this level" << std::endl;
 }
 
 template <int dim>
@@ -2421,8 +2426,39 @@ void Convex2Convex<dim>::assign_weights_by_hierarchy(
     // Ensure weights_fine is properly sized
     weights_fine.reinit(target_points_fine.size());
 
-    // Apply softmax refinement
-    weights_fine = softmax_refinement(prev_weights);
+    if (target_multilevel_params.use_softmax_weight_transfer) {
+        // Apply softmax refinement
+        weights_fine = softmax_refinement(prev_weights);
+    }
+    else {
+        pcout << "Applying direct weight assignment from level " << coarse_level
+              << " to level " << fine_level << std::endl;
+        pcout << "Coarse points: " << target_points_coarse.size() 
+              << ", Fine points: " << target_points_fine.size() << std::endl;
+
+
+        // Initialize all weights to zero
+        weights_fine = 0.0;
+
+        // For each coarse point (parent)
+        for (size_t parent_idx = 0; parent_idx < target_points_coarse.size(); ++parent_idx) {
+            // Get the parent's weight
+            const double parent_weight = prev_weights[parent_idx];
+            
+            // Get all children of this parent
+            const auto& children = child_indices_[current_level][parent_idx];
+            
+            // Assign parent's weight to all its children
+            for (const auto& child_idx : children) {
+                if (child_idx < weights_fine.size()) {
+                    weights_fine[child_idx] = parent_weight;
+                } else {
+                    pcout << "Warning: Child index " << child_idx 
+                          << " exceeds fine weights size " << weights_fine.size() << std::endl;
+                }
+            }
+        }
+    }
 
     // Update input weights with refined values
     weights = weights_fine;
@@ -2430,20 +2466,6 @@ void Convex2Convex<dim>::assign_weights_by_hierarchy(
     pcout << "Softmax-based weight assignment completed." << std::endl;
 }
 
-template <int dim>
-void Convex2Convex<dim>::run_sot(
-    const std::vector<Point<dim>>& custom_target_points, 
-    const std::vector<double>& custom_target_weights)
-{
-    // Setup finite elements
-    setup_finite_elements();
-    
-    // Use custom target points instead of loaded points
-    setup_custom_target_points(custom_target_points, custom_target_weights);
-    
-    // Run SOT solver
-    run_sot();
-}
 
 template <int dim>
 void Convex2Convex<dim>::run_target_multilevel_sot()
@@ -2458,21 +2480,25 @@ void Convex2Convex<dim>::run_target_multilevel_sot()
     setup_source_finite_elements();
     
     // Get target point cloud hierarchy files (sorted from coarsest to finest)
+    unsigned int num_levels = 0;
     std::vector<std::pair<std::string, std::string>> hierarchy_files;
-    try {
-        hierarchy_files = get_target_hierarchy_files();
-    } catch (const std::exception& e) {
-        pcout << "Error getting target hierarchy files: " << e.what() << std::endl;
-        pcout << "Please run prepare_target_multilevel first." << std::endl;
-        return;
-    }
+    if(Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+        try {
+            hierarchy_files = get_target_hierarchy_files();
+        } catch (const std::exception& e) {
+            pcout << "Error getting target hierarchy files: " << e.what() << std::endl;
+            pcout << "Please run prepare_target_multilevel first." << std::endl;
+            return;
+        }
     
-    if (hierarchy_files.empty()) {
-        pcout << "No target point cloud hierarchy found. Please run prepare_target_multilevel first." << std::endl;
-        return;
+        if (hierarchy_files.empty()) {
+            pcout << "No target point cloud hierarchy found. Please run prepare_target_multilevel first." << std::endl;
+            return;
+        }
+        num_levels = hierarchy_files.size();
     }
-    
-    // Ensure hierarchy data is loaded
+
+    num_levels = Utilities::MPI::broadcast(mpi_communicator, num_levels, 0);
     if (!has_hierarchy_data_) {
         pcout << "Loading hierarchy data..." << std::endl;
         load_hierarchy_data(target_multilevel_params.hierarchy_output_dir);
@@ -2492,46 +2518,51 @@ void Convex2Convex<dim>::run_target_multilevel_sot()
     Vector<double> level_weights;
     
     // Process each level of the hierarchy (from coarsest to finest)
-    for (size_t level = 0; level < hierarchy_files.size(); ++level) {
-        const auto& [points_file, weights_file] = hierarchy_files[level];
+    for (size_t level = 0; level < num_levels; ++level) {
+        int level_number = 0;
+        std::string level_output_dir;
+        std::string points_file;
+        std::string weights_file;
+        if(Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+            const auto& hierarchy_file = hierarchy_files[level];
+            points_file = hierarchy_file.first;
+            weights_file = hierarchy_file.second;
         
-        // Extract level number from filename
-        std::string level_num = points_file.substr(
-            points_file.find("level_") + 6, 
-            points_file.find("_points.txt") - points_file.find("level_") - 6
-        );
-        int level_number = std::stoi(level_num);
+            // Extract level number from filename
+            std::string level_num = points_file.substr(
+                points_file.find("level_") + 6, 
+                points_file.find("_points") - points_file.find("level_") - 6
+            );
+            level_number = std::stoi(level_num);
         
+        
+            // Create output directory for this level
+            level_output_dir = target_multilevel_params.output_prefix + "/level_" + level_num;
+            fs::create_directories(level_output_dir);
+        
+        }
+        level_number = Utilities::MPI::broadcast(mpi_communicator, level_number, 0);
         pcout << "\n----------------------------------------" << std::endl;
         pcout << "Processing target point cloud level " << level_number << std::endl;
         pcout << "----------------------------------------" << std::endl;
-        
-        // Create output directory for this level
-        std::string level_output_dir = target_multilevel_params.output_prefix + "/level_" + level_num;
-        fs::create_directories(level_output_dir);
-        
         // Load target points for this level
         load_target_points_at_level(points_file, weights_file);
         pcout << "Target points loaded for level " << level_number << std::endl;
         pcout << "Target points size: " << target_points.size() << std::endl;
         
-        // Adjust solver parameters based on level
-        // if (level_number > 0) {  // Coarser levels
-        //     solver_params.max_iterations = std::max(100u, original_max_iterations / 2);
-        //     solver_params.tolerance = original_tolerance * 10.0;
-        // } else {  // Finest level
-        //     solver_params.max_iterations = original_max_iterations;
-        //     solver_params.tolerance = original_tolerance;
-        // }
         
         // If we have weights from previous level, use them as initial guess
         if (level > 0) {
-            // Get previous level number
-            std::string prev_level_num = hierarchy_files[level-1].first.substr(
-                hierarchy_files[level-1].first.find("level_") + 6, 
-                hierarchy_files[level-1].first.find("_points.txt") - hierarchy_files[level-1].first.find("level_") - 6
-            );
-            int prev_level_number = std::stoi(prev_level_num);
+            int prev_level_number = 0;
+            if(Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+                // Get previous level number
+                std::string prev_level_num = hierarchy_files[level-1].first.substr(
+                    hierarchy_files[level-1].first.find("level_") + 6, 
+                hierarchy_files[level-1].first.find("_points") - hierarchy_files[level-1].first.find("level_") - 6
+                );
+                prev_level_number = std::stoi(prev_level_num);
+            }
+            prev_level_number = Utilities::MPI::broadcast(mpi_communicator, prev_level_number, 0);
             
             pcout << "Transferring weights from level " << prev_level_number << " to level " << level_number << std::endl;
             
@@ -2568,12 +2599,6 @@ void Convex2Convex<dim>::run_target_multilevel_sot()
         // I want to print the first 4 component of the weight vector
         pcout << "First 4 components of level_weights: " << level_weights[0] << " " << level_weights[1] << " " << level_weights[2] << " " << level_weights[3] << std::endl;
         
-        // // Create solver control
-        // solver_control = std::make_unique<SolverControl>(
-        //     solver_params.max_iterations,
-        //     solver_params.tolerance,
-        //     true  // Log history
-        // );
 
         // Create solver control and store it in the class member
         solver_control = std::make_unique<VerboseSolverControl>(
@@ -2604,41 +2629,23 @@ void Convex2Convex<dim>::run_target_multilevel_sot()
             
         } catch (SolverControl::NoConvergence &exc) {
             pcout << "Warning: Optimization did not converge for level " << level_number << std::endl;
-            pcout << "Switching to gradient descent as fallback..." << std::endl;
-            
-            // Fall back to GD if BFGS fails
-            Vector<double> gradient(level_weights.size());
-            double current_value = evaluate_sot_functional(level_weights, gradient);
-            
-            // Do 20 steps of GD to stabilize
-            for (unsigned int i = 0; i < 20; ++i) {
-                // Simple update
-                for (size_t j = 0; j < level_weights.size(); ++j) {
-                    level_weights[j] -= 0.1 * gradient[j];
-                }
-                current_value = evaluate_sot_functional(level_weights, gradient);
-            }
-            
-            pcout << "Fallback GD complete. Final function value: " << current_value << std::endl;
         }
         
         timer.stop();
         pcout << "Level " << level_number << " solver time: " << timer.wall_time() << " seconds" << std::endl;
+        reset_distance_threshold_cache();
         
         // Save results for this level
         save_results(level_weights, level_output_dir + "/weights");
-        
-        // Save convergence info for this level
-        if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+        if(Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
             std::ofstream conv_info(level_output_dir + "/convergence_info.txt");
             conv_info << "Regularization parameter (λ): " << solver_params.regularization_param << "\n";
             conv_info << "Number of iterations: " << solver_control->last_step() << "\n";
             conv_info << "Final function value: " << solver_control->last_value() << "\n";
             conv_info << "Convergence achieved: " << (solver_control->last_check() == SolverControl::success) << "\n";
             conv_info << "Level: " << level_number << "\n";
+            pcout << "Level " << level_number << " results saved to " << level_output_dir << "/weights" << std::endl;
         }
-        
-        pcout << "Level " << level_number << " results saved to " << level_output_dir << "/weights" << std::endl;
     }
     
     // Restore original parameters
@@ -2660,18 +2667,25 @@ template <int dim>
 void Convex2Convex<dim>::load_hierarchy_data(const std::string& hierarchy_dir) {
     has_hierarchy_data_ = false;
     
-    // Determine number of levels by checking directory contents
+    // Only rank 0 checks directory and counts levels
+    std::cout <<" Hello from process " << Utilities::MPI::this_mpi_process(mpi_communicator) << std::endl;
     int num_levels = 0;
-    while (true) {
-        std::string points_file = hierarchy_dir + "/level_" + std::to_string(num_levels) + "_points.txt";
-        if (!fs::exists(points_file)) {
-            break;
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+        while (true) {
+            std::string points_file = hierarchy_dir + "/level_" + std::to_string(num_levels) + "_points.txt";
+            if (!fs::exists(points_file)) {
+                break;
+            }
+            num_levels++;
         }
-        num_levels++;
     }
     
+    // Broadcast number of levels
+    num_levels = Utilities::MPI::broadcast(mpi_communicator, num_levels, 0);
+    std::cout << "Number of levels: " << num_levels << std::endl;
+    
     if (num_levels == 0) {
-        std::cerr << "No hierarchy data found in " << hierarchy_dir << std::endl;
+        pcout << "No hierarchy data found in " << hierarchy_dir << std::endl;
         return;
     }
     
@@ -2679,106 +2693,97 @@ void Convex2Convex<dim>::load_hierarchy_data(const std::string& hierarchy_dir) {
     
     // Load parent-child relationships for each level
     for (int level = 1; level < num_levels; ++level) {
-        pcout << "Loading parent-child relationships for level " << level << std::endl;
+        std::vector<std::vector<size_t>> level_indices;
+        bool level_load_success = true;
         
-        std::string children_file = hierarchy_dir + "/level_" + std::to_string(level) + "_children.txt";
-        if (fs::exists(children_file)) {
-            std::ifstream children_in(children_file);
-            if (!children_in) {
-                std::cerr << "Failed to open " << children_file << std::endl;
-                continue;
-            }
+        if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+            std::string children_file = hierarchy_dir + "/level_" + std::to_string(level) + "_children.txt";
             
-            // Read child indices
-            std::string line;
-            size_t point_idx = 0;
-            child_indices_[level-1].clear();
-            
-            while (std::getline(children_in, line)) {
-                std::istringstream iss(line);
-                size_t num_children;
-                iss >> num_children;
-                
-                std::vector<size_t> children;
-                for (size_t i = 0; i < num_children; ++i) {
-                    size_t child_idx;
-                    iss >> child_idx;
-                    children.push_back(child_idx);
+            if (fs::exists(children_file)) {
+                std::ifstream children_in(children_file);
+                if (!children_in.good()) {
+                    pcout << "Error: Cannot open children file: " << children_file << std::endl;
+                    level_load_success = false;
+                } else {
+                    std::string line;
+                    while (std::getline(children_in, line)) {
+                        std::istringstream iss(line);
+                        size_t num_children;
+                        if (!(iss >> num_children)) {
+                            level_load_success = false;
+                            break;
+                        }
+                        
+                        std::vector<size_t> children;
+                        for (size_t i = 0; i < num_children; ++i) {
+                            size_t child_idx;
+                            if (!(iss >> child_idx)) {
+                                level_load_success = false;
+                                break;
+                            }
+                            children.push_back(child_idx);
+                        }
+                        
+                        if (!level_load_success) break;
+                        level_indices.push_back(children);
+                    }
                 }
-                
-                child_indices_[level-1].push_back(children);
-                point_idx++;
+            } else {
+                pcout << "Error: Children file not found: " << children_file << std::endl;
+                level_load_success = false;
             }
+        }
+
+        // Broadcast success status
+        level_load_success = Utilities::MPI::broadcast(mpi_communicator, level_load_success, 0);
+        if (!level_load_success) {
+            pcout << "Error loading hierarchy data at level " << level << std::endl;
+            has_hierarchy_data_ = false;
+            return;
+        }
+        
+        // Broadcast level data size
+        unsigned int n_parents = 0;
+        if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+            n_parents = level_indices.size();
+        }
+        n_parents = Utilities::MPI::broadcast(mpi_communicator, n_parents, 0);
+        pcout << "Number of parents: " << n_parents << std::endl;
+        
+        // Clear and resize the child_indices_ for this level
+        child_indices_[level-1].clear();
+        child_indices_[level-1].reserve(n_parents);
+
+        
+        // Broadcast each parent's children
+        for (unsigned int i = 0; i < n_parents; ++i) {
+            unsigned int n_children = 0;
+            std::vector<size_t> children;
+            
+            if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+                children = level_indices[i];
+                n_children = children.size();
+            }
+            
+            // Broadcast number of children
+            n_children = Utilities::MPI::broadcast(mpi_communicator, n_children, 0);
+            
+            // Resize and broadcast children indices
+            if (Utilities::MPI::this_mpi_process(mpi_communicator) != 0) {
+                children.resize(n_children);
+            }
+
+            Utilities::MPI::broadcast(mpi_communicator, children, 0);
+            child_indices_[level-1].push_back(children);
         }
     }
     
     has_hierarchy_data_ = true;
-    std::cout << "Loaded hierarchy data with " << num_levels << " levels" << std::endl;
-
+    pcout << "Successfully loaded hierarchy data with " << num_levels << " levels" << std::endl;
 }
 
 
 
-// template <int dim>
-// void Convex2Convex<dim>::solve_level(int level) {
-//     pcout << "Solving for level " << level << "..." << std::endl;
-    
-//     // Create a local weights vector
-//     Vector<double> weights(target_points.size());
-    
-//     // If using hierarchy and not at the coarsest level, initialize weights from previous level
-//     if (has_hierarchy_data_ && level > 0) {
-//         // Propagate weights from previous level to current level
-//         assign_weights_by_hierarchy(weights, level-1, level);
-//         pcout << "Initialized weights using parent-child relationships from level " << level-1 << std::endl;
-//     }
-    
-//     // Set the current_weights pointer to point to our local weights vector
-//     current_weights = &weights;
-    
-//     // Create solver control
-//     solver_control = std::make_unique<SolverControl>(
-//         solver_params.max_iterations,
-//         solver_params.tolerance,
-//         true  // Log history
-//     );
-    
-//     // Run optimization for this level
-//     try {
-//         SolverBFGS<Vector<double>> solver(*solver_control);
-        
-//         solver.solve(
-//             [this](const Vector<double>& weights, Vector<double>& gradient) {
-//                 return this->evaluate_sot_functional(weights, gradient);
-//             },
-//             weights
-//         );
-        
-//         pcout << "Level " << level << " optimization completed:" << std::endl
-//               << "  Number of iterations: " << solver_control->last_step() << std::endl
-//               << "  Final function value: " << solver_control->last_value() << std::endl;
-        
-//     } catch (SolverControl::NoConvergence &exc) {
-//         pcout << "Warning: Optimization did not converge for level " << level << std::endl;
-//         pcout << "Switching to gradient descent as fallback..." << std::endl;
-        
-//         // Fall back to GD if BFGS fails
-//         Vector<double> gradient(weights.size());
-//         double current_value = evaluate_sot_functional(weights, gradient);
-        
-//         // Do 20 steps of GD to stabilize
-//         for (unsigned int i = 0; i < 20; ++i) {
-//             // Simple update
-//             for (size_t j = 0; j < weights.size(); ++j) {
-//                 weights[j] -= 0.1 * gradient[j];
-//             }
-//             current_value = evaluate_sot_functional(weights, gradient);
-//         }
-        
-        
-//         pcout << "Fallback GD complete. Final function value: " << current_value << std::endl;
-//     }
-// }
 
 template class Convex2Convex<2>;
 template class Convex2Convex<3>;

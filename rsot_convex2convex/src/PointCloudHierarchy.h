@@ -84,12 +84,12 @@ private:
     int num_levels_;
     std::vector<int> level_point_counts_;
     
-    // For each level L > 0, store for each point at level L-1 its parent index at level L
-    // parent_indices_[L-1][fine_point_idx] = vector containing the index of parent point at level L
+    // parent_indices_[L] stores the relationships between level L and level L+1
+    // For each point at level L, parent_indices_[L][point_idx] contains indices of its parents at level L+1
     std::vector<std::vector<std::vector<size_t>>> parent_indices_;
     
-    // For each level L < num_levels-1, store for each point at level L its children indices at level L-1
-    // child_indices_[L-1][coarse_point_idx] = vector of indices of children points at level L-1
+    // child_indices_[L] stores the relationships between level L+1 and level L
+    // For each point at level L+1, child_indices_[L][point_idx] contains indices of its children at level L
     std::vector<std::vector<std::vector<size_t>>> child_indices_;
 
     /**
@@ -112,7 +112,7 @@ private:
     kmeansClustering(
         const std::vector<Point<dim>>& points,
         const std::vector<double>& weights,
-        int k);
+        size_t k);
 };
 
 } // namespace PointCloudHierarchy
