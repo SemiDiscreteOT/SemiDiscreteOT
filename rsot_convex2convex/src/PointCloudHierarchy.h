@@ -3,9 +3,13 @@
 
 #include <deal.II/base/point.h>
 #include <vector>
+#include <array>
 #include <string>
 #include <memory>
 #include <unordered_map>
+#include "clustering/include/dkm.hpp"
+#include "clustering/include/dkm_parallel.hpp"
+#include <omp.h>
 
 using namespace dealii;
 
@@ -98,7 +102,7 @@ private:
     void ensureDirectoryExists(const std::string& path) const;
 
     /**
-     * @brief Performs k-means clustering on a set of points with parent-child tracking
+     * @brief Performs parallel k-means clustering on a set of points with parent-child tracking
      * @param points Input points from finer level
      * @param weights Input weights
      * @param k Number of clusters (points at coarser level)
@@ -108,9 +112,9 @@ private:
      *         - assignments (mapping of each child to its parent cluster)
      */
     template <int dim>
-    std::tuple<std::vector<Point<dim>>, std::vector<double>, std::vector<int>> 
+    std::tuple<std::vector<std::array<double, dim>>, std::vector<double>, std::vector<int>> 
     kmeansClustering(
-        const std::vector<Point<dim>>& points,
+        const std::vector<std::array<double, dim>>& points,
         const std::vector<double>& weights,
         size_t k);
 };

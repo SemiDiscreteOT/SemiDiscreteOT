@@ -9,6 +9,9 @@
 #include <random>
 #include <numeric>
 #include <limits>
+#include "dkm.hpp"
+#include "dkm_parallel.hpp"
+#include <chrono>
 
 namespace fs = std::filesystem;
 
@@ -75,11 +78,14 @@ int PointCloudHierarchyManager::getPointsForLevel(int base_points, int level) co
 }
 
 template <int dim>
-std::tuple<std::vector<Point<dim>>, std::vector<double>, std::vector<int>> 
+std::tuple<std::vector<std::array<double, dim>>, std::vector<double>, std::vector<int>> 
 PointCloudHierarchyManager::kmeansClustering(
-    const std::vector<Point<dim>>& points,
+    const std::vector<std::array<double, dim>>& points,
     const std::vector<double>& weights,
     size_t k) {
+
+    const size_t n_points = points.size();
+    std::cout << "Using " << omp_get_max_threads() << " OpenMP threads" << std::endl;
     
     if (points.size() <= k) {
         // If fewer points than clusters, return original points
@@ -88,154 +94,36 @@ PointCloudHierarchyManager::kmeansClustering(
         return {points, weights, assignments};
     }
     
-    const size_t n_points = points.size();
-    std::vector<Point<dim>> centers(k);
-    std::vector<double> center_weights(k, 0.0);
-    std::vector<int> assignments(n_points, -1);
+    // Set up clustering parameters
+    dkm::clustering_parameters<double> params(k);
+
     
-    // Initialize centers randomly from the input points
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<size_t> distrib(0, n_points - 1);
+    // Start timing
+    auto start = std::chrono::high_resolution_clock::now();
     
-    // Use k-means++ initialization
-    // Choose first center randomly
-    size_t first_center_idx = distrib(gen);
-    centers[0] = points[first_center_idx];
+    // Run parallel k-means clustering
+    std::vector<std::array<double, dim>> centers;
+    std::vector<uint32_t> cluster_assignments;
+    std::tie(centers, cluster_assignments) = dkm::kmeans_lloyd_parallel(points, k);
     
-    // Choose remaining centers with probability proportional to squared distance
-    for (size_t i = 1; i < k; ++i) {
-        std::vector<double> distances(n_points, std::numeric_limits<double>::max());
-        double sum_distances = 0.0;
-        
-        // Calculate minimum distance to existing centers for each point
-        for (size_t j = 0; j < n_points; ++j) {
-            for (size_t c = 0; c < i; ++c) {
-                double dist = 0.0;
-                for (size_t d = 0; d < dim; ++d) {
-                    double diff = points[j][d] - centers[c][d];
-                    dist += diff * diff;
-                }
-                if (dist < distances[j]) {
-                    distances[j] = dist;
-                }
-            }
-            sum_distances += distances[j];
-        }
-        
-        // Choose next center with probability proportional to squared distance
-        std::uniform_real_distribution<> dist_distrib(0, sum_distances);
-        double rand_val = dist_distrib(gen);
-        double cumulative = 0.0;
-        size_t next_center_idx = 0;
-        
-        for (size_t j = 0; j < n_points; ++j) {
-            cumulative += distances[j];
-            if (cumulative >= rand_val) {
-                next_center_idx = j;
-                break;
-            }
-        }
-        
-        centers[i] = points[next_center_idx];
-    }
+    // Stop timing
+    auto stop = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::seconds>(stop - start);
     
-    // Main k-means loop
-    bool changed = true;
-    size_t max_iterations = 100;
-    size_t iter = 0;
+    std::cout << "  K-means clustering took " << duration.count() << " seconds" << std::endl;
     
-    while (changed && iter < max_iterations) {
-        changed = false;
-        iter++;
-        
-        // Assign points to nearest centers
-        for (size_t i = 0; i < n_points; ++i) {
-            double min_dist = std::numeric_limits<double>::max();
-            int closest_center = -1;
-            
-            for (size_t j = 0; j < k; ++j) {
-                double dist = 0.0;
-                for (size_t d = 0; d < dim; ++d) {
-                    double diff = points[i][d] - centers[j][d];
-                    dist += diff * diff;
-                }
-                
-                if (dist < min_dist) {
-                    min_dist = dist;
-                    closest_center = j;
-                }
-            }
-            
-            if (assignments[i] != closest_center) {
-                assignments[i] = closest_center;
-                changed = true;
-            }
-        }
-        
-        // Recompute centers as weighted average of assigned points
-        std::vector<Point<dim>> new_centers(k);
-        std::vector<double> cluster_total_weight(k, 0.0);
-        
-        for (size_t j = 0; j < k; ++j) {
-            for (size_t d = 0; d < dim; ++d) {
-                new_centers[j][d] = 0.0;
-            }
-        }
-        
-        for (size_t i = 0; i < n_points; ++i) {
-            int cluster = assignments[i];
-            double point_weight = (weights.empty()) ? 1.0 : weights[i];
-            
-            for (size_t d = 0; d < dim; ++d) {
-                new_centers[cluster][d] += points[i][d] * point_weight;
-            }
-            cluster_total_weight[cluster] += point_weight;
-        }
-        
-        // Normalize by total weight in cluster
-        for (size_t j = 0; j < k; ++j) {
-            if (cluster_total_weight[j] > 0.0) {
-                for (size_t d = 0; d < dim; ++d) {
-                    new_centers[j][d] /= cluster_total_weight[j];
-                }
-            } else {
-                // If cluster is empty, keep old center
-                new_centers[j] = centers[j];
-            }
-        }
-        
-        centers = new_centers;
-    }
+    // Convert cluster assignments to int
+    std::vector<int> assignments(cluster_assignments.begin(), cluster_assignments.end());
     
-    // Compute final weights for each cluster
-    std::fill(center_weights.begin(), center_weights.end(), 0.0);
-    for (size_t i = 0; i < n_points; ++i) {
+    // Compute weights for each cluster
+    std::vector<double> cluster_weights(k, 0.0);
+    for (size_t i = 0; i < points.size(); ++i) {
         int cluster = assignments[i];
-        double point_weight = (weights.empty()) ? 1.0 : weights[i];
-        center_weights[cluster] += point_weight;
+        double point_weight = weights.empty() ? 1.0 : weights[i];
+        cluster_weights[cluster] += point_weight;
     }
     
-    // Remove any empty clusters and update assignments
-    std::vector<Point<dim>> final_centers;
-    std::vector<double> final_weights;
-    std::vector<int> cluster_mapping(k, -1);
-    std::vector<int> final_assignments(n_points, -1);
-    
-    for (size_t j = 0; j < k; ++j) {
-        if (center_weights[j] > 0.0) {
-            cluster_mapping[j] = final_centers.size();
-            final_centers.push_back(centers[j]);
-            final_weights.push_back(center_weights[j]);
-        }
-    }
-    
-    // Update assignments to match the new cluster indices
-    for (size_t i = 0; i < n_points; ++i) {
-        final_assignments[i] = cluster_mapping[assignments[i]];
-    }
-    
-    return {final_centers, final_weights, final_assignments};
+    return {centers, cluster_weights, assignments};
 }
 
 template <int dim>
@@ -248,6 +136,9 @@ int PointCloudHierarchyManager::generateHierarchy(
     if (input_points.empty()) {
         throw std::runtime_error("Input point cloud is empty");
     }
+    
+    // Start timing the entire hierarchy generation
+    auto start_total = std::chrono::high_resolution_clock::now();
     
     // Create uniform weights if none provided
     std::vector<double> weights;
@@ -283,12 +174,20 @@ int PointCloudHierarchyManager::generateHierarchy(
     parent_indices_.resize(num_levels_ - 1);
     child_indices_.resize(num_levels_ - 1);
     
+    // Convert input points to std::array format
+    std::vector<std::array<double, dim>> points_array(input_points.size());
+    for (size_t i = 0; i < input_points.size(); ++i) {
+        for (int d = 0; d < dim; ++d) {
+            points_array[i][d] = input_points[i][d];
+        }
+    }
+    
     // Store all point clouds for each level
-    std::vector<std::vector<Point<dim>>> level_points_vec(num_levels_);
+    std::vector<std::vector<std::array<double, dim>>> level_points_vec(num_levels_);
     std::vector<std::vector<double>> level_weights_vec(num_levels_);
     
     // Level 0 is always the original point cloud
-    level_points_vec[0] = input_points;
+    level_points_vec[0] = points_array;
     level_weights_vec[0] = weights;
     level_point_counts_.push_back(input_points.size());
     
@@ -300,7 +199,7 @@ int PointCloudHierarchyManager::generateHierarchy(
         std::cout << "Level " << level << ": targeting " << points_for_level << " points" << std::endl;
         
         // Use k-means clustering to create coarser point cloud with parent-child tracking
-        std::vector<Point<dim>> coarse_points;
+        std::vector<std::array<double, dim>> coarse_points;
         std::vector<double> coarse_weights;
         std::vector<int> assignments;
         
@@ -370,7 +269,6 @@ int PointCloudHierarchyManager::generateHierarchy(
             
             // Write parent indices for points at current level
             for (size_t i = 0; i < parent_indices_[level].size(); ++i) {
-                // Each point should have exactly one parent in the coarser level
                 parents_out << parent_indices_[level][i].size();
                 for (const auto& parent_idx : parent_indices_[level][i]) {
                     parents_out << " " << parent_idx;
@@ -401,6 +299,12 @@ int PointCloudHierarchyManager::generateHierarchy(
         std::cout << "Saved level " << level << " point cloud and relationships to " << output_dir << std::endl;
     }
     
+    // Stop timing the entire hierarchy generation
+    auto stop_total = std::chrono::high_resolution_clock::now();
+    auto duration_total = std::chrono::duration_cast<std::chrono::seconds>(stop_total - start_total);
+    
+    std::cout << "Total hierarchy generation took " << duration_total.count() << " seconds" << std::endl;
+    
     return num_levels_;
 }
 
@@ -410,11 +314,12 @@ template int PointCloudHierarchyManager::generateHierarchy<2>(
 template int PointCloudHierarchyManager::generateHierarchy<3>(
     const std::vector<Point<3>>&, const std::vector<double>&, const std::string&);
 
-template std::tuple<std::vector<Point<2>>, std::vector<double>, std::vector<int>> 
+// Explicit template instantiations
+template std::tuple<std::vector<std::array<double, 2>>, std::vector<double>, std::vector<int>> 
 PointCloudHierarchyManager::kmeansClustering<2>(
-    const std::vector<Point<2>>&, const std::vector<double>&, size_t);
-template std::tuple<std::vector<Point<3>>, std::vector<double>, std::vector<int>> 
+    const std::vector<std::array<double, 2>>&, const std::vector<double>&, size_t);
+template std::tuple<std::vector<std::array<double, 3>>, std::vector<double>, std::vector<int>> 
 PointCloudHierarchyManager::kmeansClustering<3>(
-    const std::vector<Point<3>>&, const std::vector<double>&, size_t);
+    const std::vector<std::array<double, 3>>&, const std::vector<double>&, size_t);
 
 } // namespace PointCloudHierarchy

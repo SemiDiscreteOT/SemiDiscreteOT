@@ -12,7 +12,7 @@ subsection Convex2Convex
     end
 
     subsection target
-      set number of refinements = 3
+      set number of refinements = 4
       set grid generator function = hyper_ball
       set grid generator arguments = 0, 0, 0 : 1 : true
       set use tetrahedral mesh = true
@@ -53,7 +53,7 @@ subsection Convex2Convex
 
   subsection target_multilevel_parameters
     set min_points = 10          # Minimum points for coarsest level
-    set max_points = 8000         # Maximum points for finest level
+    set max_points = 50000         # Maximum points for finest level
     set hierarchy_output_dir = output/target_multilevel  # Output directory
     set output_prefix = output/target_multilevel/sot    # Where to save results
     set enabled = true           # Whether to use target multilevel approach
