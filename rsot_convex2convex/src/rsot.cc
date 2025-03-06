@@ -2097,6 +2097,10 @@ void Convex2Convex<dim>::run()
     {
         run_target_multilevel_sot();
     }
+    else if (selected_task == "combined_multilevel_sot")
+    {
+        run_combined_multilevel_sot();
+    }
     else if (selected_task == "exact_sot")
     {
         if constexpr (dim == 3) {
@@ -2750,6 +2754,325 @@ void Convex2Convex<dim>::load_hierarchy_data(const std::string& hierarchy_dir, i
     has_hierarchy_data_ = true;
 }
 
+template <int dim>
+void Convex2Convex<dim>::run_combined_multilevel_sot()
+{
+    Timer global_timer;
+    global_timer.start();
+    
+    pcout << "Starting combined source-target multilevel SOT computation..." << std::endl;
+    
+    // Get source mesh hierarchy files (sorted from coarsest to finest)
+    std::vector<std::string> source_mesh_files = get_mesh_hierarchy_files();
+    if (source_mesh_files.empty()) {
+        pcout << "No source mesh hierarchy found. Please run prepare_multilevel first." << std::endl;
+        return;
+    }
+
+    // Store original solver parameters
+    const unsigned int original_max_iterations = solver_params.max_iterations;
+    const double original_tolerance = solver_params.tolerance;
+    const double original_regularization = solver_params.regularization_param;
+    
+    // Create output directory
+    std::string eps_dir = "output/epsilon_" + std::to_string(original_regularization);
+    std::string combined_dir = "combined_multilevel";
+    fs::create_directories(eps_dir + "/" + combined_dir);
+
+    // Vector to store weights between source mesh levels
+    Vector<double> previous_source_weights;
+    Vector<double> final_weights;
+    
+    // Process each source mesh level from coarsest to finest
+    for (size_t source_level = 0; source_level < source_mesh_files.size(); ++source_level) {
+        pcout << "\n============================================" << std::endl;
+        pcout << "Processing source mesh level " << source_level 
+              << " (mesh: " << source_mesh_files[source_level] << ")" << std::endl;
+        pcout << "============================================" << std::endl;
+
+        // Create directory for this source level
+        std::string source_level_dir = eps_dir + "/" + combined_dir + "/source_level_" + std::to_string(source_level);
+        fs::create_directories(source_level_dir);
+
+        // Run target multilevel optimization for this source mesh level
+        Vector<double> source_level_weights;
+        if (source_level == 0) {
+            run_target_multilevel_for_source_level(source_mesh_files[source_level], source_level_weights);
+            previous_source_weights = source_level_weights;
+        }
+        else {
+            // Load the mesh for this level
+            load_mesh_at_level(source_mesh_files[source_level]);
+            setup_multilevel_finite_elements();  // Use specialized setup
+            
+        // Adjust solver parameters based on level
+        solver_params.max_iterations = original_max_iterations;
+        
+        // Adjust tolerance based on level:
+        // level 0 (coarsest): tolerance * 10^(num_levels-0)
+        // level 1: tolerance * 10^(num_levels-1)
+        // level 2 (finest): tolerance * 10^(num_levels-2)
+        double num_levels = static_cast<double>(source_mesh_files.size());
+
+            double tolerance_exponent = static_cast<double>(source_level) - num_levels + 1.0;
+            pcout << "tolerance_exponent: " << tolerance_exponent << std::endl;
+            solver_params.tolerance = original_tolerance * std::pow(2.0, tolerance_exponent);
+            
+            pcout << "\nSource level " << source_level << " solver parameters:" << std::endl;
+            pcout << "  Level: " << source_level << " of " << num_levels << std::endl;
+            pcout << "  Tolerance: " << solver_params.tolerance << std::endl;
+            pcout << "  Max iterations: " << solver_params.max_iterations << std::endl;
+            
+        // Initialize weights - either from previous level or zero
+        Vector<double> level_weights(target_points.size());
+        if (source_level > 0) {
+            level_weights = previous_source_weights;
+            pcout << "Initialized weights from previous level solution" << std::endl;
+        }
+        
+        // Set the current_weights pointer to point to our local weights vector
+        current_weights = &level_weights;
+        
+        // Run SOT at current level
+        try {
+            Timer level_timer;
+            level_timer.start();
+            
+            // Create a verbose solver control that displays iteration info
+            class VerboseSolverControl : public SolverControl
+            {
+            public:
+                VerboseSolverControl(unsigned int n, double tol, ConditionalOStream& pcout_)
+                    : SolverControl(n, tol), pcout(pcout_) {}
+
+                virtual State check(unsigned int step, double value) override
+                {
+                    pcout << "Iteration " << step
+                          << " - Function value: " << value
+                          << " - Relative residual: " << value / initial_value() << std::endl;
+                    return SolverControl::check(step, value);
+                }
+            private:
+                ConditionalOStream& pcout;
+            };
+
+            solver_control = std::make_unique<VerboseSolverControl>(
+                solver_params.max_iterations,
+                solver_params.tolerance,
+                pcout
+            );
+            
+            if (!solver_params.verbose_output) {
+                solver_control->log_history(false);
+                solver_control->log_result(false);
+            }
+            
+            SolverBFGS<Vector<double>> solver(*solver_control);
+            solver.solve(
+                [&](const Vector<double> &w, Vector<double> &grad) {
+                    return evaluate_sot_functional(w, grad);
+                },
+                level_weights
+            );
+            
+            level_timer.stop();
+            
+            // Save results for this level in the multilevel directory
+            save_results(level_weights, source_level_dir + "/weights");
+            
+            // Store current solution for next level and as final result
+            previous_source_weights = level_weights;
+            if (source_level == source_mesh_files.size() - 1) {
+                final_weights = level_weights;
+            }
+
+            reset_distance_threshold_cache();
+            
+            pcout << "\nSource level " << source_level << " summary:" << std::endl;
+            pcout << "  Status: Completed successfully" << std::endl;
+            pcout << "  Time taken: " << level_timer.wall_time() << " seconds" << std::endl;
+            pcout << "  Final number of iterations: " << solver_control->last_step() << std::endl;
+            pcout << "  Final function value: " << solver_control->last_value() << std::endl;
+            pcout << "  Results saved in: " << source_level_dir << std::endl;
+
+            
+        } catch (const std::exception& e) {
+            pcout << "Error at source level " << source_level << ": " << e.what() << std::endl;
+            if (source_level == 0) return;  // If coarsest level fails, abort
+            // Otherwise continue to next level with zero initialization
+        }
+        }
+
+
+        // Save results for this source level
+        save_results(source_level_weights, combined_dir + "/source_level_" + std::to_string(source_level) + "/weights");
+
+        // Store final weights if this is the finest level
+        if (source_level == source_mesh_files.size() - 1) {
+            final_weights = source_level_weights;
+        }
+
+        pcout << "Source level " << source_level << " completed" << std::endl;
+    }
+
+    // Save final results
+    save_results(final_weights, combined_dir + "/weights");
+
+    // Restore original parameters
+    solver_params.max_iterations = original_max_iterations;
+    solver_params.tolerance = original_tolerance;
+    solver_params.regularization_param = original_regularization;
+
+    global_timer.stop();
+    pcout << "\n============================================" << std::endl;
+    pcout << "Combined multilevel computation completed!" << std::endl;
+    pcout << "Total computation time: " << global_timer.wall_time() << " seconds" << std::endl;
+    pcout << "Final results saved in: " << eps_dir << "/" << combined_dir << std::endl;
+    pcout << "============================================" << std::endl;
+}
+
+template <int dim>
+void Convex2Convex<dim>::run_target_multilevel_for_source_level(
+    const std::string& source_mesh_file, Vector<double>& weights)
+{
+    pcout << "Running target multilevel optimization for source mesh: " << source_mesh_file << std::endl;
+
+    // Load the source mesh for this level
+    load_mesh_at_level(source_mesh_file);
+    setup_source_finite_elements();
+
+    // Get target point cloud hierarchy files
+    unsigned int num_levels = 0;
+    std::vector<std::pair<std::string, std::string>> hierarchy_files;
+    if(Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+        try {
+            hierarchy_files = get_target_hierarchy_files();
+            if (hierarchy_files.empty()) {
+                pcout << "No target point cloud hierarchy found. Please run prepare_target_multilevel first." << std::endl;
+                return;
+            }
+            num_levels = hierarchy_files.size();
+        } catch (const std::exception& e) {
+            pcout << "Error getting target hierarchy files: " << e.what() << std::endl;
+            return;
+        }
+    }
+    num_levels = Utilities::MPI::broadcast(mpi_communicator, num_levels, 0);
+
+    // Initialize hierarchy data if needed
+    if (!has_hierarchy_data_) {
+        pcout << "Initializing hierarchy data structure..." << std::endl;
+        load_hierarchy_data(target_multilevel_params.hierarchy_output_dir, -1);
+    }
+
+    if (!has_hierarchy_data_) {
+        pcout << "Failed to initialize hierarchy data. Cannot proceed." << std::endl;
+        return;
+    }
+
+    // Store original solver parameters
+    const unsigned int original_max_iterations = solver_params.max_iterations;
+    const double original_tolerance = solver_params.tolerance;
+    
+    // Vector to store current weights solution
+    Vector<double> level_weights;
+    
+    // Process each target level from coarsest to finest
+    for (size_t level = 0; level < num_levels; ++level) {
+        int level_number = 0;
+        std::string points_file;
+        std::string weights_file;
+        
+        if(Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+            const auto& hierarchy_file = hierarchy_files[level];
+            points_file = hierarchy_file.first;
+            weights_file = hierarchy_file.second;
+            
+            // Extract level number from filename
+            std::string level_num = points_file.substr(
+                points_file.find("level_") + 6, 
+                points_file.find("_points") - points_file.find("level_") - 6
+            );
+            level_number = std::stoi(level_num);
+        }
+        level_number = Utilities::MPI::broadcast(mpi_communicator, level_number, 0);
+
+        pcout << "\n----------------------------------------" << std::endl;
+        pcout << "Processing target point cloud level " << level_number << std::endl;
+        pcout << "----------------------------------------" << std::endl;
+
+        // Load hierarchy data for this level
+        load_hierarchy_data(target_multilevel_params.hierarchy_output_dir, level_number);
+        
+        // Load target points for this level
+        if (level > 0) {
+            target_points_coarse = target_points;
+            target_density_coarse = target_density;
+        }
+        load_target_points_at_level(points_file, weights_file);
+        
+
+        // If we have weights from previous level, use them as initial guess
+        if (level > 0) {
+            Vector<double> prev_level_weights = level_weights;
+            level_weights.reinit(target_points.size());
+            assign_weights_by_hierarchy(level_weights, level_number+1, level_number, prev_level_weights);
+        } else {
+            level_weights.reinit(target_points.size());
+        }
+
+        // Initialize RTree with target points and their indices
+        std::vector<IndexedPoint> indexed_points;
+        indexed_points.reserve(target_points.size());
+        for (std::size_t i = 0; i < target_points.size(); ++i) {
+            indexed_points.emplace_back(target_points[i], i);
+        }
+        target_points_rtree = RTree(indexed_points.begin(), indexed_points.end());
+
+        pcout << "RTree initialized for target points" << std::endl;
+        pcout << n_levels(target_points_rtree) << std::endl;
+
+        current_weights = &level_weights;
+
+        // Set up solver control
+        solver_control = std::make_unique<VerboseSolverControl>(
+            solver_params.max_iterations,
+            solver_params.tolerance,
+            pcout
+        );
+
+        // Run optimization for this level
+        Timer timer;
+        timer.start();
+        
+        try {
+            SolverBFGS<Vector<double>> solver(*solver_control);
+            current_weights = &level_weights;
+            
+            solver.solve(
+                [this](const Vector<double>& w, Vector<double>& grad) {
+                    return this->evaluate_sot_functional(w, grad);
+                },
+                level_weights
+            );
+            
+            timer.stop();
+            pcout << "Level " << level_number << " completed in " << timer.wall_time() << " seconds" << std::endl;
+            reset_distance_threshold_cache();
+            
+        } catch (SolverControl::NoConvergence &exc) {
+            pcout << "Warning: Optimization did not converge for level " << level_number << std::endl;
+            if (level == 0) return;  // If coarsest level fails, abort
+        }
+    }
+
+    // Return the final weights from the finest target level
+    weights = level_weights;
+
+    // Restore original parameters
+    solver_params.max_iterations = original_max_iterations;
+    solver_params.tolerance = original_tolerance;
+}
 
 
 template class Convex2Convex<2>;

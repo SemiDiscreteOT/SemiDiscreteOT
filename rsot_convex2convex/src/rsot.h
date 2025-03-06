@@ -145,6 +145,10 @@ private:
     void load_target_points_at_level(const std::string& points_file, const std::string& weights_file);
     std::vector<std::pair<std::string, std::string>> get_target_hierarchy_files() const;
 
+    // Combined multilevel method
+    void run_combined_multilevel_sot();
+    void run_target_multilevel_for_source_level(const std::string& source_mesh_file, Vector<double>& weights);
+
     template <int d = dim>
     typename std::enable_if<d == 3>::type run_exact_sot();  // Only available for dim=3
     void compute_power_diagram();
@@ -251,9 +255,9 @@ private:
     mutable bool is_caching_active{false};  // Whether caching is currently active
 
     // Softmax refinement members
-    std::vector<Point<dim>> target_points_fine;  // Fine level target points
+    std::vector<Point<dim>>& target_points_fine{target_points};  // Fine level target points
+    Vector<double>& target_density_coarse{target_density};  // Coarse level densities
     Vector<double> weights_fine;  // Fine level weights
-    Vector<double> target_density_coarse;  // Coarse level densities
     std::vector<Point<dim>> target_points_coarse;  // Coarse level target points
     const Vector<double>* weights_coarse{nullptr};  // Pointer to coarse level weights
     int current_level{0};  // Current level in hierarchy
