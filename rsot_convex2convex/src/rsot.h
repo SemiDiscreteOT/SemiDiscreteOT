@@ -37,11 +37,12 @@
 #include <atomic>
 #include <boost/geometry/index/rtree.hpp>
 
+#include "ParameterManager.h"
 
 using namespace dealii;
 
 template <int dim>
-class Convex2Convex : public ParameterAcceptor {
+class Convex2Convex {
 public:
     Convex2Convex(const MPI_Comm &mpi_communicator);
     void run();
@@ -57,6 +58,26 @@ private:
     const unsigned int n_mpi_processes;
     const unsigned int this_mpi_process;
     ConditionalOStream pcout;
+
+    // Parameter manager
+    ParameterManager param_manager;
+
+    // References to parameters for convenient access
+    ParameterManager::MeshParameters& source_params;
+    ParameterManager::MeshParameters& target_params;
+    ParameterManager::SolverParameters& solver_params;
+    ParameterManager::MultilevelParameters& multilevel_params;
+    ParameterManager::TargetMultilevelParameters& target_multilevel_params;
+    ParameterManager::PowerDiagramParameters& power_diagram_params;
+    ParameterManager::TransportMapParameters& transport_map_params;
+    std::string& selected_task;
+    std::string& io_coding;
+
+    // Mesh and DoF handler members
+    parallel::fullydistributed::Triangulation<dim> source_mesh;
+    Triangulation<dim> target_mesh;
+    DoFHandler<dim> dof_handler_source;
+    DoFHandler<dim> dof_handler_target;
 
     // Scratch data for parallel assembly
     struct ScratchData {
@@ -115,27 +136,9 @@ private:
     void load_meshes(); 
     void run_sot();
 
-    // Multilevel parameters for source mesh
-    struct MultilevelParameters {
-        int min_vertices = 1000;
-        int max_vertices = 10000;
-        std::string hierarchy_output_dir = "output/multilevel/meshes";
-        std::string output_prefix = "output/multilevel/sot";  // Where to save multilevel results
-    } multilevel_params;
-    
-    // Multilevel parameters for target point cloud
-    struct TargetMultilevelParameters {
-        int min_points = 100;
-        int max_points = 1000;
-        std::string hierarchy_output_dir = "output/target_multilevel";
-        std::string output_prefix = "output/target_multilevel/sot";  // Where to save multilevel results
-        bool enabled = false;  // Whether to use target multilevel approach
-        bool use_softmax_weight_transfer = true;  // Whether to use softmax-based weight transfer
-    } target_multilevel_params;
-
     // Source mesh multilevel methods
-    void prepare_multilevel();
-    void run_multilevel_sot();
+    void prepare_source_multilevel();
+    void run_source_multilevel_sot();
     void load_mesh_at_level(const std::string& mesh_file);
     std::vector<std::string> get_mesh_hierarchy_files() const;
     
@@ -154,23 +157,6 @@ private:
     void compute_power_diagram();
     void compute_transport_map();  // New function
 
-    std::string selected_task;
-    std::string io_coding = "txt";
-
-    struct MeshParameters {
-        unsigned int n_refinements = 0;
-        std::string grid_generator_function;
-        std::string grid_generator_arguments;
-        bool use_tetrahedral_mesh = false;
-    };
-
-    MeshParameters source_params;
-    MeshParameters target_params;
-
-    parallel::fullydistributed::Triangulation<dim> source_mesh;
-    Triangulation<dim> target_mesh;  // Target mesh stays serial
-    DoFHandler<dim> dof_handler_source;
-    DoFHandler<dim> dof_handler_target;
     std::unique_ptr<FiniteElement<dim>> fe_system;
     std::unique_ptr<Mapping<dim>> mapping;
     LinearAlgebra::distributed::Vector<double> source_density;
@@ -178,32 +164,6 @@ private:
     std::vector<Point<dim>> source_points;
     Vector<double> target_density;
     std::unique_ptr<SolverControl> solver_control;
-    struct SolverParameters {
-        unsigned int max_iterations = 1000;
-        double tolerance = 1e-8;
-        double regularization_param = 1e-3;
-        double epsilon = 1e-8;  // Parameter for truncation criterion
-        double tau = 1e-8;  // Truncation error tolerance for integral radius bound
-        bool verbose_output = true;
-        std::string solver_type = "BFGS";
-        unsigned int quadrature_order = 3;
-        unsigned int nb_points = 1000;
-        unsigned int number_of_threads = 0;  // 0 means use all available cores
-        bool use_epsilon_scaling = false;  // Whether to use epsilon scaling strategy
-        double epsilon_scaling_factor = 2.0;  // Factor by which to reduce epsilon in each step
-        unsigned int epsilon_scaling_steps = 5;  // Number of epsilon scaling steps
-        bool use_caching = false;  // Whether to enable caching of computations
-    } solver_params;
-
-    struct PowerDiagramParameters {
-        std::string implementation = "dealii";  // Options: dealii/geogram
-    } power_diagram_params;
-
-    struct TransportMapParameters {
-        unsigned int n_neighbors = 10;
-        double kernel_width = 0.1;
-        std::string interpolation_type = "linear";
-    } transport_map_params;
 
     // Template version of generate_mesh to handle both types of triangulation
     template <typename TriangulationType>
@@ -224,11 +184,6 @@ private:
     double evaluate_sot_functional(const Vector<double>& weights, Vector<double>& gradient);
     void save_results(const Vector<double>& weights, const std::string& filename);
     
-    // Map weights from one target point set to another (for multilevel transfer)
-    // void interpolate_weights(const std::vector<Point<dim>>& source_points,
-    //                         const Vector<double>& source_weights,
-    //                         const std::vector<Point<dim>>& target_points,
-    //                         Vector<double>& target_weights);
 
     // Cache for local assembly computations
     struct CellCache {

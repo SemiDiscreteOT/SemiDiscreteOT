@@ -31,189 +31,34 @@ private:
 
 template <int dim>
 Convex2Convex<dim>::Convex2Convex(const MPI_Comm &comm)
-    : ParameterAcceptor("Convex2Convex"),
-      mpi_communicator(comm),
-      n_mpi_processes(Utilities::MPI::n_mpi_processes(comm)),
-      this_mpi_process(Utilities::MPI::this_mpi_process(comm)),
-      pcout(std::cout, Utilities::MPI::this_mpi_process(comm) == 0),
-      source_mesh(comm),  // fullydistributed triangulation only takes MPI comm
-      target_mesh(),  // Regular triangulation without MPI
-      dof_handler_source(source_mesh),
-      dof_handler_target(target_mesh)
+    : mpi_communicator(comm)
+    , n_mpi_processes(Utilities::MPI::n_mpi_processes(comm))
+    , this_mpi_process(Utilities::MPI::this_mpi_process(comm))
+    , pcout(std::cout, Utilities::MPI::this_mpi_process(comm) == 0)
+    , param_manager(comm)  // Initialize parameter manager
+    , source_params(param_manager.source_params)
+    , target_params(param_manager.target_params)
+    , solver_params(param_manager.solver_params)
+    , multilevel_params(param_manager.multilevel_params)
+    , target_multilevel_params(param_manager.target_multilevel_params)
+    , power_diagram_params(param_manager.power_diagram_params)
+    , transport_map_params(param_manager.transport_map_params)
+    , selected_task(param_manager.selected_task)
+    , io_coding(param_manager.io_coding)
+    , source_mesh(comm)
+    , target_mesh()
+    , dof_handler_source(source_mesh)
+    , dof_handler_target(target_mesh)
 {
     // Initialize with default hexahedral elements
     fe_system = std::make_unique<FE_Q<dim>>(1);
     mapping = std::make_unique<MappingQ1<dim>>();
-
-    add_parameter("selected_task", selected_task);
-    add_parameter("io_coding", io_coding,
-                 "File format for I/O operations (txt/bin)");
-
-    enter_subsection("mesh_generation");
-    {
-        enter_subsection("source");
-        {
-            add_parameter("number of refinements", source_params.n_refinements);
-            add_parameter("grid generator function", source_params.grid_generator_function);
-            add_parameter("grid generator arguments", source_params.grid_generator_arguments);
-            add_parameter("use tetrahedral mesh", source_params.use_tetrahedral_mesh,
-                         "Whether to convert the mesh to tetrahedral cells (only for 3D)");
-        }
-        leave_subsection();
-
-        enter_subsection("target");
-        {
-            add_parameter("number of refinements", target_params.n_refinements);
-            add_parameter("grid generator function", target_params.grid_generator_function);
-            add_parameter("grid generator arguments", target_params.grid_generator_arguments);
-            add_parameter("use tetrahedral mesh", target_params.use_tetrahedral_mesh,
-                         "Whether to convert the mesh to tetrahedral cells (only for 3D)");
-        }
-        leave_subsection();
-    }
-    leave_subsection();
-    
-    // Add target multilevel parameters
-    enter_subsection("target_multilevel_parameters");
-    {
-        add_parameter("min_points", target_multilevel_params.min_points,
-                     "Minimum number of points for the coarsest level");
-        add_parameter("max_points", target_multilevel_params.max_points,
-                     "Maximum number of points for the finest level");
-        add_parameter("hierarchy_output_dir", target_multilevel_params.hierarchy_output_dir,
-                     "Directory to store target point cloud hierarchy");
-        add_parameter("output_prefix", target_multilevel_params.output_prefix,
-                     "Prefix for target multilevel outputs");
-        add_parameter("enabled", target_multilevel_params.enabled,
-                     "Whether to use target multilevel approach");
-        add_parameter("use_softmax_weight_transfer", target_multilevel_params.use_softmax_weight_transfer,
-                     "Whether to use softmax-based weight transfer");
-    }
-    leave_subsection();
-
-    enter_subsection("rsot_solver");
-    {
-        add_parameter("max_iterations",
-                     solver_params.max_iterations,
-                     "Maximum number of iterations for the optimization solver");
-
-        add_parameter("tolerance",
-                     solver_params.tolerance,
-                     "Convergence tolerance for the optimization solver");
-
-        add_parameter("regularization_parameter",
-                     solver_params.regularization_param,
-                     "Entropy regularization parameter (lambda)");
-
-        add_parameter("epsilon",
-                     solver_params.epsilon,
-                     "Truncation criterion for the kernel evaluation (smaller values include more points)");
-
-        add_parameter("tau",
-                     solver_params.tau,
-                     "Truncation error tolerance for integral radius bound");
-
-        add_parameter("verbose_output",
-                     solver_params.verbose_output,
-                     "Enable detailed solver output");
-
-        add_parameter("solver_type",
-                     solver_params.solver_type,
-                     "Type of optimization solver (BFGS)");
-
-        add_parameter("quadrature_order",
-                     solver_params.quadrature_order,
-                     "Order of quadrature formula for numerical integration");
-
-        add_parameter("number_of_threads",
-                     solver_params.number_of_threads,
-                     "Number of threads to use for parallel SOT");
-
-        add_parameter("use_epsilon_scaling",
-                     solver_params.use_epsilon_scaling,
-                     "Enable epsilon scaling strategy");
-
-        add_parameter("epsilon_scaling_factor",
-                     solver_params.epsilon_scaling_factor,
-                     "Factor by which to reduce epsilon in each scaling step");
-
-        add_parameter("epsilon_scaling_steps",
-                     solver_params.epsilon_scaling_steps,
-                     "Number of epsilon scaling steps");
-
-        add_parameter("use_caching",
-                     solver_params.use_caching,
-                     "Enable distance threshold caching");
-    }
-    leave_subsection();
-
-    enter_subsection("power_diagram_parameters");
-    {
-        add_parameter("implementation",
-                     power_diagram_params.implementation,
-                     "Implementation to use for power diagram computation (dealii/geogram)");
-    }
-    leave_subsection();
-
-    enter_subsection("transport_map_parameters");
-    {
-        add_parameter("n_neighbors",
-                     transport_map_params.n_neighbors,
-                     "Number of neighbors for local methods");
-        add_parameter("kernel_width",
-                     transport_map_params.kernel_width,
-                     "Kernel width for smooth approximations");
-        add_parameter("interpolation_type",
-                     transport_map_params.interpolation_type,
-                     "Type of interpolation");
-    }
-    leave_subsection();
-
-    enter_subsection("multilevel_parameters");
-    {
-        add_parameter("min_vertices",
-                     multilevel_params.min_vertices,
-                     "Minimum number of vertices for the coarsest level");
-        
-        add_parameter("max_vertices",
-                     multilevel_params.max_vertices,
-                     "Maximum number of vertices for level 1 mesh");
-        
-        add_parameter("hierarchy_output_dir",
-                     multilevel_params.hierarchy_output_dir,
-                     "Directory to store the mesh hierarchy");
-
-        add_parameter("output_prefix",
-                     multilevel_params.output_prefix,
-                     "Directory prefix for multilevel SOT results");
-    }
-    leave_subsection();
 }
 
 template <int dim>
 void Convex2Convex<dim>::print_parameters()
 {
-    pcout << "Selected Task: " << selected_task << std::endl;
-    pcout << "I/O Coding: " << io_coding << std::endl;
-
-    pcout << "Source Mesh Parameters:" << std::endl;
-    pcout << "  Grid Generator Function: " << source_params.grid_generator_function << std::endl;
-    pcout << "  Grid Generator Arguments: " << source_params.grid_generator_arguments << std::endl;
-    pcout << "  Number of Refinements: " << source_params.n_refinements << std::endl;
-
-    pcout << "Target Mesh Parameters:" << std::endl;
-    pcout << "  Grid Generator Function: " << target_params.grid_generator_function << std::endl;
-    pcout << "  Grid Generator Arguments: " << target_params.grid_generator_arguments << std::endl;
-    pcout << "  Number of Refinements: " << target_params.n_refinements << std::endl;
-
-    pcout << "RSOT Solver Parameters:" << std::endl;
-    pcout << "  Max Iterations: " << solver_params.max_iterations << std::endl;
-    pcout << "  Tolerance: " << solver_params.tolerance << std::endl;
-    pcout << "  Regularization Parameter (λ): " << solver_params.regularization_param << std::endl;
-    pcout << "  Verbose Output: " << (solver_params.verbose_output ? "Yes" : "No") << std::endl;
-    pcout << "  Solver Type: " << solver_params.solver_type << std::endl;
-    pcout << "  Quadrature Order: " << solver_params.quadrature_order << std::endl;
-    pcout << "  Number of Threads: " << solver_params.number_of_threads << std::endl;
+    param_manager.print_parameters();
 }
 
 template <int dim>
@@ -1355,7 +1200,7 @@ void Convex2Convex<dim>::run_sot()
 
 
 template <int dim>
-void Convex2Convex<dim>::prepare_multilevel()
+void Convex2Convex<dim>::prepare_source_multilevel()
 {
     pcout << "Preparing multilevel mesh hierarchy..." << std::endl;
 
@@ -1536,7 +1381,7 @@ void Convex2Convex<dim>::setup_multilevel_finite_elements()
 
 
 template <int dim>
-void Convex2Convex<dim>::run_multilevel_sot()
+void Convex2Convex<dim>::run_source_multilevel_sot()
 {
     pcout << "Starting multilevel SOT computation..." << std::endl;
     
@@ -2057,8 +1902,6 @@ template <int dim>
 void Convex2Convex<dim>::reset_distance_threshold_cache() const
 {
     is_caching_active = false;
-    // current_distance_threshold = 0.0;
-    // effective_distance_threshold = 0.0;
     cell_caches.clear();
 }
 
@@ -2080,13 +1923,13 @@ void Convex2Convex<dim>::run()
         load_meshes();
         run_sot();
     }
-    else if (selected_task == "prepare_multilevel")
+    else if (selected_task == "prepare_source_multilevel")
     {
-        prepare_multilevel();
+        prepare_source_multilevel();
     }
-    else if (selected_task == "multilevel_sot")
+    else if (selected_task == "source_multilevel_sot")
     {
-        run_multilevel_sot();
+        run_source_multilevel_sot();
     }
     else if (selected_task == "prepare_target_multilevel")
     {

@@ -2,6 +2,7 @@ SET(TARGET "rsot.exe")
 SET(TARGET_SRC
   src/main.cc
   src/rsot.cc
+  src/ParameterManager.cc
   src/PowerDiagramDealII.cc
   src/PowerDiagramGeogram.cc
   src/ExactSot.cc
