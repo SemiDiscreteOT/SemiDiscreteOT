@@ -1,4 +1,4 @@
-#include "rsot.h"
+#include "SemidiscreteOT.h"
 #include <deal.II/base/mpi.h>
 #include <deal.II/base/utilities.h>
 #include <deal.II/base/conditional_ostream.h>
@@ -12,7 +12,7 @@ int main(int argc, char* argv[]) {
         // Create conditional output stream
         dealii::ConditionalOStream pcout(std::cout, this_mpi_process == 0);
         
-        Convex2Convex<3> convex2convex(mpi_communicator);
+        SemidiscreteOT<3> semidiscrete_ot(mpi_communicator);
         
         // Use command line argument if provided, otherwise use default
         std::string param_file = (argc > 1) ? argv[1] : "parameters.prm";
@@ -20,7 +20,7 @@ int main(int argc, char* argv[]) {
         pcout << "Using parameter file: " << param_file << std::endl;
         dealii::ParameterAcceptor::initialize(param_file);
         
-        convex2convex.run();
+        semidiscrete_ot.run();
     }
     catch(std::exception& exc) {
         std::cerr << exc.what() << std::endl;

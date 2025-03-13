@@ -1,6 +1,6 @@
-subsection Convex2Convex
+subsection ParameterManager
 
-  set selected_task = prepare_target_multilevel    # Options: mesh_generation, load_meshes, sot, exact_sot, power_diagram, map, prepare_multilevel, multilevel_sot, target_multilevel_sot, prepare_target_multilevel, combined_multilevel_sot
+  set selected_task =  sot    # Options: mesh_generation, load_meshes, sot, exact_sot, power_diagram, map, prepare_source_multilevel, prepare_target_multilevel, multilevel_sot
   set io_coding = txt
 
   subsection mesh_generation
@@ -12,11 +12,29 @@ subsection Convex2Convex
     end
 
     subsection target
-      set number of refinements = 4
+      set number of refinements = 3
       set grid generator function = hyper_ball
       set grid generator arguments = 0, 0, 0 : 1 : true
       set use tetrahedral mesh = true
     end
+  end
+
+  subsection multilevel_parameters
+    # Source mesh hierarchy parameters
+    set source_enabled = true            # Whether to use source multilevel approach
+    set source_min_vertices = 100      # Minimum vertices for coarsest source level
+    set source_max_vertices = 1000     # Maximum vertices for finest source level
+    set source_hierarchy_dir = output/multilevel/meshes  # Source hierarchy directory
+
+    # Target point cloud hierarchy parameters
+    set target_enabled = false          # Whether to use target multilevel approach
+    set target_min_points = 100        # Minimum points for coarsest target level
+    set target_max_points = 2000       # Maximum points for finest target level
+    set target_hierarchy_dir = output/target_multilevel  # Target hierarchy directory
+    set use_softmax_weight_transfer = true  # Use softmax for weight transfer
+
+    # Common parameters
+    set output_prefix = output/multilevel/sot  # Output directory prefix
   end
 
   subsection rsot_solver
@@ -25,14 +43,15 @@ subsection Convex2Convex
     set regularization_parameter = 1e-2
     set epsilon = 1e-20
     set tau = 1e-4  # Truncation error tolerance for integral radius bound
-    set verbose_output = true
+    set verbose_output = false
     set solver_type = BFGS
     set quadrature_order = 3
     set number_of_threads = 0
     set use_epsilon_scaling = false
     set epsilon_scaling_factor = 10
-    set epsilon_scaling_steps = 2
-    set use_caching = false
+    set epsilon_scaling_steps = 3
+    set use_caching = true
+    # set max_cache_size_mb = 4000
   end
 
   subsection power_diagram_parameters
@@ -45,19 +64,5 @@ subsection Convex2Convex
     set interpolation_type = linear # Type of interpolation
   end
 
-  subsection multilevel_parameters
-    set min_vertices = 100          # Minimum vertices for coarsest level
-    set max_vertices = 1000         # Maximum vertices for finest level
-    set hierarchy_output_dir = output/multilevel/meshes  # Output directory
-  end
-
-  subsection target_multilevel_parameters
-    set min_points = 10          # Minimum points for coarsest level
-    set max_points = 50000         # Maximum points for finest level
-    set hierarchy_output_dir = output/target_multilevel  # Output directory
-    set output_prefix = output/target_multilevel/sot    # Where to save results
-    set enabled = true           # Whether to use target multilevel approach
-    set use_softmax_weight_transfer = true
-  end
 
 end

@@ -1,7 +1,7 @@
 SET(TARGET "rsot.exe")
 SET(TARGET_SRC
   src/main.cc
-  src/rsot.cc
+  src/SemidiscreteOT.cc
   src/ParameterManager.cc
   src/PowerDiagramDealII.cc
   src/PowerDiagramGeogram.cc
@@ -9,6 +9,9 @@ SET(TARGET_SRC
   src/OptimalTransportPlan.cc
   src/MeshHierarchy.cc
   src/PointCloudHierarchy.cc
+  src/SotSolver.cc
+  src/SoftmaxRefinement.cc
+  src/EpsilonScalingHandler.cc
 )
 
 SET(GEOGRAM_DIR "/scratch/mkhamlic/lib/geogram")

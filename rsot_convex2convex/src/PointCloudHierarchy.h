@@ -7,8 +7,8 @@
 #include <string>
 #include <memory>
 #include <unordered_map>
-#include "clustering/include/dkm.hpp"
-#include "clustering/include/dkm_parallel.hpp"
+#include "dkm.hpp"
+#include "dkm_parallel.hpp"
 #include <omp.h>
 
 using namespace dealii;
@@ -87,11 +87,11 @@ private:
     int max_points_;
     int num_levels_;
     std::vector<int> level_point_counts_;
-    
+
     // parent_indices_[L] stores the relationships between level L and level L+1
     // For each point at level L, parent_indices_[L][point_idx] contains indices of its parents at level L+1
     std::vector<std::vector<std::vector<size_t>>> parent_indices_;
-    
+
     // child_indices_[L] stores the relationships between level L+1 and level L
     // For each point at level L+1, child_indices_[L][point_idx] contains indices of its children at level L
     std::vector<std::vector<std::vector<size_t>>> child_indices_;
@@ -112,7 +112,7 @@ private:
      *         - assignments (mapping of each child to its parent cluster)
      */
     template <int dim>
-    std::tuple<std::vector<std::array<double, dim>>, std::vector<double>, std::vector<int>> 
+    std::tuple<std::vector<std::array<double, dim>>, std::vector<double>, std::vector<int>>
     kmeansClustering(
         const std::vector<std::array<double, dim>>& points,
         const std::vector<double>& weights,
