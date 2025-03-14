@@ -121,11 +121,6 @@ private:
     std::vector<Point<dim>> source_points;
     Vector<double> target_density;
 
-    // Hierarchy-related members
-    std::vector<std::vector<std::vector<size_t>>> child_indices_;
-    bool has_hierarchy_data_{false};
-    void load_hierarchy_data(const std::string& hierarchy_dir, int specific_level = -1);
-
     // Multilevel computation state
     std::vector<Point<dim>> target_points_coarse;  // Coarse level target points
     Vector<double> target_density_coarse;          // Coarse level densities

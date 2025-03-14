@@ -67,3 +67,4 @@ output/
 .cursorignore
 compile_commands.json
 .cursorrules
+.CLAUDE.md

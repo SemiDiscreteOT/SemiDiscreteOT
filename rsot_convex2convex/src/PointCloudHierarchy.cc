@@ -9,8 +9,6 @@
 #include <random>
 #include <numeric>
 #include <limits>
-#include "dkm.hpp"
-#include "dkm_parallel.hpp"
 #include <chrono>
 
 namespace fs = std::filesystem;
@@ -42,20 +40,6 @@ int PointCloudHierarchyManager::getPointCount(int level) const {
     return level_point_counts_[level];
 }
 
-const std::vector<std::vector<size_t>>& PointCloudHierarchyManager::getParentIndices(int level) const {
-    if (level <= 0 || level >= num_levels_) {
-        throw std::out_of_range("Level index out of range for parent indices");
-    }
-    return parent_indices_[level-1];
-}
-
-const std::vector<std::vector<size_t>>& PointCloudHierarchyManager::getChildIndices(int level) const {
-    if (level < 0 || level >= num_levels_-1) {
-        throw std::out_of_range("Level index out of range for child indices");
-    }
-    return child_indices_[level];
-}
-
 void PointCloudHierarchyManager::ensureDirectoryExists(const std::string& path) const {
     if (!fs::exists(path)) {
         fs::create_directories(path);
@@ -67,63 +51,68 @@ int PointCloudHierarchyManager::getPointsForLevel(int base_points, int level) co
     if (level == 0) {
         return base_points;
     }
-    // Level 1 starts with max_points (if smaller than base_points)
-    if (level == 1) {
-        return std::min(base_points, max_points_);
-    }
-    // For subsequent levels, use a reduction factor of 4 based on level 1's size
-    int level1_points = std::min(base_points, max_points_);
-    int points = static_cast<int>(level1_points / std::pow(4.0, level - 1));
+
+    // Calculate a reduction factor based on the number of levels and min_points
+    // This ensures that each level has a different number of points
+    double reduction_factor = std::pow((double)min_points_ / base_points, 1.0 / (num_levels_ - 1));
+
+    // Calculate points for this level using the reduction factor
+    int points = static_cast<int>(base_points * std::pow(reduction_factor, level));
+
+    // Ensure we don't go below min_points
     return std::max(points, min_points_);
 }
 
 template <int dim>
-std::tuple<std::vector<std::array<double, dim>>, std::vector<double>, std::vector<int>> 
-PointCloudHierarchyManager::kmeansClustering(
+std::tuple<std::vector<std::array<double, dim>>, std::vector<double>, std::vector<size_t>>
+PointCloudHierarchyManager::randomSampling(
     const std::vector<std::array<double, dim>>& points,
     const std::vector<double>& weights,
-    size_t k) {
+    size_t num_samples,
+    unsigned int seed) {
 
     const size_t n_points = points.size();
-    std::cout << "Using " << omp_get_max_threads() << " OpenMP threads" << std::endl;
-    
-    if (points.size() <= k) {
-        // If fewer points than clusters, return original points
-        std::vector<int> assignments(points.size());
-        std::iota(assignments.begin(), assignments.end(), 0); // Each point is its own cluster
-        return {points, weights, assignments};
-    }
-    
-    // Set up clustering parameters
-    dkm::clustering_parameters<double> params(k);
 
-    
-    // Start timing
-    auto start = std::chrono::high_resolution_clock::now();
-    
-    // Run parallel k-means clustering
-    std::vector<std::array<double, dim>> centers;
-    std::vector<uint32_t> cluster_assignments;
-    std::tie(centers, cluster_assignments) = dkm::kmeans_lloyd_parallel(points, k);
-    
-    // Stop timing
-    auto stop = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::seconds>(stop - start);
-    
-    std::cout << "  K-means clustering took " << duration.count() << " seconds" << std::endl;
-    
-    // Convert cluster assignments to int
-    std::vector<int> assignments(cluster_assignments.begin(), cluster_assignments.end());
-    
-    // Compute weights for each cluster
-    std::vector<double> cluster_weights(k, 0.0);
-    for (size_t i = 0; i < points.size(); ++i) {
-        int cluster = assignments[i];
-        double point_weight = weights.empty() ? 1.0 : weights[i];
-        cluster_weights[cluster] += point_weight;
+    // If we need more samples than available points, return all points
+    if (n_points <= num_samples) {
+        std::vector<size_t> indices(n_points);
+        std::iota(indices.begin(), indices.end(), 0);
+        return {points, weights, indices};
     }
-    
-    return {centers, cluster_weights, assignments};
+
+    // Create a vector of indices and shuffle it
+    std::vector<size_t> indices(n_points);
+    std::iota(indices.begin(), indices.end(), 0);
+
+    std::mt19937 gen(seed);
+    std::shuffle(indices.begin(), indices.end(), gen);
+
+    // Take the first num_samples indices
+    indices.resize(num_samples);
+
+    // Extract the sampled points and weights
+    std::vector<std::array<double, dim>> sampled_points(num_samples);
+    std::vector<double> sampled_weights(num_samples);
+
+    for (size_t i = 0; i < num_samples; ++i) {
+        sampled_points[i] = points[indices[i]];
+        sampled_weights[i] = weights.empty() ? 1.0 : weights[indices[i]];
+    }
+
+    // Normalize the weights to sum to 1.0
+    double weight_sum = std::accumulate(sampled_weights.begin(), sampled_weights.end(), 0.0);
+    if (weight_sum > 0.0) {
+        for (auto& w : sampled_weights) {
+            w /= weight_sum;
+        }
+    } else {
+        // If all weights are zero, use uniform weights
+        for (auto& w : sampled_weights) {
+            w = 1.0 / num_samples;
+        }
+    }
+
+    return {sampled_points, sampled_weights, indices};
 }
 
 template <int dim>
@@ -131,15 +120,15 @@ int PointCloudHierarchyManager::generateHierarchy(
     const std::vector<Point<dim>>& input_points,
     const std::vector<double>& input_weights,
     const std::string& output_dir) {
-    
+
     // Validate inputs
     if (input_points.empty()) {
         throw std::runtime_error("Input point cloud is empty");
     }
-    
+
     // Start timing the entire hierarchy generation
     auto start_total = std::chrono::high_resolution_clock::now();
-    
+
     // Create uniform weights if none provided
     std::vector<double> weights;
     if (input_weights.empty()) {
@@ -150,30 +139,36 @@ int PointCloudHierarchyManager::generateHierarchy(
         }
         weights = input_weights;
     }
-    
+
     // Create output directories
     ensureDirectoryExists(output_dir);
-    
-    // Calculate number of levels
+
+    // Calculate number of levels based on min_points and total_points
     const int total_points = input_points.size();
-    const int level1_points = std::min(total_points, max_points_);
-    
-    num_levels_ = std::min(5, static_cast<int>(std::log(level1_points / min_points_) / std::log(4.0)) + 2);
-    num_levels_ = std::max(1, num_levels_); // At least one level
-    
+
+    // Adjust max_points if necessary to ensure level 1 is different from level 0
+    if (total_points <= max_points_) {
+        // If original point cloud is smaller than max_points, adjust max_points
+        // to be a fraction of the original size to ensure level 1 is different
+        max_points_ = static_cast<int>(total_points * 0.75);
+        // Ensure max_points is at least min_points + 1
+        max_points_ = std::max(max_points_, min_points_ + 1);
+    }
+
+    // Calculate number of levels
+    // We want to ensure a smooth reduction from total_points to min_points
+    double log_ratio = std::log((double)min_points_ / (double)max_points_);
+    num_levels_ = log_ratio >= 0 ? 1 : static_cast<int>(std::ceil(std::log((double)min_points_ / (double)max_points_) / std::log(0.5))) + 2;
+    num_levels_ = std::min(num_levels_, 5); // Cap at 5 levels
+    num_levels_ = std::max(num_levels_, 2); // At least 2 levels
+
     std::cout << "Initial point cloud has " << total_points << " points" << std::endl;
-    std::cout << "Level 1 will have maximum of " << max_points_ << " points" << std::endl;
+    std::cout << "Using max_points = " << max_points_ << " for level 1" << std::endl;
     std::cout << "Creating " << num_levels_ << " levels of point clouds" << std::endl;
-    
-    // Reset level point counts and parent-child relationships
+
+    // Reset level point counts
     level_point_counts_.clear();
-    parent_indices_.clear();
-    child_indices_.clear();
-    
-    // Resize parent and child indices containers
-    parent_indices_.resize(num_levels_ - 1);
-    child_indices_.resize(num_levels_ - 1);
-    
+
     // Convert input points to std::array format
     std::vector<std::array<double, dim>> points_array(input_points.size());
     for (size_t i = 0; i < input_points.size(); ++i) {
@@ -181,130 +176,94 @@ int PointCloudHierarchyManager::generateHierarchy(
             points_array[i][d] = input_points[i][d];
         }
     }
-    
+
     // Store all point clouds for each level
     std::vector<std::vector<std::array<double, dim>>> level_points_vec(num_levels_);
     std::vector<std::vector<double>> level_weights_vec(num_levels_);
-    
+    std::vector<std::vector<size_t>> level_indices_vec(num_levels_);
+
     // Level 0 is always the original point cloud
     level_points_vec[0] = points_array;
     level_weights_vec[0] = weights;
     level_point_counts_.push_back(input_points.size());
-    
+
     std::cout << "Level 0: using original point cloud with " << level_points_vec[0].size() << " points" << std::endl;
-    
-    // Generate coarser levels
+
+    // Generate coarser levels by random sampling from the finest level
     for (int level = 1; level < num_levels_; ++level) {
         int points_for_level = getPointsForLevel(total_points, level);
-        std::cout << "Level " << level << ": targeting " << points_for_level << " points" << std::endl;
-        
-        // Use k-means clustering to create coarser point cloud with parent-child tracking
-        std::vector<std::array<double, dim>> coarse_points;
-        std::vector<double> coarse_weights;
-        std::vector<int> assignments;
-        
-        std::tie(coarse_points, coarse_weights, assignments) = kmeansClustering<dim>(
-            level_points_vec[level-1], level_weights_vec[level-1], points_for_level);
-        
-        level_points_vec[level] = coarse_points;
-        level_weights_vec[level] = coarse_weights;
-        level_point_counts_.push_back(coarse_points.size());
-        
-        std::cout << "  Generated " << coarse_points.size() << " points after clustering" << std::endl;
-        
-        // Build parent-child relationships
-        const size_t n_fine_points = level_points_vec[level-1].size();
-        const size_t n_coarse_points = coarse_points.size();
-        
-        // Initialize parent indices for previous (finer) level
-        parent_indices_[level-1].resize(n_fine_points);
-        
-        // Initialize child indices for this (coarser) level
-        child_indices_[level-1].resize(n_coarse_points);
-        
-        // Populate parent-child relationships
-        for (size_t i = 0; i < n_fine_points; ++i) {
-            int coarse_point_idx = assignments[i];
-            if (coarse_point_idx >= 0 && coarse_point_idx < static_cast<int>(n_coarse_points)) {
-                // Add the coarse point as parent of this fine point
-                parent_indices_[level-1][i].push_back(coarse_point_idx);
-                
-                // Add this fine point as child of the coarse point
-                child_indices_[level-1][coarse_point_idx].push_back(i);
-            }
+
+        // Ensure each level has a different number of points
+        if (level > 1 && points_for_level >= level_point_counts_[level-1]) {
+            points_for_level = static_cast<int>(level_point_counts_[level-1] * 0.5);
+            points_for_level = std::max(points_for_level, min_points_);
         }
+
+        std::cout << "Level " << level << ": targeting " << points_for_level << " points" << std::endl;
+
+        // Use random sampling to create coarser point cloud
+        std::vector<std::array<double, dim>> sampled_points;
+        std::vector<double> sampled_weights;
+        std::vector<size_t> sampled_indices;
+
+        // Use a different seed for each level for better randomness
+        unsigned int seed = 42;
+
+        std::tie(sampled_points, sampled_weights, sampled_indices) = randomSampling<dim>(
+            points_array, weights, points_for_level, seed);
+
+        level_points_vec[level] = sampled_points;
+        level_weights_vec[level] = sampled_weights;
+        level_indices_vec[level] = sampled_indices;
+        level_point_counts_.push_back(sampled_points.size());
+
+        std::cout << "  Generated " << sampled_points.size() << " points by random sampling" << std::endl;
     }
-    
-    // Save the point clouds and parent-child relationships for each level
+
+    // Save the point clouds for each level
     for (int level = 0; level < num_levels_; ++level) {
         std::string points_file = output_dir + "/level_" + std::to_string(level) + "_points.txt";
         std::string weights_file = output_dir + "/level_" + std::to_string(level) + "_weights.txt";
-        
+        std::string indices_file = output_dir + "/level_" + std::to_string(level) + "_indices.txt";
+
         std::ofstream points_out(points_file);
         std::ofstream weights_out(weights_file);
-        
+
         if (!points_out || !weights_out) {
             throw std::runtime_error("Failed to open output files for level " + std::to_string(level));
         }
-        
+
         // Write points and weights
         for (size_t i = 0; i < level_points_vec[level].size(); ++i) {
             for (int d = 0; d < dim; ++d) {
                 points_out << level_points_vec[level][i][d] << (d < dim - 1 ? " " : "");
             }
             points_out << std::endl;
-            
+
             weights_out << level_weights_vec[level][i] << std::endl;
         }
-        
-        // Save parent-child relationships for non-boundary levels
-        // Parents: For each point at level L, save its parent at level L+1
-        if (level < num_levels_ - 1) {
-            std::string parents_file = output_dir + "/level_" + std::to_string(level) + "_parents.txt";
-            std::ofstream parents_out(parents_file);
-            
-            if (!parents_out) {
-                throw std::runtime_error("Failed to open parents file for level " + std::to_string(level));
-            }
-            
-            // Write parent indices for points at current level
-            for (size_t i = 0; i < parent_indices_[level].size(); ++i) {
-                parents_out << parent_indices_[level][i].size();
-                for (const auto& parent_idx : parent_indices_[level][i]) {
-                    parents_out << " " << parent_idx;
-                }
-                parents_out << std::endl;
-            }
-        }
-        
-        // Children: For each point at level L, save its children at level L-1
+
+        // For levels > 0, save the indices of the original points that were sampled
         if (level > 0) {
-            std::string children_file = output_dir + "/level_" + std::to_string(level) + "_children.txt";
-            std::ofstream children_out(children_file);
-            
-            if (!children_out) {
-                throw std::runtime_error("Failed to open children file for level " + std::to_string(level));
+            std::ofstream indices_out(indices_file);
+            if (!indices_out) {
+                throw std::runtime_error("Failed to open indices file for level " + std::to_string(level));
             }
-            
-            // Write child indices for points at current level
-            for (size_t i = 0; i < child_indices_[level-1].size(); ++i) {
-                children_out << child_indices_[level-1][i].size();
-                for (const auto& child_idx : child_indices_[level-1][i]) {
-                    children_out << " " << child_idx;
-                }
-                children_out << std::endl;
+
+            for (const auto& idx : level_indices_vec[level]) {
+                indices_out << idx << std::endl;
             }
         }
-        
-        std::cout << "Saved level " << level << " point cloud and relationships to " << output_dir << std::endl;
+
+        std::cout << "Saved level " << level << " point cloud to " << output_dir << std::endl;
     }
-    
+
     // Stop timing the entire hierarchy generation
     auto stop_total = std::chrono::high_resolution_clock::now();
     auto duration_total = std::chrono::duration_cast<std::chrono::seconds>(stop_total - start_total);
-    
+
     std::cout << "Total hierarchy generation took " << duration_total.count() << " seconds" << std::endl;
-    
+
     return num_levels_;
 }
 
@@ -314,12 +273,12 @@ template int PointCloudHierarchyManager::generateHierarchy<2>(
 template int PointCloudHierarchyManager::generateHierarchy<3>(
     const std::vector<Point<3>>&, const std::vector<double>&, const std::string&);
 
-// Explicit template instantiations
-template std::tuple<std::vector<std::array<double, 2>>, std::vector<double>, std::vector<int>> 
-PointCloudHierarchyManager::kmeansClustering<2>(
-    const std::vector<std::array<double, 2>>&, const std::vector<double>&, size_t);
-template std::tuple<std::vector<std::array<double, 3>>, std::vector<double>, std::vector<int>> 
-PointCloudHierarchyManager::kmeansClustering<3>(
-    const std::vector<std::array<double, 3>>&, const std::vector<double>&, size_t);
+// Explicit template instantiations for randomSampling
+template std::tuple<std::vector<std::array<double, 2>>, std::vector<double>, std::vector<size_t>>
+PointCloudHierarchyManager::randomSampling<2>(
+    const std::vector<std::array<double, 2>>&, const std::vector<double>&, size_t, unsigned int);
+template std::tuple<std::vector<std::array<double, 3>>, std::vector<double>, std::vector<size_t>>
+PointCloudHierarchyManager::randomSampling<3>(
+    const std::vector<std::array<double, 3>>&, const std::vector<double>&, size_t, unsigned int);
 
 } // namespace PointCloudHierarchy

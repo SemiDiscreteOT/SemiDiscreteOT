@@ -71,9 +71,7 @@ public:
         const std::vector<Point<dim>>& target_points_coarse,
         const Vector<double>& target_density_coarse,
         const Vector<double>& weights_coarse,
-        double regularization_param,
-        int current_level,
-        const std::vector<std::vector<std::vector<size_t>>>& child_indices);
+        double regularization_param);
 
 private:
     // MPI members
@@ -89,11 +87,12 @@ private:
     const LinearAlgebra::distributed::Vector<double>& source_density;
     const unsigned int quadrature_order;
 
-    // Spatial search structure
+    // Spatial search structures
     using IndexedPoint = std::pair<Point<dim>, std::size_t>;
     using RTreeParams = boost::geometry::index::rstar<8>;
     using RTree = boost::geometry::index::rtree<IndexedPoint, RTreeParams>;
-    RTree target_points_rtree;
+    RTree coarse_points_rtree;
+    RTree fine_points_rtree;
 
     // Current computation state
     double current_lambda{0.0};
@@ -103,12 +102,11 @@ private:
     const std::vector<Point<dim>>* current_target_points_coarse{nullptr};
     const Vector<double>* current_target_density_coarse{nullptr};
     const Vector<double>* current_weights_coarse{nullptr};
-    const std::vector<std::vector<std::vector<size_t>>>* current_child_indices{nullptr};
-    int current_level{0};
 
     // Helper methods
-    void setup_rtree();
-    std::vector<std::size_t> find_nearest_target_points(const Point<dim>& query_point) const;
+    void setup_rtrees();
+    std::vector<std::size_t> find_nearest_coarse_points(const Point<dim>& query_point) const;
+    std::vector<std::size_t> find_nearest_fine_points(const Point<dim>& query_point) const;
     
     // Local assembly method
     void local_assemble(const typename DoFHandler<dim>::active_cell_iterator &cell,

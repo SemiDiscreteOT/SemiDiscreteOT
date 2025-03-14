@@ -23,27 +23,67 @@ SoftmaxRefinement<dim>::SoftmaxRefinement(
 {}
 
 template <int dim>
-void SoftmaxRefinement<dim>::setup_rtree()
+void SoftmaxRefinement<dim>::setup_rtrees()
 {
     namespace bgi = boost::geometry::index;
-    std::vector<IndexedPoint> indexed_points;
-    indexed_points.reserve(current_target_points_coarse->size());
+    
+    // Setup R-tree for coarse points
+    std::vector<IndexedPoint> indexed_coarse_points;
+    indexed_coarse_points.reserve(current_target_points_coarse->size());
+    pcout << "Setting up R-tree for coarse points" << std::endl;
+    pcout << "Number of coarse points: " << current_target_points_coarse->size() << std::endl;
     
     for (std::size_t i = 0; i < current_target_points_coarse->size(); ++i) {
-        indexed_points.emplace_back((*current_target_points_coarse)[i], i);
+        indexed_coarse_points.emplace_back((*current_target_points_coarse)[i], i);
     }
     
-    target_points_rtree = RTree(indexed_points.begin(), indexed_points.end());
+    coarse_points_rtree = RTree(indexed_coarse_points.begin(), indexed_coarse_points.end());
+    
+    // Setup R-tree for fine points
+    std::vector<IndexedPoint> indexed_fine_points;
+    indexed_fine_points.reserve(current_target_points_fine->size());
+    pcout << "Setting up R-tree for fine points" << std::endl;
+    pcout << "Number of fine points: " << current_target_points_fine->size() << std::endl;
+    
+    for (std::size_t i = 0; i < current_target_points_fine->size(); ++i) {
+        indexed_fine_points.emplace_back((*current_target_points_fine)[i], i);
+    }
+    
+    fine_points_rtree = RTree(indexed_fine_points.begin(), indexed_fine_points.end());
+    // print also the first value of density for each density please
+    pcout << "First value of density for coarse points: " << (*current_target_density_coarse)[0] << std::endl;
+    pcout << "First value of density for fine points: " << (*current_target_density_fine)[0] << std::endl;
+    // print also the first coordinates of each point please
+    pcout << "First coordinates of coarse points: " << (*current_target_points_coarse)[0] << std::endl;
+    pcout << "First coordinates of fine points: " << (*current_target_points_fine)[0] << std::endl;
 }
 
 template <int dim>
-std::vector<std::size_t> SoftmaxRefinement<dim>::find_nearest_target_points(
+std::vector<std::size_t> SoftmaxRefinement<dim>::find_nearest_coarse_points(
     const Point<dim>& query_point) const
 {
     namespace bgi = boost::geometry::index;
     std::vector<std::size_t> indices;
 
-    for (const auto& indexed_point : target_points_rtree |
+    for (const auto& indexed_point : coarse_points_rtree |
+         bgi::adaptors::queried(bgi::satisfies([&](const IndexedPoint& p) {
+             return (p.first - query_point).norm() <= current_distance_threshold;
+         })))
+    {
+        indices.push_back(indexed_point.second);
+    }
+
+    return indices;
+}
+
+template <int dim>
+std::vector<std::size_t> SoftmaxRefinement<dim>::find_nearest_fine_points(
+    const Point<dim>& query_point) const
+{
+    namespace bgi = boost::geometry::index;
+    std::vector<std::size_t> indices;
+
+    for (const auto& indexed_point : fine_points_rtree |
          bgi::adaptors::queried(bgi::satisfies([&](const IndexedPoint& p) {
              return (p.first - query_point).norm() <= current_distance_threshold;
          })))
@@ -74,7 +114,7 @@ void SoftmaxRefinement<dim>::local_assemble(
     const double threshold_sq = current_distance_threshold * current_distance_threshold;
 
     // Get relevant coarse target points for this cell
-    std::vector<std::size_t> cell_target_indices_coarse = find_nearest_target_points(cell->center());
+    std::vector<std::size_t> cell_target_indices_coarse = find_nearest_coarse_points(cell->center());
     
     if (cell_target_indices_coarse.empty()) return;
 
@@ -91,42 +131,18 @@ void SoftmaxRefinement<dim>::local_assemble(
         weight_values_coarse[i] = (*current_weights_coarse)[idx];
     }
 
-    // Get fine points that are children of the coarse points
-    std::vector<std::size_t> cell_target_indices_fine;
-    std::vector<Point<dim>> target_positions_fine;
-
-    // Add bounds checking for child_indices_ access
-    if (current_level < 0 || current_level >= static_cast<int>(current_child_indices->size())) {
-        std::cerr << "Error: Invalid level " << current_level << " for child_indices_ of size " 
-                  << current_child_indices->size() << std::endl;
-        return;
-    }
-
-    for (size_t i = 0; i < n_target_points_coarse; ++i) {
-        const size_t coarse_idx = cell_target_indices_coarse[i];
-        if (coarse_idx >= (*current_child_indices)[current_level].size()) {
-            std::cerr << "Error: Invalid coarse index " << coarse_idx << " for child_indices_[" 
-                      << current_level << "] of size " << (*current_child_indices)[current_level].size() 
-                      << std::endl;
-            continue;
-        }
-        const auto& children = (*current_child_indices)[current_level][coarse_idx];
-        
-        for (const auto& child_idx : children) {
-            if (child_idx >= current_target_points_fine->size()) {
-                std::cerr << "Error: Invalid child index " << child_idx << " for target_points_fine of size " 
-                          << current_target_points_fine->size() << std::endl;
-                continue;
-            }
-            cell_target_indices_fine.push_back(child_idx);
-            target_positions_fine.push_back((*current_target_points_fine)[child_idx]);
-        }
-    }
-
+    // Get fine points near this cell
+    std::vector<std::size_t> cell_target_indices_fine = find_nearest_fine_points(cell->center());
+    
+    if (cell_target_indices_fine.empty()) return;
+    
     const unsigned int n_target_points_fine = cell_target_indices_fine.size();
-    if (n_target_points_fine == 0) {
-        std::cerr << "Warning: No valid fine points found for coarse points at level " << current_level << std::endl;
-        return;
+    std::vector<Point<dim>> target_positions_fine(n_target_points_fine);
+    
+    // Load fine target point positions
+    for (size_t i = 0; i < n_target_points_fine; ++i) {
+        const size_t idx = cell_target_indices_fine[i];
+        target_positions_fine[i] = (*current_target_points_fine)[idx];
     }
 
     // For each quadrature point
@@ -151,7 +167,7 @@ void SoftmaxRefinement<dim>::local_assemble(
 
         if (total_sum_exp <= 0.0) continue;
 
-        // Now update weights for fine points using their parent's exp term for normalization
+        // Now update weights for fine points using the coarse points' exp term for normalization
         const double scale = density_value * JxW / total_sum_exp;
         
         #pragma omp simd
@@ -172,9 +188,7 @@ Vector<double> SoftmaxRefinement<dim>::compute_refinement(
     const std::vector<Point<dim>>& target_points_coarse,
     const Vector<double>& target_density_coarse,
     const Vector<double>& weights_coarse,
-    double regularization_param,
-    int level,
-    const std::vector<std::vector<std::vector<size_t>>>& child_indices)
+    double regularization_param)
 {
     // Store computation parameters
     current_target_points_fine = &target_points_fine;
@@ -182,12 +196,10 @@ Vector<double> SoftmaxRefinement<dim>::compute_refinement(
     current_target_points_coarse = &target_points_coarse;
     current_target_density_coarse = &target_density_coarse;
     current_weights_coarse = &weights_coarse;
-    current_child_indices = &child_indices;
-    current_level = level;
     current_lambda = regularization_param;
 
-    // Initialize RTree for spatial queries
-    setup_rtree();
+    // Initialize RTrees for spatial queries
+    setup_rtrees();
 
     // Initialize output weights
     Vector<double> weights_fine(target_points_fine.size());

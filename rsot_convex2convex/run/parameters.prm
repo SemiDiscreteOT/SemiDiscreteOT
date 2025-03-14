@@ -1,6 +1,6 @@
 subsection ParameterManager
 
-  set selected_task =  sot    # Options: mesh_generation, load_meshes, sot, exact_sot, power_diagram, map, prepare_source_multilevel, prepare_target_multilevel, multilevel_sot
+  set selected_task =  multilevel_sot    # Options: mesh_generation, load_meshes, sot, exact_sot, power_diagram, map, prepare_source_multilevel, prepare_target_multilevel, multilevel_sot
   set io_coding = txt
 
   subsection mesh_generation
@@ -21,15 +21,15 @@ subsection ParameterManager
 
   subsection multilevel_parameters
     # Source mesh hierarchy parameters
-    set source_enabled = true            # Whether to use source multilevel approach
+    set source_enabled = false            # Whether to use source multilevel approach
     set source_min_vertices = 100      # Minimum vertices for coarsest source level
-    set source_max_vertices = 1000     # Maximum vertices for finest source level
+    set source_max_vertices = 10000     # Maximum vertices for finest source level
     set source_hierarchy_dir = output/multilevel/meshes  # Source hierarchy directory
 
     # Target point cloud hierarchy parameters
-    set target_enabled = false          # Whether to use target multilevel approach
+    set target_enabled = true          # Whether to use target multilevel approach
     set target_min_points = 100        # Minimum points for coarsest target level
-    set target_max_points = 2000       # Maximum points for finest target level
+    set target_max_points = 50000       # Maximum points for finest target level
     set target_hierarchy_dir = output/target_multilevel  # Target hierarchy directory
     set use_softmax_weight_transfer = true  # Use softmax for weight transfer
 
@@ -49,9 +49,9 @@ subsection ParameterManager
     set number_of_threads = 0
     set use_epsilon_scaling = false
     set epsilon_scaling_factor = 10
-    set epsilon_scaling_steps = 3
+    set epsilon_scaling_steps = 10
     set use_caching = true
-    # set max_cache_size_mb = 4000
+    set max_cache_size_mb = 20000
   end
 
   subsection power_diagram_parameters

@@ -152,11 +152,6 @@ void SemidiscreteOT<dim>::load_target_points_at_level(
 }
 
 template <int dim>
-void SemidiscreteOT<dim>::load_hierarchy_data(const std::string& hierarchy_dir, int specific_level) {
-    has_hierarchy_data_ = Utils::load_hierarchy_data<dim>(hierarchy_dir, child_indices_, specific_level, mpi_communicator, pcout);
-}
-
-template <int dim>
 void SemidiscreteOT<dim>::setup_source_finite_elements()
 {
     // Check if we're using tetrahedral meshes
@@ -370,11 +365,6 @@ template <int dim>
 void SemidiscreteOT<dim>::assign_weights_by_hierarchy(
     Vector<double>& weights, int coarse_level, int fine_level, const Vector<double>& prev_weights) {
     
-    if (!has_hierarchy_data_ || coarse_level < 0 || fine_level < 0) {
-        std::cerr << "Invalid hierarchy levels for weight assignment" << std::endl;
-        return;
-    }
-    
     // Direct assignment if same level
     if (coarse_level == fine_level) {
         weights = prev_weights;
@@ -384,55 +374,31 @@ void SemidiscreteOT<dim>::assign_weights_by_hierarchy(
     // Initialize weights for current level
     weights.reinit(target_points.size());
 
-    if (multilevel_params.use_softmax_weight_transfer) {
-        pcout << "Applying softmax-based weight assignment from level " << coarse_level
-              << " to level " << fine_level << std::endl;
-        pcout << "Source points: " << prev_weights.size() 
-              << ", Target points: " << target_points.size() << std::endl;
+    pcout << "Applying softmax-based weight assignment from level " << coarse_level
+          << " to level " << fine_level << std::endl;
+    pcout << "Source points: " << prev_weights.size() 
+          << ", Target points: " << target_points.size() << std::endl;
 
-        // Create SoftmaxRefinement instance
-        SoftmaxRefinement<dim> softmax_refiner(
-            mpi_communicator,
-            dof_handler_source,
-            *mapping,
-            *fe_system,
-            source_density,
-            solver_params.quadrature_order,
-            current_distance_threshold);
+    // Create SoftmaxRefinement instance
+    SoftmaxRefinement<dim> softmax_refiner(
+        mpi_communicator,
+        dof_handler_source,
+        *mapping,
+        *fe_system,
+        source_density,
+        solver_params.quadrature_order,
+        current_distance_threshold);
 
-        // Apply softmax refinement
-        weights = softmax_refiner.compute_refinement(
-            target_points,           // target_points_fine
-            target_density,         // target_density_fine
-            target_points_coarse,   // target_points_coarse
-            target_density_coarse,  // target_density_coarse
-            prev_weights,          // weights_coarse
-            solver_params.regularization_param,
-            fine_level,
-            child_indices_);
-        
-        pcout << "Softmax-based weight assignment completed." << std::endl;
-    }
-    else {
-        pcout << "Applying direct weight assignment from level " << coarse_level
-              << " to level " << fine_level << std::endl;
-        pcout << "Source points: " << prev_weights.size() 
-              << ", Target points: " << target_points.size() << std::endl;
-
-        if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
-            // Going from coarse to fine: Each child gets its parent's weight
-            #pragma omp parallel for
-            for (size_t j = 0; j < prev_weights.size(); ++j) {
-                const auto& children = child_indices_[fine_level][j];
-                for (size_t child : children) {
-                    weights[child] = prev_weights[j];
-                }
-            }
-        }
-
-        // Broadcast the weights to all processes
-        Utilities::MPI::broadcast(mpi_communicator, weights, 0);
-    }
+    // Apply softmax refinement with the new approach (no child_indices needed)
+    weights = softmax_refiner.compute_refinement(
+        target_points,           // target_points_fine
+        target_density,         // target_density_fine
+        target_points_coarse,   // target_points_coarse
+        target_density_coarse,  // target_density_coarse
+        prev_weights,          // weights_coarse
+        solver_params.regularization_param);
+    
+    pcout << "Softmax-based weight assignment completed." << std::endl;
 }
 
 
@@ -560,14 +526,10 @@ void SemidiscreteOT<dim>::run_target_multilevel(
 
     num_levels = Utilities::MPI::broadcast(mpi_communicator, num_levels, 0);
     
-    // Initialize hierarchy data structure but don't load data yet
-    if (!has_hierarchy_data_) {
-        pcout << "Initializing hierarchy data structure..." << std::endl;
-        load_hierarchy_data(multilevel_params.target_hierarchy_dir, -1);
-    }
-    
-    if (!has_hierarchy_data_) {
-        pcout << "Failed to initialize hierarchy data. Cannot proceed with multilevel computation." << std::endl;
+    // Verify that the hierarchy directory exists
+    if (!fs::exists(multilevel_params.target_hierarchy_dir)) {
+        pcout << "Hierarchy directory does not exist: " << multilevel_params.target_hierarchy_dir << std::endl;
+        pcout << "Please run prepare_target_multilevel first." << std::endl;
         return;
     }
     
@@ -627,9 +589,6 @@ void SemidiscreteOT<dim>::run_target_multilevel(
         pcout << "\n" << Color::magenta << Color::bold << "----------------------------------------" << Color::reset << std::endl;
         pcout << Color::magenta << Color::bold << "Processing target point cloud level " << level_number << Color::reset << std::endl;
         pcout << Color::magenta << Color::bold << "----------------------------------------" << Color::reset << std::endl;
-
-        // Load hierarchy data for this level only
-        load_hierarchy_data(multilevel_params.target_hierarchy_dir, level_number);
         
         // Load target points for this level
         if (level > 0) {
@@ -646,7 +605,7 @@ void SemidiscreteOT<dim>::run_target_multilevel(
         // Initialize weights for this level
         Vector<double> current_level_weights(target_points.size());
         if (level > 0) {
-            // Use hierarchy-based weight transfer from previous level
+            // Use softmax-based weight transfer from previous level
             assign_weights_by_hierarchy(current_level_weights, level_number+1, level_number, level_weights);
         }
 
@@ -676,88 +635,41 @@ void SemidiscreteOT<dim>::run_target_multilevel(
                         level_timer.stop();
                         pcout << "  Completed in " << level_timer.wall_time() << " seconds" << std::endl;
                         
-                        // Save intermediate results if this is not the last epsilon for this level
-                        if (save_results_to_files && eps_idx < level_epsilons.size() - 1) {
-                            std::string eps_suffix = "_eps" + std::to_string(eps_idx + 1);
-                            save_results(current_level_weights, level_output_dir + "/weights" + eps_suffix);
+                        // Save intermediate results if requested
+                        if (save_results_to_files) {
+                            std::string eps_str = std::to_string(current_epsilon);
+                            std::string weights_filename = level_output_dir + "/weights_eps_" + eps_str;
+                            save_results(current_level_weights, weights_filename);
                         }
-                    } catch (const SolverControl::NoConvergence& exc) {
-                        if (exc.last_step >= solver_params.max_iterations) {
-                            pcout << Color::red << Color::bold << "  Warning: Optimization failed at step " << eps_idx + 1
-                                  << " (epsilon=" << current_epsilon << "): Max iterations reached"
-                                  << Color::reset << std::endl;
-                        }
-                        pcout << Color::red << Color::bold << "  Warning: Optimization did not converge for epsilon " 
-                              << current_epsilon << " at source level " << level_number << Color::reset << std::endl;
-                        // Continue with next epsilon value
+                    } catch (const std::exception& e) {
+                        pcout << Color::red << "  Error during optimization: " << e.what() << Color::reset << std::endl;
                     }
                 }
             } else {
-                // If no epsilon values for this level, use the smallest epsilon from the sequence
-                solver_config.regularization_param = original_regularization;
-                
-                Timer level_timer;
-                level_timer.start();
-                
+                // If no epsilon values for this level, just run with current regularization
                 try {
-                    // Run optimization with default epsilon
                     sot_solver->solve(current_level_weights, solver_config);
-                    
-                    level_timer.stop();
-                    pcout << "  Completed in " << level_timer.wall_time() << " seconds" << std::endl;
-                } catch (const SolverControl::NoConvergence& exc) {
-                    if (exc.last_step >= solver_params.max_iterations) {
-                        pcout << Color::red << Color::bold << "  Warning: Optimization failed at step " << level_number
-                              << " (epsilon=" << original_regularization << "): Max iterations reached"
-                              << Color::reset << std::endl;
-                    }
-                    pcout << Color::red << Color::bold << "Warning: Optimization did not converge for level " << level_number << Color::reset << std::endl;
-                    pcout << "  Iterations: " << exc.last_step << std::endl;
+                } catch (const std::exception& e) {
+                    pcout << Color::red << "Error during optimization: " << e.what() << Color::reset << std::endl;
                 }
             }
         } else {
-            // No epsilon scaling, just run the optimization once
-            Timer level_timer;
-            level_timer.start();
-            
+            // If epsilon scaling is not enabled, just run with current regularization
             try {
-                // Run optimization for this level
                 sot_solver->solve(current_level_weights, solver_config);
-                
-                level_timer.stop();
-                pcout << "  Completed in " << level_timer.wall_time() << " seconds" << std::endl;
-            } catch (SolverControl::NoConvergence& exc) {
-                if (exc.last_step >= solver_params.max_iterations) {
-                    pcout << Color::red << Color::bold << "  Warning: Optimization failed at step " << level_number
-                          << " (epsilon=" << original_regularization << "): Max iterations reached"
-                          << Color::reset << std::endl;
-                }
-                pcout << Color::red << Color::bold << "Warning: Optimization did not converge for level " << level_number << Color::reset << std::endl;
-                pcout << "  Iterations: " << exc.last_step << std::endl;
-                if (level == 0) return;  // If coarsest level fails, abort
-                // Otherwise continue to next level with current weights
+            } catch (const std::exception& e) {
+                pcout << Color::red << "Error during optimization: " << e.what() << Color::reset << std::endl;
             }
         }
-            
-        // Save results for this level (if requested)
-        if(save_results_to_files) {
-            save_results(current_level_weights, level_output_dir + "/weights");
-            if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
-                std::ofstream conv_info(level_output_dir + "/convergence_info.txt");
-                conv_info << "Regularization parameter (λ): " << solver_params.regularization_param << "\n";
-                conv_info << "Number of iterations: " << sot_solver->get_last_iteration_count() << "\n";
-                conv_info << "Final function value: " << sot_solver->get_last_functional_value() << "\n";
-                conv_info << "Convergence achieved: " << sot_solver->get_convergence_status() << "\n";
-                conv_info << "Level: " << level_number << "\n";
-                pcout << "Level " << level_number << " results saved to " << level_output_dir << "/weights" << std::endl;
-            }
-        } else {
-            pcout << "Level " << level_number << " completed" << std::endl;
+        
+        // Save results for this level if requested
+        if (save_results_to_files) {
+            std::string weights_filename = level_output_dir + "/weights";
+            save_results(current_level_weights, weights_filename);
         }
         
         // Store weights for next level
         level_weights = current_level_weights;
-        current_distance_threshold = sot_solver->get_last_distance_threshold();
     }
     
     // If output_weights is provided, copy the final weights
@@ -766,16 +678,15 @@ void SemidiscreteOT<dim>::run_target_multilevel(
     }
     
     // Restore original parameters
-    solver_params.tolerance = original_tolerance;
     solver_params.max_iterations = original_max_iterations;
+    solver_params.tolerance = original_tolerance;
     solver_params.regularization_param = original_regularization;
     
-    if (save_results_to_files) {
-        global_timer.stop();
-        pcout << "\n" << Color::magenta << Color::bold << "----------------------------------------" << Color::reset << std::endl;
-        pcout << Color::magenta << Color::bold << "Total multilevel target computation time: " << global_timer.wall_time() << " seconds" << Color::reset << std::endl;
-        pcout << Color::magenta << Color::bold << "----------------------------------------" << Color::reset << std::endl;
-    }
+    global_timer.stop();
+    pcout << "\n" << Color::green << Color::bold << "============================================" << Color::reset << std::endl;
+    pcout << Color::green << Color::bold << "Target multilevel computation completed!" << Color::reset << std::endl;
+    pcout << Color::green << Color::bold << "Total computation time: " << global_timer.wall_time() << " seconds" << Color::reset << std::endl;
+    pcout << Color::green << Color::bold << "============================================" << Color::reset << std::endl;
 }
 
 template <int dim>
@@ -1060,7 +971,6 @@ void SemidiscreteOT<dim>::run_multilevel_sot()
     pcout << "\n" << Color::green << Color::bold << "============================================" << Color::reset << std::endl;
     pcout << Color::green << Color::bold << "Multilevel computation completed!" << Color::reset << std::endl;
     pcout << Color::green << Color::bold << "Total computation time: " << global_timer.wall_time() << " seconds" << Color::reset << std::endl;
-    pcout << Color::green << "Final results saved in: " << eps_dir << "/" << multilevel_dir << Color::reset << std::endl;
     pcout << Color::green << Color::bold << "============================================" << Color::reset << std::endl;
 }
 
@@ -1242,7 +1152,20 @@ void SemidiscreteOT<dim>::prepare_target_multilevel()
             target_weights[i] = target_density[i];
         }
 
-        pcout << "Generating hierarchy with " << target_points.size() << " points..." << std::endl;
+        // Print hierarchy parameters
+        pcout << "Generating hierarchy with the following parameters:" << std::endl;
+        pcout << "  Original point count: " << target_points.size() << " points" << std::endl;
+        pcout << "  Minimum points for coarsest level: " << multilevel_params.target_min_points << std::endl;
+        pcout << "  Maximum points for level 1: " << multilevel_params.target_max_points << std::endl;
+        
+        // Check if we need to adjust max_points
+        if (target_points.size() <= multilevel_params.target_max_points) {
+            pcout << Color::yellow << "Warning: Original point count (" << target_points.size() 
+                  << ") is less than or equal to max_points (" << multilevel_params.target_max_points 
+                  << "). max_points will be adjusted to ensure level 1 differs from level 0." << Color::reset << std::endl;
+        }
+        
+        pcout << "Using random sampling approach for hierarchy generation" << std::endl;
         
         int num_levels = hierarchy_manager.generateHierarchy<dim>(
             target_points,
@@ -1251,10 +1174,13 @@ void SemidiscreteOT<dim>::prepare_target_multilevel()
         );
         
         pcout << Color::green << Color::bold << "Successfully generated " << num_levels << " levels of point cloud hierarchy." << Color::reset << std::endl;
+        // Print point counts for each level
+        pcout << Color::cyan << "Point counts by level:" << Color::reset << std::endl;
+        for (int level = 0; level < num_levels; ++level) {
+            int point_count = hierarchy_manager.getPointCount(level);
+            pcout << Color::cyan << "  Level " << level << ": " << point_count << " points" << Color::reset << std::endl;
+        }
         
-        // Load the hierarchy data for use in computations
-        load_hierarchy_data(multilevel_params.target_hierarchy_dir);
-        pcout << "Loaded hierarchy data for direct parent-child weight assignment." << std::endl;
         
     } catch (const std::exception& e) {
         pcout << Color::red << Color::bold << "Error: " << e.what() << Color::reset << std::endl;
