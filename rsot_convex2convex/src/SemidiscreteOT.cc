@@ -390,6 +390,7 @@ void SemidiscreteOT<dim>::assign_weights_by_hierarchy(
         current_distance_threshold);
 
     // Apply softmax refinement with the new approach (no child_indices needed)
+    pcout << "First 4 values of prev_weights: " << prev_weights[0] << " " << prev_weights[1] << " " << prev_weights[2] << " " << prev_weights[3] << std::endl;
     weights = softmax_refiner.compute_refinement(
         target_points,           // target_points_fine
         target_density,         // target_density_fine
@@ -397,6 +398,7 @@ void SemidiscreteOT<dim>::assign_weights_by_hierarchy(
         target_density_coarse,  // target_density_coarse
         prev_weights,          // weights_coarse
         solver_params.regularization_param);
+    pcout << "First 4 values of weights: " << weights[0] << " " << weights[1] << " " << weights[2] << " " << weights[3] << std::endl;
     
     pcout << "Softmax-based weight assignment completed." << std::endl;
 }
@@ -670,6 +672,7 @@ void SemidiscreteOT<dim>::run_target_multilevel(
         
         // Store weights for next level
         level_weights = current_level_weights;
+        current_distance_threshold = sot_solver->get_last_distance_threshold();
     }
     
     // If output_weights is provided, copy the final weights
