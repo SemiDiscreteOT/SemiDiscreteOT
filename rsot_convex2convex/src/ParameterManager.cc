@@ -101,6 +101,12 @@ ParameterManager::ParameterManager(const MPI_Comm &comm)
         add_parameter("use_softmax_weight_transfer", multilevel_params.use_softmax_weight_transfer,
                      "Whether to use softmax-based weight transfer between target levels");
         
+        // Python clustering parameters
+        add_parameter("use_python_clustering", multilevel_params.use_python_clustering,
+                     "Whether to use Python scripts for clustering");
+        add_parameter("python_script_name", multilevel_params.python_script_name,
+                     "Name of the Python script to use for clustering");
+        
         // Common parameters
         add_parameter("output_prefix", multilevel_params.output_prefix,
                      "Directory prefix for multilevel SOT results");
@@ -325,6 +331,12 @@ void ParameterManager::print_multilevel_parameters() const
         pcout << "    Maximum Points: " << BOLD << multilevel_params.target_max_points << RESET << std::endl;
         pcout << "    Hierarchy Directory: " << BOLD << multilevel_params.target_hierarchy_dir << RESET << std::endl;
         pcout << "    Softmax Weight Transfer: " << BOLD << (multilevel_params.use_softmax_weight_transfer ? "enabled" : "disabled") << RESET << std::endl;
+        
+        // Python clustering parameters
+        pcout << "    Python Clustering: " << BOLD << (multilevel_params.use_python_clustering ? "enabled" : "disabled") << RESET << std::endl;
+        if (multilevel_params.use_python_clustering) {
+            pcout << "    Python Script: " << BOLD << multilevel_params.python_script_name << RESET << std::endl;
+        }
     }
     pcout << std::endl;
     

@@ -78,7 +78,7 @@ void SotSolver<dim>::solve(
     // Set up measures
     source_measure = source;
     target_measure = target;
-    
+
     // Call main solve method
     solve(weights, params);
 }
@@ -195,7 +195,7 @@ double SotSolver<dim>::evaluate_functional(
     try {
         // Determine if we're using simplex elements
         bool use_simplex = (dynamic_cast<const FE_SimplexP<dim>*>(&*source_measure.fe) != nullptr);
-        
+
         // Create appropriate quadrature rule
         std::unique_ptr<Quadrature<dim>> quadrature;
         if (use_simplex) {
@@ -252,7 +252,7 @@ double SotSolver<dim>::evaluate_functional(
         // Broadcast final results to all processes
         global_functional = Utilities::MPI::broadcast(mpi_communicator, global_functional, 0);
         gradient = Utilities::MPI::broadcast(mpi_communicator, gradient, 0);
-        
+
         // Copy result to output gradient
         gradient_out = gradient;
 
@@ -309,7 +309,7 @@ void SotSolver<dim>::local_assemble(
             std::lock_guard<std::mutex> lock(cache_mutex);
             auto it = cell_caches.find(cell_id);
             cache_entry_exists = (it != cell_caches.end());
-            
+
             if (cache_entry_exists) {
                 cell_cache_ptr = &it->second;
                 cell_target_indices = cell_cache_ptr->target_indices;
@@ -322,21 +322,21 @@ void SotSolver<dim>::local_assemble(
             if (cache_limit_reached) {
                 goto direct_computation;
             }
-            
+
             // Need to find target points and check if cache size would be exceeded
             cell_target_indices = find_nearest_target_points(cell->center());
             if (cell_target_indices.empty()) return;
-            
+
             double entry_size_mb = estimate_cache_entry_size_mb(cell_target_indices, n_q_points);
             double projected_size = current_cache_size_mb.load() + entry_size_mb;
-            
+
             if (current_params.max_cache_size_mb > 0 && projected_size > current_params.max_cache_size_mb) {
                 // Cache limit would be exceeded, don't add new entry but continue with direct computation
                 {
                     std::lock_guard<std::mutex> lock(cache_mutex);
                     if (!cache_limit_reached) {
                         cache_limit_reached = true;
-                        pcout << "\n\033[1;31mWARNING: Cache size limit (" << current_params.max_cache_size_mb 
+                        pcout << "\n\033[1;31mWARNING: Cache size limit (" << current_params.max_cache_size_mb
                               << " MB) reached. Using existing cache entries but not adding new ones.\033[0m" << std::endl;
                     }
                 }
@@ -355,12 +355,12 @@ void SotSolver<dim>::local_assemble(
 
         // Proceed with cached or newly created entry
         const unsigned int n_target_points = cell_target_indices.size();
-        
+
         // Preload target data for vectorization
         std::vector<Point<dim>> target_positions(n_target_points);
         std::vector<double> target_densities(n_target_points);
         std::vector<double> weight_values(n_target_points);
-        
+
         for (size_t i = 0; i < n_target_points; ++i) {
             const size_t idx = cell_target_indices[i];
             target_positions[i] = target_measure.points[idx];
@@ -385,7 +385,7 @@ void SotSolver<dim>::local_assemble(
                         continue;
                     }
                     const double local_dist2 = (x - target_positions[i]).norm_square();
-                    const double precomputed_term = target_densities[i] * 
+                    const double precomputed_term = target_densities[i] *
                         std::exp(-0.5 * local_dist2 * lambda_inv);
                     cell_cache_ptr->precomputed_exp_terms[base_idx + i] = precomputed_term;
                     active_exp_terms[i] = precomputed_term * std::exp(weight_values[i] * lambda_inv);
@@ -405,7 +405,7 @@ void SotSolver<dim>::local_assemble(
 
             if (total_sum_exp <= 0.0) continue;
 
-            copy.functional_value += density_value * current_lambda * 
+            copy.functional_value += density_value * current_lambda *
                 std::log(total_sum_exp) * JxW;
             copy.C_integral += density_value * JxW / total_sum_exp;
 
@@ -424,7 +424,7 @@ void SotSolver<dim>::local_assemble(
         if (need_computation && cell_cache_ptr) {
             cell_cache_ptr->is_valid = true;
         }
-        
+
         return; // Skip the direct computation path
     }
 
@@ -438,14 +438,14 @@ direct_computation:
     std::vector<Point<dim>> target_positions(n_target_points);
     std::vector<double> target_densities(n_target_points);
     std::vector<double> weight_values(n_target_points);
-    
+
     for (size_t i = 0; i < n_target_points; ++i) {
         const size_t idx = cell_target_indices[i];
         target_positions[i] = target_measure.points[idx];
         target_densities[i] = target_measure.density[idx];
         weight_values[i] = (*current_weights)[idx];
     }
-    
+
     for (unsigned int q = 0; q < n_q_points; ++q) {
         const Point<dim>& x = q_points[q];
         const double density_value = scratch.density_values[q];
@@ -457,14 +457,14 @@ direct_computation:
         #pragma omp simd reduction(+:total_sum_exp)
         for (size_t i = 0; i < n_target_points; ++i) {
             const double local_dist2 = (x - target_positions[i]).norm_square();
-            exp_terms[i] = target_densities[i] * 
+            exp_terms[i] = target_densities[i] *
                 std::exp((weight_values[i] - 0.5 * local_dist2) * lambda_inv);
             total_sum_exp += exp_terms[i];
         }
 
         if (total_sum_exp <= 0.0) continue;
 
-        copy.functional_value += density_value * current_lambda * 
+        copy.functional_value += density_value * current_lambda *
             std::log(total_sum_exp) * JxW;
         copy.C_integral += density_value * JxW / total_sum_exp;
 
@@ -490,7 +490,7 @@ void SotSolver<dim>::compute_distance_threshold() const
     double max_weight = *std::max_element(current_weights->begin(), current_weights->end());
     double min_target_weight = *std::min_element(target_measure.density.begin(), target_measure.density.end());
 
-    double squared_threshold = -2.0 * current_lambda * 
+    double squared_threshold = -2.0 * current_lambda *
         std::log(current_params.epsilon/min_target_weight) + 2.0 * max_weight;
     double computed_threshold = std::sqrt(std::max(0.0, squared_threshold));
 
@@ -546,18 +546,18 @@ double SotSolver<dim>::get_cache_size_mb() const
 }
 
 template <int dim>
-double SotSolver<dim>::estimate_cache_entry_size_mb(const std::vector<std::size_t>& target_indices, 
+double SotSolver<dim>::estimate_cache_entry_size_mb(const std::vector<std::size_t>& target_indices,
                                                   unsigned int n_q_points) const
 {
     // Size of the indices vector
     double indices_size = target_indices.size() * sizeof(std::size_t);
-    
+
     // Size of the precomputed terms (n_q_points * target_indices.size() doubles)
     double precomputed_terms_size = n_q_points * target_indices.size() * sizeof(double);
-    
+
     // Small overhead for the CellCache struct itself
     double struct_overhead = sizeof(CellCache);
-    
+
     // Total size in MB
     return (indices_size + precomputed_terms_size + struct_overhead) / (1024.0 * 1024.0);
 }

@@ -1226,6 +1226,52 @@ void SemidiscreteOT<dim>::prepare_target_multilevel()
         }
     }
 
+    // Check if we should use Python script for clustering
+    if (multilevel_params.use_python_clustering) {
+        // Only rank 0 should execute the Python script
+        if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+            pcout << "Using Python script for clustering: " << multilevel_params.python_script_name << std::endl;
+            
+            // Create output directory if it doesn't exist
+            fs::create_directories(multilevel_params.target_hierarchy_dir);
+            
+            // Construct the command to run the Python script
+            std::string python_cmd = "python3 ";
+            
+            // Check if the script is in the python_scripts directory or a full path
+            if (multilevel_params.python_script_name.find('/') == std::string::npos) {
+                // First try in python_scripts subdirectory
+                if (fs::exists("python_scripts/" + multilevel_params.python_script_name)) {
+                    python_cmd += "python_scripts/";
+                }
+                // If not found, assume it's in the run directory directly
+            }
+            
+            python_cmd += multilevel_params.python_script_name;
+            
+            // Execute the Python script
+            pcout << Color::green << Color::bold << "Executing: " << python_cmd << Color::reset << std::endl;
+            int result = std::system(python_cmd.c_str());
+            
+            if (result != 0) {
+                pcout << Color::red << Color::bold << "Error: Python script execution failed with code " 
+                      << result << Color::reset << std::endl;
+                return;
+            }
+            
+            pcout << Color::green << "Python script executed successfully" << Color::reset << std::endl;
+        }
+        
+        // Make sure all processes wait for rank 0 to finish the Python script
+        MPI_Barrier(mpi_communicator);
+        
+        // Load the hierarchy data for use in computations
+        load_hierarchy_data(multilevel_params.target_hierarchy_dir);
+        pcout << "Loaded hierarchy data for direct parent-child weight assignment." << std::endl;
+        return;
+    }
+
+    // If not using Python script, use the built-in C++ implementation
     // Create PointCloudHierarchyManager instance
     PointCloudHierarchy::PointCloudHierarchyManager hierarchy_manager(
         multilevel_params.target_min_points,

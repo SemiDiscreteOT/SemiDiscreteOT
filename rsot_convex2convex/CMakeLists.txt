@@ -50,7 +50,6 @@ if(OpenMP_CXX_FOUND)
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
 endif()
 
-
 # Setup Deal.II target
 DEAL_II_INVOKE_AUTOPILOT()
 
@@ -61,4 +60,12 @@ TARGET_LINK_LIBRARIES(${TARGET} ${GEOGRAM_LIBS})
 TARGET_COMPILE_DEFINITIONS(${TARGET} PRIVATE
     POWER_DIAGRAM_WITH_DEALII
     POWER_DIAGRAM_WITH_GEOGRAM
+)
+
+# Copy Python scripts to run/python_scripts directory
+add_custom_command(
+    TARGET ${TARGET} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E echo "Copying Python scripts to run/python_scripts directory"
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/python_scripts
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/src/python_scripts ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/python_scripts
 )

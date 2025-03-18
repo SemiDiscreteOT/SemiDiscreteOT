@@ -85,6 +85,10 @@ public:
         std::string target_hierarchy_dir = "output/target_multilevel";  ///< Target hierarchy directory
         bool use_softmax_weight_transfer = true;///< Use softmax for weight transfer between target levels
         
+        // Python clustering parameters
+        bool use_python_clustering = false;     ///< Whether to use Python scripts for clustering
+        std::string python_script_name = "multilevel_clustering_scipy.py"; ///< Name of the Python script to use
+        
         // Common parameters
         std::string output_prefix = "output/multilevel/sot";  ///< Output directory prefix
     };
