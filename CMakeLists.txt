@@ -1,5 +1,14 @@
 CMAKE_MINIMUM_REQUIRED(VERSION 3.13.0)
 
+# Set default build type to Release if not specified
+IF(NOT CMAKE_BUILD_TYPE OR CMAKE_BUILD_TYPE STREQUAL "")
+    SET(CMAKE_BUILD_TYPE "Release" CACHE STRING
+        "Choose the type of build, options are: Debug Release RelWithDebInfo MinSizeRel." FORCE)
+ENDIF()
+
+# Add compiler flags for Release build
+SET(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -march=native -DNDEBUG")
+
 # Deal.II setup first
 SET(DEAL_II_DIR "/scratch/mkhamlic/spack/opt/spack/linux-rocky8-x86_64_v4/gcc-12.2.0/dealii-9.5.0-nbal44n4aoskliqi4yri5icwmcgumyxt")
 FIND_PACKAGE(deal.II 9.5.0 QUIET
@@ -12,6 +21,13 @@ IF(NOT ${deal.II_FOUND})
     "Set -DDEAL_II_DIR=/path/to/deal.II or environment variable DEAL_II_DIR"
   )
 ENDIF()
+
+# Add custom release target
+ADD_CUSTOM_TARGET(release
+    COMMAND ${CMAKE_COMMAND} -DCMAKE_BUILD_TYPE=Release ${CMAKE_SOURCE_DIR}
+    COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target all
+    COMMENT "Switch CMAKE_BUILD_TYPE to Release and rebuild"
+)
 
 # Initialize Deal.II first, then set project
 DEAL_II_INITIALIZE_CACHED_VARIABLES()

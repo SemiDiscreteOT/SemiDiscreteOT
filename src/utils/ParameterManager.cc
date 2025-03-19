@@ -29,6 +29,12 @@ ParameterManager::ParameterManager(const MPI_Comm &comm)
             add_parameter("grid generator arguments", source_params.grid_generator_arguments);
             add_parameter("use tetrahedral mesh", source_params.use_tetrahedral_mesh,
                          "Whether to convert the mesh to tetrahedral cells (only for 3D)");
+            add_parameter("use custom density", source_params.use_custom_density,
+                         "Whether to use custom density from file");
+            add_parameter("density file path", source_params.density_file_path,
+                         "Path to the density file");
+            add_parameter("density file format", source_params.density_file_format,
+                         "Format of the density file (vtk/h5)");
         }
         leave_subsection();
 
@@ -39,6 +45,12 @@ ParameterManager::ParameterManager(const MPI_Comm &comm)
             add_parameter("grid generator arguments", target_params.grid_generator_arguments);
             add_parameter("use tetrahedral mesh", target_params.use_tetrahedral_mesh,
                          "Whether to convert the mesh to tetrahedral cells (only for 3D)");
+            add_parameter("use custom density", target_params.use_custom_density,
+                         "Whether to use custom density from file");
+            add_parameter("density file path", target_params.density_file_path,
+                         "Path to the density file");
+            add_parameter("density file format", target_params.density_file_format,
+                         "Format of the density file (vtk/h5)");
         }
         leave_subsection();
     }
