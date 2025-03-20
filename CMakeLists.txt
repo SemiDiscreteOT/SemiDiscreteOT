@@ -1,5 +1,12 @@
 CMAKE_MINIMUM_REQUIRED(VERSION 3.13.0)
 
+
+# Check Deal.II
+MESSAGE("Deal.II installation path: $ENV{DEAL_II_DIR}")
+
+# Check Geogram
+MESSAGE("Geogram installation path: $ENV{GEOGRAM_DIR}")
+
 # Set default build type to Release if not specified
 IF(NOT CMAKE_BUILD_TYPE OR CMAKE_BUILD_TYPE STREQUAL "")
     SET(CMAKE_BUILD_TYPE "Release" CACHE STRING
@@ -9,8 +16,8 @@ ENDIF()
 # Add compiler flags for Release build
 SET(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -march=native -DNDEBUG")
 
+
 # Deal.II setup first
-SET(DEAL_II_DIR "/scratch/mkhamlic/spack/opt/spack/linux-rocky8-x86_64_v4/gcc-12.2.0/dealii-9.5.0-nbal44n4aoskliqi4yri5icwmcgumyxt")
 FIND_PACKAGE(deal.II 9.5.0 QUIET
   HINTS ${deal.II_DIR} ${DEAL_II_DIR} ../ ../../ $ENV{DEAL_II_DIR}
 )
@@ -41,14 +48,12 @@ SET(CMAKE_CXX_STANDARD_REQUIRED ON)
 SET(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/run)
 
 # Geogram setup
-SET(GEOGRAM_DIR "/scratch/mkhamlic/lib/geogram")
-INCLUDE_DIRECTORIES(${GEOGRAM_DIR}/src/lib)
-SET(CMAKE_MODULE_PATH ${GEOGRAM_DIR}/cmake)
+INCLUDE_DIRECTORIES($ENV{GEOGRAM_DIR}/src/lib)
+SET(CMAKE_MODULE_PATH $ENV{GEOGRAM_DIR}/cmake)
 SET(GEOGRAM_LIBS
-    ${GEOGRAM_DIR}/build/Linux64-gcc-dynamic-Release/lib/libgeogram.so
-    ${GEOGRAM_DIR}/build/Linux64-gcc-dynamic-Release/lib/libexploragram.so
+    $ENV{GEOGRAM_DIR}/build/Linux64-gcc-dynamic-Release/lib/libgeogram.so
+    $ENV{GEOGRAM_DIR}/build/Linux64-gcc-dynamic-Release/lib/libexploragram.so
 )
-
 
 # Library source files
 SET(LIB_SRC
@@ -73,7 +78,7 @@ TARGET_INCLUDE_DIRECTORIES(SemiDiscreteOT
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
-        ${GEOGRAM_DIR}/src/lib
+        $ENV{GEOGRAM_DIR}/src/lib
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
@@ -92,13 +97,13 @@ TARGET_COMPILE_DEFINITIONS(SemiDiscreteOT
 )
 
 # Create the executable
-ADD_EXECUTABLE(computeSot.exe src/computeSot.cc)
-TARGET_LINK_LIBRARIES(computeSot.exe SemiDiscreteOT)
-DEAL_II_SETUP_TARGET(computeSot.exe)
+ADD_EXECUTABLE(sot src/ComputeSot.cc)
+TARGET_LINK_LIBRARIES(sot SemiDiscreteOT)
+DEAL_II_SETUP_TARGET(sot)
 
 # Copy Python scripts to run/python_scripts directory
 ADD_CUSTOM_COMMAND(
-    TARGET computeSot.exe POST_BUILD
+    TARGET sot POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E echo "Copying Python scripts to run/python_scripts directory"
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/python_scripts
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/src/python_scripts ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/python_scripts
