@@ -96,7 +96,7 @@ public:
      * @return Vector of mesh file paths, sorted coarsest to finest
      */
     static std::vector<std::string> get_mesh_hierarchy_files(
-        const std::string& dir = "output/data_mesh/multilevel");
+        const std::string& dir = "output/data_multilevel/source_multilevel");
 
 private:
     MPI_Comm mpi_communicator;

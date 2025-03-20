@@ -284,9 +284,82 @@ void SemiDiscreteOT<dim>::setup_target_finite_elements()
         target_points[i] = Utilities::MPI::broadcast(mpi_communicator, target_points[i], 0);
     }
 
-    // Initialize target density (shared across all processes)
+    // Initialize target density
     target_density.reinit(target_points.size());
-    target_density = 1.0 / target_points.size();
+
+    // Handle custom target density if enabled
+    if (target_params.use_custom_density) {
+        pcout << "Using custom target density from file: " << target_params.density_file_path << std::endl;
+        
+        std::vector<double> density_values;
+        bool density_loaded = false;
+
+        if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+            if (target_params.density_file_format == "vtk") {
+                // TODO: Implement VTK file reading
+                pcout << "VTK file reading not yet implemented" << std::endl;
+                density_loaded = false;
+            } else if (target_params.density_file_format == "h5") {
+                // TODO: Implement HDF5 file reading
+                pcout << "HDF5 file reading not yet implemented" << std::endl;
+                density_loaded = false;
+            } else {
+                // Try reading as plain text file
+                density_loaded = Utils::read_vector(density_values, target_params.density_file_path);
+            }
+
+            if (density_loaded) {
+                if (density_values.size() != target_points.size()) {
+                    pcout << Color::red << Color::bold 
+                          << "Error: Density file has " << density_values.size() 
+                          << " values but there are " << target_points.size() 
+                          << " target points" << Color::reset << std::endl;
+                    density_loaded = false;
+                }
+            }
+        }
+
+        // Broadcast success flag
+        density_loaded = Utilities::MPI::broadcast(mpi_communicator, density_loaded, 0);
+        
+        if (!density_loaded) {
+            pcout << Color::yellow << "Warning: Failed to load custom density, using uniform density instead" 
+                  << Color::reset << std::endl;
+            target_density = 1.0 / target_points.size();
+        } else {
+            // Broadcast density values size
+            unsigned int n_density_values = 0;
+            if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+                n_density_values = density_values.size();
+            }
+            n_density_values = Utilities::MPI::broadcast(mpi_communicator, n_density_values, 0);
+
+            // Resize density_values on non-root processes
+            if (Utilities::MPI::this_mpi_process(mpi_communicator) != 0) {
+                density_values.resize(n_density_values);
+            }
+
+            // Broadcast the density values
+            for (unsigned int i = 0; i < n_density_values; ++i) {
+                density_values[i] = Utilities::MPI::broadcast(mpi_communicator, density_values[i], 0);
+            }
+
+            // Copy to target_density and normalize
+            double sum = 0.0;
+            for (unsigned int i = 0; i < n_density_values; ++i) {
+                target_density[i] = density_values[i];
+                sum += density_values[i];
+            }
+            target_density /= sum;  // Normalize to mass 1
+
+            pcout << "Custom target density loaded and normalized" << std::endl;
+        }
+    } else {
+        // Use uniform density if no custom density is specified
+        target_density = 1.0 / target_points.size();
+        pcout << "Using uniform target density" << std::endl;
+    }
+
     pcout << "Setup complete with " << target_points.size() << " target points" << std::endl;
 }
 
@@ -535,7 +608,9 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
     if (source_mesh_file.empty()) {
         mesh_manager->load_source_mesh(source_mesh);
     } else {
+        pcout << "Source mesh loaded from file: " << source_mesh_file << std::endl;
         mesh_manager->load_mesh_at_level(source_mesh, dof_handler_source, source_mesh_file);
+        pcout << "Source mesh loaded from file: " << source_mesh_file << std::endl;
     }
     setup_source_finite_elements();
     
@@ -802,7 +877,7 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
     // If source multilevel is enabled, get mesh hierarchy files
     std::vector<std::string> source_mesh_files;
     if (multilevel_params.source_enabled) {
-        source_mesh_files = mesh_manager->get_mesh_hierarchy_files();
+        source_mesh_files = mesh_manager->get_mesh_hierarchy_files(multilevel_params.source_hierarchy_dir);
         if (source_mesh_files.empty()) {
             pcout << "No source mesh hierarchy found. Please run prepare_source_multilevel first." << std::endl;
             return;
@@ -1132,7 +1207,7 @@ void SemiDiscreteOT<dim>::prepare_source_multilevel()
 
     try {
         // Create output directory if it doesn't exist
-        const std::string hierarchy_dir = "output/data_mesh/multilevel";
+        const std::string hierarchy_dir = multilevel_params.source_hierarchy_dir;
         fs::create_directories(hierarchy_dir);
 
         // Generate hierarchy
@@ -1154,157 +1229,86 @@ void SemiDiscreteOT<dim>::prepare_source_multilevel()
 template <int dim>
 void SemiDiscreteOT<dim>::prepare_target_multilevel()
 {
-    pcout << "Preparing target point cloud hierarchy..." << std::endl;
 
-    // Make sure target points are properly set up
-    if (target_points.empty()) {
-        pcout << "Target points not loaded. Attempting to load from file or from mesh..." << std::endl;
-        
-        // Try to load target points from file
-        std::string target_points_file = "output/data_points/target_points.txt";
-        if (fs::exists(target_points_file)) {
-            pcout << "Loading target points from file: " << target_points_file << std::endl;
-            
-            std::ifstream in(target_points_file);
-            if (!in.good()) {
-                pcout << "Failed to open target points file." << std::endl;
-                return;
-            }
-            
-            target_points.clear();
-            std::string line;
-            while (std::getline(in, line)) {
-                std::istringstream iss(line);
-                Point<dim> p;
-                for (unsigned int d = 0; d < dim; ++d) {
-                    if (!(iss >> p[d])) {
-                        pcout << "Error parsing point coordinates." << std::endl;
-                        return;
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+        pcout << "Preparing target point cloud hierarchy..." << std::endl;
+        // First ensure we have target points and density
+        if (target_points.empty()) {
+            setup_target_finite_elements(); 
+        }
+
+        if (target_points.empty()) {
+            pcout << Color::red << Color::bold << "Error: No target points available" << Color::reset << std::endl;
+            return;
+        }
+
+        // Save target density if not already present
+        std::string output_dir = "output/data_density";
+        std::string density_file = output_dir + "/target_density";
+        if (!fs::exists(output_dir)) {
+            fs::create_directories(output_dir);
+        }
+        if (!fs::exists(density_file)) {
+            Utils::write_vector(target_density, density_file, "txt");
+        }
+        // Create output directory
+        fs::create_directories(multilevel_params.target_hierarchy_dir);
+        if (multilevel_params.use_python_clustering) {
+            // Only rank 0 executes the Python script
+                pcout << "Using Python script for clustering: " << multilevel_params.python_script_name << std::endl;
+
+                // Construct the Python command
+                std::string python_cmd = "python3 ";
+                if (multilevel_params.python_script_name.find('/') == std::string::npos) {
+                    if (fs::exists("python_scripts/" + multilevel_params.python_script_name)) {
+                        python_cmd += "python_scripts/";
                     }
                 }
-                target_points.push_back(p);
-            }
-            
-            pcout << "Loaded " << target_points.size() << " target points from file." << std::endl;
-        } else if (!target_mesh.n_active_cells()) {
-            mesh_manager->load_target_mesh(target_mesh);
-        }
-        
-        // If target points still empty but we have a mesh, extract points from mesh
-        if (target_points.empty() && target_mesh.n_active_cells() > 0) {
-            pcout << "Extracting target points from mesh..." << std::endl;
-            
-            dof_handler_target.distribute_dofs(*fe_system);
-            std::map<types::global_dof_index, Point<dim>> support_points_target;
-            DoFTools::map_dofs_to_support_points(*mapping, dof_handler_target, support_points_target);
-            
-            for (const auto &point_pair : support_points_target) {
-                target_points.push_back(point_pair.second);
-            }
-            
-            // Write points to file for future use
-            std::string output_dir = "output/data_points";
-            fs::create_directories(output_dir);
-            Utils::write_vector(target_points, output_dir + "/target_points", io_coding);
-            
-            pcout << "Extracted " << target_points.size() << " target points from mesh." << std::endl;
-        }
-    }
-    
-    // Check if we have target points now
-    if (target_points.empty()) {
-        pcout << "Failed to obtain target points. Cannot generate hierarchy." << std::endl;
-        return;
-    }
-    
-    // Create target density if needed
-    if (target_density.size() != target_points.size()) {
-        target_density.reinit(target_points.size());
-        const double uniform_weight = 1.0 / target_points.size();
-        for (size_t i = 0; i < target_points.size(); ++i) {
-            target_density[i] = uniform_weight;
-        }
-    }
+                python_cmd += multilevel_params.python_script_name;
 
-    // Check if we should use Python script for clustering
-    if (multilevel_params.use_python_clustering) {
-        // Only rank 0 should execute the Python script
-        if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
-            pcout << "Using Python script for clustering: " << multilevel_params.python_script_name << std::endl;
-            
-            // Create output directory if it doesn't exist
-            fs::create_directories(multilevel_params.target_hierarchy_dir);
-            
-            // Construct the command to run the Python script
-            std::string python_cmd = "python3 ";
-            
-            // Check if the script is in the python_scripts directory or a full path
-            if (multilevel_params.python_script_name.find('/') == std::string::npos) {
-                // First try in python_scripts subdirectory
-                if (fs::exists("python_scripts/" + multilevel_params.python_script_name)) {
-                    python_cmd += "python_scripts/";
+                pcout << Color::green << Color::bold << "Executing: " << python_cmd << Color::reset << std::endl;
+                int result = std::system(python_cmd.c_str());
+
+                if (result != 0) {
+                    pcout << Color::red << Color::bold << "Error: Python script execution failed with code " 
+                          << result << Color::reset << std::endl;
+                    return;
                 }
-                // If not found, assume it's in the run directory directly
-            }
-            
-            python_cmd += multilevel_params.python_script_name;
-            
-            // Execute the Python script
-            pcout << Color::green << Color::bold << "Executing: " << python_cmd << Color::reset << std::endl;
-            int result = std::system(python_cmd.c_str());
-            
-            if (result != 0) {
-                pcout << Color::red << Color::bold << "Error: Python script execution failed with code " 
-                      << result << Color::reset << std::endl;
+                pcout << Color::green << "Python script executed successfully" << Color::reset << std::endl;
+        } else {
+            // Use built-in C++ implementation
+            PointCloudHierarchy::PointCloudHierarchyManager hierarchy_manager(
+                multilevel_params.target_min_points,
+                multilevel_params.target_max_points
+            );
+
+            try {
+                // Convert target density to weights vector
+                std::vector<double> target_weights(target_points.size());
+                for (size_t i = 0; i < target_points.size(); ++i) {
+                    target_weights[i] = target_density[i];
+                }
+
+                pcout << "Generating hierarchy with " << target_points.size() << " points..." << std::endl;
+
+                int num_levels = hierarchy_manager.generateHierarchy<dim>(
+                    target_points,
+                    target_weights,
+                    multilevel_params.target_hierarchy_dir
+                );
+
+                pcout << Color::green << Color::bold << "Successfully generated " << num_levels 
+                      << " levels of point cloud hierarchy" << Color::reset << std::endl;
+            } catch (const std::exception& e) {
+                pcout << Color::red << Color::bold << "Error: " << e.what() << Color::reset << std::endl;
                 return;
             }
-            
-            pcout << Color::green << "Python script executed successfully" << Color::reset << std::endl;
         }
-        
-        // Make sure all processes wait for rank 0 to finish the Python script
-        MPI_Barrier(mpi_communicator);
-        
         // Load the hierarchy data for use in computations
         load_hierarchy_data(multilevel_params.target_hierarchy_dir);
-        pcout << "Loaded hierarchy data for direct parent-child weight assignment." << std::endl;
-        return;
+        pcout << "Loaded hierarchy data for direct parent-child weight assignment" << std::endl;
     }
-
-    // If not using Python script, use the built-in C++ implementation
-    // Create PointCloudHierarchyManager instance
-    PointCloudHierarchy::PointCloudHierarchyManager hierarchy_manager(
-        multilevel_params.target_min_points,
-        multilevel_params.target_max_points
-    );
-
-    try {
-        // Create output directory if it doesn't exist
-        fs::create_directories(multilevel_params.target_hierarchy_dir);
-
-        // Generate hierarchy
-        std::vector<double> target_weights(target_points.size());
-        for (size_t i = 0; i < target_points.size(); ++i) {
-            target_weights[i] = target_density[i];
-        }
-
-        pcout << "Generating hierarchy with " << target_points.size() << " points..." << std::endl;
-        
-        int num_levels = hierarchy_manager.generateHierarchy<dim>(
-            target_points,
-            target_weights,
-            multilevel_params.target_hierarchy_dir
-        );
-        
-        pcout << Color::green << Color::bold << "Successfully generated " << num_levels << " levels of point cloud hierarchy." << Color::reset << std::endl;
-        
-        // Load the hierarchy data for use in computations
-        load_hierarchy_data(multilevel_params.target_hierarchy_dir);
-        pcout << "Loaded hierarchy data for direct parent-child weight assignment." << std::endl;
-        
-    } catch (const std::exception& e) {
-        pcout << Color::red << Color::bold << "Error: " << e.what() << Color::reset << std::endl;
-    }
+    MPI_Barrier(mpi_communicator);
 }
 
 

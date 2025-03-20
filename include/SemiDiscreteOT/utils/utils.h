@@ -76,35 +76,63 @@ void write_vector(const VectorContainer& points,
  * @brief Read a vector container from a file in binary or text format
  * @tparam VectorContainer Type of vector container
  * @param points Vector container to store read data
- * @param filepath Path to input file (without extension)
- * @param fileMode Input format ("txt" or "bin")
+ * @param filepath Path to input file (with or without extension)
+ * @param fileMode Input format ("txt" or "bin"), if empty will be inferred from filepath
  * @return true if read successful, false otherwise
  */
 template<typename VectorContainer>
 bool read_vector(VectorContainer& points, 
                 const std::string& filepath, 
-                const std::string& fileMode = "txt") {
+                const std::string& fileMode = "") {
+    std::string actualFilepath = filepath;
+    std::string actualFileMode = fileMode;
+    
+    // If fileMode is not provided, infer it from the filepath extension
+    if (actualFileMode.empty()) {
+        size_t dotPos = filepath.find_last_of('.');
+        if (dotPos != std::string::npos) {
+            std::string extension = filepath.substr(dotPos + 1);
+            if (extension == "txt" || extension == "bin") {
+                actualFileMode = extension;
+                // Use the filepath as is since it already has the extension
+                actualFilepath = filepath;
+            } else {
+                // Unknown extension, default to txt
+                actualFileMode = "txt";
+                actualFilepath = filepath + ".txt";
+            }
+        } else {
+            // No extension found, default to txt
+            actualFileMode = "txt";
+            actualFilepath = filepath + ".txt";
+        }
+    } else {
+        // File mode is specified, append extension if not already present
+        if (filepath.find('.' + actualFileMode) != filepath.length() - actualFileMode.length() - 1) {
+            actualFilepath = filepath + '.' + actualFileMode;
+        }
+    }
+    
     std::ifstream file;
     
-    if (fileMode == "bin") {
-        file.open(filepath + ".bin", std::ios::binary);
+    if (actualFileMode == "bin") {
+        file.open(actualFilepath, std::ios::binary);
         if (!file.is_open()) {
-            std::cerr << "Error: Unable to open file for reading: " << filepath << ".bin" << std::endl;
+            std::cerr << "Error: Unable to open file for reading: " << actualFilepath << std::endl;
             return false;
         }
         
         file.seekg(0, std::ios::end);
         std::streamsize size = file.tellg();
         file.seekg(0, std::ios::beg);
-
         using value_type = typename VectorContainer::value_type;
         points.resize(size / sizeof(value_type));
         file.read(reinterpret_cast<char*>(points.data()), size);
         
-    } else if (fileMode == "txt") {
-        file.open(filepath + ".txt");
+    } else if (actualFileMode == "txt") {
+        file.open(actualFilepath);
         if (!file.is_open()) {
-            std::cerr << "Error: Unable to open file for reading: " << filepath << ".txt" << std::endl;
+            std::cerr << "Error: Unable to open file for reading: " << actualFilepath << std::endl;
             return false;
         }
         
@@ -115,7 +143,7 @@ bool read_vector(VectorContainer& points,
         }
         
     } else {
-        std::cerr << "Error: Invalid file mode specified." << std::endl;
+        std::cerr << "Error: Invalid file mode specified: " << actualFileMode << std::endl;
         return false;
     }
     
@@ -181,7 +209,7 @@ inline std::vector<std::string> select_folder(const std::string& base_dir = "out
 /**
  * @brief Get target point cloud hierarchy files
  * @param dir Directory containing hierarchy files
- * @return Vector of pairs (points_file, weights_file)
+ * @return Vector of pairs (points_file, density_file)
  */
 inline std::vector<std::pair<std::string, std::string>> get_target_hierarchy_files(const std::string& dir)
 {
@@ -203,10 +231,10 @@ inline std::vector<std::pair<std::string, std::string>> get_target_hierarchy_fil
                 points_file.find("level_") + 6, 
                 points_file.find("_points") - points_file.find("level_") - 6
             );
-            std::string weights_file = dir + "/level_" + level_num + "_weights";
+            std::string density_file = dir + "/level_" + level_num + "_density";
             
-            if (std::filesystem::exists(weights_file + ".txt")) {
-                files.push_back({points_file, weights_file});
+            if (std::filesystem::exists(density_file + ".txt")) {
+                files.push_back({points_file, density_file});
             }
         }
     }

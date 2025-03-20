@@ -44,6 +44,9 @@ public:
         std::string grid_generator_function;     ///< Name of the grid generator function
         std::string grid_generator_arguments;    ///< Arguments for the grid generator
         bool use_tetrahedral_mesh = false;      ///< Whether to use tetrahedral elements (3D only)
+        bool use_custom_density = false;        ///< Whether to use custom density
+        std::string density_file_path;          ///< Path to the density file
+        std::string density_file_format = "vtk"; ///< Format of the density file (vtk/h5)
     };
 
     /**
@@ -76,13 +79,13 @@ public:
         bool source_enabled = true;             ///< Whether to use source multilevel approach
         int source_min_vertices = 1000;         ///< Minimum vertices for coarsest source level
         int source_max_vertices = 10000;        ///< Maximum vertices for finest source level
-        std::string source_hierarchy_dir = "output/multilevel/meshes";  ///< Source hierarchy directory
+        std::string source_hierarchy_dir = "output/data_multilevel/source_multilevel";  ///< Source hierarchy directory
         
         // Target point cloud hierarchy parameters
         bool target_enabled = false;            ///< Whether to use target multilevel approach
         int target_min_points = 100;            ///< Minimum points for coarsest target level
         int target_max_points = 1000;           ///< Maximum points for finest target level
-        std::string target_hierarchy_dir = "output/target_multilevel";  ///< Target hierarchy directory
+        std::string target_hierarchy_dir = "output/data_multilevel/target_multilevel";  ///< Target hierarchy directory
         bool use_softmax_weight_transfer = true;///< Use softmax for weight transfer between target levels
         
         // Python clustering parameters

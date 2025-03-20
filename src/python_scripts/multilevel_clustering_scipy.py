@@ -55,14 +55,14 @@ class PointCloudHierarchyManager:
         points = int(level1_points / (4.0 ** (level - 1)))
         return max(points, self.min_points)
 
-    def kmeans_clustering(self, points, weights, k):
+    def kmeans_clustering(self, points, density, k):
         n_points = len(points)
         print(f"Clustering {n_points} points into {k} clusters")
 
         # If fewer points than clusters, return original points
         if n_points <= k:
             assignments = list(range(n_points))
-            return points, weights, assignments
+            return points, density, assignments
 
         # Start timing
         start_time = time.time()
@@ -78,16 +78,16 @@ class PointCloudHierarchyManager:
 
         print(f"  K-means clustering took {duration:.2f} seconds")
 
-        # Compute weights for each cluster
-        cluster_weights = np.zeros(k)
+        # Compute density for each cluster
+        cluster_density = np.zeros(k)
         for i in range(len(points)):
             cluster = assignments[i]
-            point_weight = 1.0 if len(weights) == 0 else weights[i]
-            cluster_weights[cluster] += point_weight
+            point_density = 1.0 if len(density) == 0 else density[i]
+            cluster_density[cluster] += point_density
 
-        return centers, cluster_weights, assignments
+        return centers, cluster_density, assignments
 
-    def generate_hierarchy(self, input_points, input_weights, output_dir):
+    def generate_hierarchy(self, input_points, input_density, output_dir):
         # Validate inputs
         if len(input_points) == 0:
             raise ValueError("Input point cloud is empty")
@@ -95,14 +95,14 @@ class PointCloudHierarchyManager:
         # Start timing the entire hierarchy generation
         start_total = time.time()
 
-        # Create uniform weights if none provided
-        weights = []
-        if len(input_weights) == 0:
-            weights = np.ones(len(input_points)) / len(input_points)
+        # Create uniform density if none provided
+        density = []
+        if len(input_density) == 0:
+            density = np.ones(len(input_points)) / len(input_points)
         else:
-            if len(input_weights) != len(input_points):
-                raise ValueError("Weight vector size doesn't match point cloud size")
-            weights = input_weights
+            if len(input_density) != len(input_points):
+                raise ValueError("Density vector size doesn't match point cloud size")
+            density = input_density
 
         # Create output directories
         self.ensure_directory_exists(output_dir)
@@ -129,11 +129,11 @@ class PointCloudHierarchyManager:
 
         # Store all point clouds for each level
         level_points_vec = [[] for _ in range(self.num_levels)]
-        level_weights_vec = [[] for _ in range(self.num_levels)]
+        level_density_vec = [[] for _ in range(self.num_levels)]
 
         # Level 0 is always the original point cloud
         level_points_vec[0] = input_points
-        level_weights_vec[0] = weights
+        level_density_vec[0] = density
         self.level_point_counts.append(len(input_points))
 
         print(f"Level 0: using original point cloud with {len(level_points_vec[0])} points")
@@ -144,11 +144,11 @@ class PointCloudHierarchyManager:
             print(f"Level {level}: targeting {points_for_level} points")
 
             # Use k-means clustering to create coarser point cloud with parent-child tracking
-            coarse_points, coarse_weights, assignments = self.kmeans_clustering(
-                level_points_vec[level-1], level_weights_vec[level-1], points_for_level)
+            coarse_points, coarse_density, assignments = self.kmeans_clustering(
+                level_points_vec[level-1], level_density_vec[level-1], points_for_level)
 
             level_points_vec[level] = coarse_points
-            level_weights_vec[level] = coarse_weights
+            level_density_vec[level] = coarse_density
             self.level_point_counts.append(len(coarse_points))
 
             print(f"  Generated {len(coarse_points)} points after clustering")
@@ -176,17 +176,17 @@ class PointCloudHierarchyManager:
         # Save the point clouds and parent-child relationships for each level
         for level in range(self.num_levels):
             points_file = os.path.join(output_dir, f"level_{level}_points.txt")
-            weights_file = os.path.join(output_dir, f"level_{level}_weights.txt")
+            density_file = os.path.join(output_dir, f"level_{level}_density.txt")
 
-            with open(points_file, 'w') as points_out, open(weights_file, 'w') as weights_out:
-                # Write points and weights
+            with open(points_file, 'w') as points_out, open(density_file, 'w') as density_out:
+                # Write points and density
                 for i in range(len(level_points_vec[level])):
                     # Write points
                     point_str = ' '.join(map(str, level_points_vec[level][i]))
                     points_out.write(f"{point_str}\n")
 
-                    # Write weights
-                    weights_out.write(f"{level_weights_vec[level][i]}\n")
+                    # Write density
+                    density_out.write(f"{level_density_vec[level][i]}\n")
 
             # Save parent-child relationships for non-boundary levels
             # Parents: For each point at level L, save its parent at level L+1
@@ -223,9 +223,10 @@ class PointCloudHierarchyManager:
 
 
 def read_parameters_from_prm(prm_file="parameters.prm"):
-    """Read min_points and max_points from parameters.prm file."""
+    """Read parameters from parameters.prm file."""
     min_points = 100  # Default value
     max_points = 2000  # Default value
+    output_dir = "output/data_multilevel/target_multilevel"  # Default value from ParameterManager.h
     
     try:
         with open(prm_file, 'r') as f:
@@ -257,46 +258,55 @@ def read_parameters_from_prm(prm_file="parameters.prm"):
                     if "#" in value_part:
                         value_part = value_part.split("#")[0].strip()
                     max_points = int(value_part)
+                elif "set target_hierarchy_dir =" in line:
+                    # Extract the value and remove any comments
+                    value_part = line.split("=")[1].strip()
+                    if "#" in value_part:
+                        value_part = value_part.split("#")[0].strip()
+                    # Remove quotes if present
+                    output_dir = value_part.strip('"').strip("'")
         
-        print(f"Read from parameters.prm: min_points={min_points}, max_points={max_points}")
+        print(f"Read from parameters.prm:")
+        print(f"  min_points = {min_points}")
+        print(f"  max_points = {max_points}")
+        print(f"  target_hierarchy_dir = {output_dir}")
     except Exception as e:
         print(f"Error reading parameters.prm: {e}")
-        print(f"Using default values: min_points={min_points}, max_points={max_points}")
+        print(f"Using default values:")
+        print(f"  min_points = {min_points}")
+        print(f"  max_points = {max_points}")
+        print(f"  target_hierarchy_dir = {output_dir}")
     
-    return min_points, max_points
+    return min_points, max_points, output_dir
 
 
 def main():
     # Load the target points
-    input_file = "output/data_points/target_points.txt"
-    output_dir = "output/target_multilevel"
-
-    # Ensure output directory exists
-    os.makedirs(output_dir, exist_ok=True)
-
-    print(f"Loading points from {input_file}")
-    points = []
-    with open(input_file, 'r') as f:
-        for line in f:
-            if line.strip():  # Skip empty lines
-                coords = list(map(float, line.strip().split()))
-                points.append(coords)
-
-    points = np.array(points)
-    print(f"Loaded {len(points)} points with dimension {points.shape[1]}")
-
-    # Create empty weights (will be initialized uniformly in the manager)
-    weights = []
-
+    points_file = "output/data_points/target_points.txt"
+    density_file = "output/data_density/target_density.txt"
+    
+    try:
+        points = np.loadtxt(points_file)
+        density = np.loadtxt(density_file)
+        print(f"Loaded {len(points)} target points")
+        print(f"Loaded target density values")
+    except Exception as e:
+        print(f"Error loading points or density: {e}")
+        return
+    
     # Read parameters from parameters.prm
-    min_points, max_points = read_parameters_from_prm()
-
-    # Create the hierarchy manager with parameters from prm file
-    manager = PointCloudHierarchyManager(min_points=min_points, max_points=max_points)
-
-    # Generate the hierarchy
-    num_levels = manager.generate_hierarchy(points, weights, output_dir)
-    print(f"Generated {num_levels} levels of point clouds")
+    min_points, max_points, output_dir = read_parameters_from_prm()
+    
+    # Create hierarchy manager
+    hierarchy_manager = PointCloudHierarchyManager(min_points, max_points)
+    
+    # Generate hierarchy
+    try:
+        num_levels = hierarchy_manager.generate_hierarchy(points, density, output_dir)
+        print(f"Successfully generated {num_levels} levels of point cloud hierarchy")
+    except Exception as e:
+        print(f"Error generating hierarchy: {e}")
+        return
 
 
 if __name__ == "__main__":
