@@ -70,12 +70,12 @@ GeogramPowerDiagram<dim>::~GeogramPowerDiagram() = default;
 template <int dim>
 void GeogramPowerDiagram<dim>::set_generators(
     const std::vector<Point<dim>> &points,
-    const Vector<double> &weights)
+    const Vector<double> &potentials)
 {
     this->generator_points = points;
-    this->generator_weights.resize(weights.size());
-    for (unsigned int i = 0; i < weights.size(); ++i) {
-        this->generator_weights[i] = weights[i];
+    this->generator_potentials.resize(potentials.size());
+    for (unsigned int i = 0; i < potentials.size(); ++i) {
+        this->generator_potentials[i] = potentials[i];
     }
     
     // Convert points to Geogram format
@@ -106,15 +106,15 @@ void GeogramPowerDiagram<dim>::init_power_diagram()
         }
     }
     
-    // Compute lifting coordinate based on weights
+    // Compute lifting coordinate based on potentials
     double W = 0.0;
     for (size_t i = 0; i < nb_points; ++i) {
-        W = std::max(W, this->generator_weights[i]);
+        W = std::max(W, this->generator_potentials[i]);
     }
     
     for (size_t i = 0; i < nb_points; ++i) {
         points_mesh_target_lifted[dimension_voronoi * i + dim] = 
-            ::sqrt(W - this->generator_weights[i]);
+            ::sqrt(W - this->generator_potentials[i]);
     }
     
     // Create Delaunay triangulation

@@ -49,10 +49,10 @@ public:
     };
 
     struct CopyData {
-        Vector<double> weight_values;
+        Vector<double> potential_values;
 
         CopyData(const unsigned int n_target_points)
-            : weight_values(n_target_points) {}
+            : potential_values(n_target_points) {}
     };
 
     // Constructor
@@ -70,7 +70,7 @@ public:
         const Vector<double>& target_density_fine,
         const std::vector<Point<dim>>& target_points_coarse,
         const Vector<double>& target_density_coarse,
-        const Vector<double>& weights_coarse,
+        const Vector<double>& potential_coarse,
         double regularization_param,
         int current_level,
         const std::vector<std::vector<std::vector<size_t>>>& child_indices);
@@ -102,7 +102,7 @@ private:
     const Vector<double>* current_target_density_fine{nullptr};
     const std::vector<Point<dim>>* current_target_points_coarse{nullptr};
     const Vector<double>* current_target_density_coarse{nullptr};
-    const Vector<double>* current_weights_coarse{nullptr};
+    const Vector<double>* current_potential_coarse{nullptr};
     const std::vector<std::vector<std::vector<size_t>>>* current_child_indices{nullptr};
     int current_level{0};
 

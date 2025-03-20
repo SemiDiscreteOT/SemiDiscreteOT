@@ -23,7 +23,7 @@ SotSolver<dim>::SotSolver(const MPI_Comm& comm)
     , current_distance_threshold(1e-1)
     , effective_distance_threshold(1e-1)
     , is_caching_active(false)
-    , current_weights(nullptr)
+    , current_potential(nullptr)
     , current_lambda(1.0)
     , global_functional(0.0)
     , global_C_integral(0.0)
@@ -70,7 +70,7 @@ bool SotSolver<dim>::validate_measures() const
 
 template <int dim>
 void SotSolver<dim>::solve(
-    Vector<double>& weights,
+    Vector<double>& potentials,
     const SourceMeasure& source,
     const TargetMeasure& target,
     const ParameterManager::SolverParameters& params)
@@ -80,12 +80,12 @@ void SotSolver<dim>::solve(
     target_measure = target;
 
     // Call main solve method
-    solve(weights, params);
+    solve(potentials, params);
 }
 
 template <int dim>
 void SotSolver<dim>::solve(
-    Vector<double>& weights,
+    Vector<double>& potentials,
     const ParameterManager::SolverParameters& params)
 {
     if (!validate_measures()) {
@@ -109,13 +109,13 @@ void SotSolver<dim>::solve(
           << "  Threads per process: " << n_threads << std::endl
           << "  Total parallel units: " << n_threads * n_mpi_processes << std::endl;
 
-    // Initialize weights if needed
-    if (weights.size() != target_measure.points.size()) {
-        weights.reinit(target_measure.points.size());
+    // Initialize potentials if needed
+    if (potentials.size() != target_measure.points.size()) {
+        potentials.reinit(target_measure.points.size());
     }
 
     // Initialize gradient member variable
-    gradient.reinit(weights.size());
+    gradient.reinit(potentials.size());
 
     // Create solver control with verbose output
     solver_control = std::make_unique<VerboseSolverControl>(
@@ -135,13 +135,13 @@ void SotSolver<dim>::solve(
 
         // Create and run BFGS solver
         SolverBFGS<Vector<double>> solver(*solver_control);
-        current_weights = &weights;
+        current_potential = &potentials;
 
         solver.solve(
             [this](const Vector<double>& w, Vector<double>& grad) {
                 return this->evaluate_functional(w, grad);
             },
-            weights
+            potentials
         );
 
         timer.stop();
@@ -165,16 +165,16 @@ void SotSolver<dim>::solve(
 
     // Reset solver state
     reset_distance_threshold_cache();
-    current_weights = nullptr;
+    current_potential = nullptr;
 }
 
 template <int dim>
 double SotSolver<dim>::evaluate_functional(
-    const Vector<double>& weights,
+    const Vector<double>& potentials,
     Vector<double>& gradient_out)
 {
-    // Store current weights for use in local assembly
-    current_weights = &weights;
+    // Store current potentials for use in local assembly
+    current_potential = &potentials;
     current_lambda = current_params.regularization_param;
 
     // Reset global accumulators
@@ -244,7 +244,7 @@ double SotSolver<dim>::evaluate_functional(
         // Add linear term (only on root process to avoid duplication)
         if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
             for (unsigned int i = 0; i < target_measure.points.size(); ++i) {
-                global_functional -= weights[i] * target_measure.density[i];
+                global_functional -= potentials[i] * target_measure.density[i];
                 gradient[i] -= target_measure.density[i];
             }
         }
@@ -359,13 +359,13 @@ void SotSolver<dim>::local_assemble(
         // Preload target data for vectorization
         std::vector<Point<dim>> target_positions(n_target_points);
         std::vector<double> target_densities(n_target_points);
-        std::vector<double> weight_values(n_target_points);
+        std::vector<double> potential_values(n_target_points);
 
         for (size_t i = 0; i < n_target_points; ++i) {
             const size_t idx = cell_target_indices[i];
             target_positions[i] = target_measure.points[idx];
             target_densities[i] = target_measure.density[idx];
-            weight_values[i] = (*current_weights)[idx];
+            potential_values[i] = (*current_potential)[idx];
         }
 
         // Process quadrature points
@@ -388,7 +388,7 @@ void SotSolver<dim>::local_assemble(
                     const double precomputed_term = target_densities[i] *
                         std::exp(-0.5 * local_dist2 * lambda_inv);
                     cell_cache_ptr->precomputed_exp_terms[base_idx + i] = precomputed_term;
-                    active_exp_terms[i] = precomputed_term * std::exp(weight_values[i] * lambda_inv);
+                    active_exp_terms[i] = precomputed_term * std::exp(potential_values[i] * lambda_inv);
                     total_sum_exp += active_exp_terms[i];
                 }
             } else {
@@ -398,7 +398,7 @@ void SotSolver<dim>::local_assemble(
                         continue;
                     }
                     const double cached_term = cell_cache_ptr->precomputed_exp_terms[base_idx + i];
-                    active_exp_terms[i] = cached_term * std::exp(weight_values[i] * lambda_inv);
+                    active_exp_terms[i] = cached_term * std::exp(potential_values[i] * lambda_inv);
                     total_sum_exp += active_exp_terms[i];
                 }
             }
@@ -437,13 +437,13 @@ direct_computation:
 
     std::vector<Point<dim>> target_positions(n_target_points);
     std::vector<double> target_densities(n_target_points);
-    std::vector<double> weight_values(n_target_points);
+    std::vector<double> potential_values(n_target_points);
 
     for (size_t i = 0; i < n_target_points; ++i) {
         const size_t idx = cell_target_indices[i];
         target_positions[i] = target_measure.points[idx];
         target_densities[i] = target_measure.density[idx];
-        weight_values[i] = (*current_weights)[idx];
+        potential_values[i] = (*current_potential)[idx];
     }
 
     for (unsigned int q = 0; q < n_q_points; ++q) {
@@ -458,7 +458,7 @@ direct_computation:
         for (size_t i = 0; i < n_target_points; ++i) {
             const double local_dist2 = (x - target_positions[i]).norm_square();
             exp_terms[i] = target_densities[i] *
-                std::exp((weight_values[i] - 0.5 * local_dist2) * lambda_inv);
+                std::exp((potential_values[i] - 0.5 * local_dist2) * lambda_inv);
             total_sum_exp += exp_terms[i];
         }
 
@@ -481,17 +481,17 @@ direct_computation:
 template <int dim>
 void SotSolver<dim>::compute_distance_threshold() const
 {
-    if (current_weights == nullptr) {
+    if (current_potential == nullptr) {
         current_distance_threshold = std::numeric_limits<double>::max();
         is_caching_active = false;
         return;
     }
 
-    double max_weight = *std::max_element(current_weights->begin(), current_weights->end());
-    double min_target_weight = *std::min_element(target_measure.density.begin(), target_measure.density.end());
+    double max_potential = *std::max_element(current_potential->begin(), current_potential->end());
+    double min_target_density = *std::min_element(target_measure.density.begin(), target_measure.density.end());
 
     double squared_threshold = -2.0 * current_lambda *
-        std::log(current_params.epsilon/min_target_weight) + 2.0 * max_weight;
+        std::log(current_params.epsilon/min_target_density) + 2.0 * max_potential;
     double computed_threshold = std::sqrt(std::max(0.0, squared_threshold));
 
     if (!current_params.use_caching) {

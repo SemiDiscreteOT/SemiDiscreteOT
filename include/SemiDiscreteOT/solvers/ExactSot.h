@@ -81,10 +81,10 @@ public:
     bool run();
 
     /**
-     * @brief Get computed weights
-     * @return Vector of computed weights
+     * @brief Get computed potential
+     * @return Vector of computed optimal transport potential values
      */
-    std::vector<double> get_weights() const;
+    std::vector<double> get_potential() const;
 
     /**
      * @brief Get target points
@@ -93,13 +93,13 @@ public:
     std::vector<dealii::Point<3>> get_target_points() const;
 
     /**
-     * @brief Save results to files
-     * @param weights_file Path to save weights
-     * @param points_file Path to save points
-     * @param io_coding File format for I/O operations (txt/bin)
-     * @return true if successful, false otherwise
+     * @brief Save computation results to files
+     * @param potential_file Path to save potential values
+     * @param points_file Path to save target points
+     * @param io_coding Coding format for file I/O
+     * @return True if successful, false otherwise
      */
-    bool save_results(const std::string& weights_file,
+    bool save_results(const std::string& potential_file,
                      const std::string& points_file,
                      const std::string& io_coding = "txt") const;
 
@@ -109,7 +109,7 @@ private:
 
     // Member variables
     std::unique_ptr<GEO::Mesh> source_mesh;
-    GEO::vector<double> weights;
+    GEO::vector<double> potential;
     std::vector<dealii::Point<3>> target_points;
     
     // Parameters

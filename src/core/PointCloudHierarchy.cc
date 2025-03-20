@@ -79,7 +79,7 @@ template <int dim>
 std::tuple<std::vector<std::array<double, dim>>, std::vector<double>, std::vector<int>> 
 PointCloudHierarchyManager::kmeansClustering(
     const std::vector<std::array<double, dim>>& points,
-    const std::vector<double>& weights,
+    const std::vector<double>& densities,
     size_t k) {
 
     const size_t n_points = points.size();
@@ -89,7 +89,7 @@ PointCloudHierarchyManager::kmeansClustering(
         // If fewer points than clusters, return original points
         std::vector<int> assignments(points.size());
         std::iota(assignments.begin(), assignments.end(), 0); // Each point is its own cluster
-        return {points, weights, assignments};
+        return {points, densities, assignments};
     }
     
     // Set up clustering parameters
@@ -113,21 +113,21 @@ PointCloudHierarchyManager::kmeansClustering(
     // Convert cluster assignments to int
     std::vector<int> assignments(cluster_assignments.begin(), cluster_assignments.end());
     
-    // Compute weights for each cluster
-    std::vector<double> cluster_weights(k, 0.0);
+    // Compute densities for each cluster
+    std::vector<double> cluster_densities(k, 0.0);
     for (size_t i = 0; i < points.size(); ++i) {
         int cluster = assignments[i];
-        double point_weight = weights.empty() ? 1.0 : weights[i];
-        cluster_weights[cluster] += point_weight;
+        double point_density = densities.empty() ? 1.0 : densities[i];
+        cluster_densities[cluster] += point_density;
     }
     
-    return {centers, cluster_weights, assignments};
+    return {centers, cluster_densities, assignments};
 }
 
 template <int dim>
 int PointCloudHierarchyManager::generateHierarchy(
     const std::vector<Point<dim>>& input_points,
-    const std::vector<double>& input_weights,
+    const std::vector<double>& input_densities,
     const std::string& output_dir) {
     
     // Validate inputs
@@ -138,15 +138,15 @@ int PointCloudHierarchyManager::generateHierarchy(
     // Start timing the entire hierarchy generation
     auto start_total = std::chrono::high_resolution_clock::now();
     
-    // Create uniform weights if none provided
-    std::vector<double> weights;
-    if (input_weights.empty()) {
-        weights.resize(input_points.size(), 1.0 / input_points.size());
+    // Create uniform densities if none provided
+    std::vector<double> densities;
+    if (input_densities.empty()) {
+        densities.resize(input_points.size(), 1.0 / input_points.size());
     } else {
-        if (input_weights.size() != input_points.size()) {
-            throw std::runtime_error("Weight vector size doesn't match point cloud size");
+        if (input_densities.size() != input_points.size()) {
+            throw std::runtime_error("density vector size doesn't match point cloud size");
         }
-        weights = input_weights;
+        densities = input_densities;
     }
     
     // Create output directories
@@ -182,11 +182,11 @@ int PointCloudHierarchyManager::generateHierarchy(
     
     // Store all point clouds for each level
     std::vector<std::vector<std::array<double, dim>>> level_points_vec(num_levels_);
-    std::vector<std::vector<double>> level_weights_vec(num_levels_);
+    std::vector<std::vector<double>> level_densities_vec(num_levels_);
     
     // Level 0 is always the original point cloud
     level_points_vec[0] = points_array;
-    level_weights_vec[0] = weights;
+    level_densities_vec[0] = densities;
     level_point_counts_.push_back(input_points.size());
     
     std::cout << "Level 0: using original point cloud with " << level_points_vec[0].size() << " points" << std::endl;
@@ -198,14 +198,14 @@ int PointCloudHierarchyManager::generateHierarchy(
         
         // Use k-means clustering to create coarser point cloud with parent-child tracking
         std::vector<std::array<double, dim>> coarse_points;
-        std::vector<double> coarse_weights;
+        std::vector<double> coarse_densities;
         std::vector<int> assignments;
         
-        std::tie(coarse_points, coarse_weights, assignments) = kmeansClustering<dim>(
-            level_points_vec[level-1], level_weights_vec[level-1], points_for_level);
+        std::tie(coarse_points, coarse_densities, assignments) = kmeansClustering<dim>(
+            level_points_vec[level-1], level_densities_vec[level-1], points_for_level);
         
         level_points_vec[level] = coarse_points;
-        level_weights_vec[level] = coarse_weights;
+        level_densities_vec[level] = coarse_densities;
         level_point_counts_.push_back(coarse_points.size());
         
         std::cout << "  Generated " << coarse_points.size() << " points after clustering" << std::endl;
@@ -236,23 +236,23 @@ int PointCloudHierarchyManager::generateHierarchy(
     // Save the point clouds and parent-child relationships for each level
     for (int level = 0; level < num_levels_; ++level) {
         std::string points_file = output_dir + "/level_" + std::to_string(level) + "_points.txt";
-        std::string weights_file = output_dir + "/level_" + std::to_string(level) + "_weights.txt";
+        std::string densities_file = output_dir + "/level_" + std::to_string(level) + "_densities.txt";
         
         std::ofstream points_out(points_file);
-        std::ofstream weights_out(weights_file);
+        std::ofstream densities_out(densities_file);
         
-        if (!points_out || !weights_out) {
+        if (!points_out || !densities_out) {
             throw std::runtime_error("Failed to open output files for level " + std::to_string(level));
         }
         
-        // Write points and weights
+        // Write points and densities
         for (size_t i = 0; i < level_points_vec[level].size(); ++i) {
             for (int d = 0; d < dim; ++d) {
                 points_out << level_points_vec[level][i][d] << (d < dim - 1 ? " " : "");
             }
             points_out << std::endl;
             
-            weights_out << level_weights_vec[level][i] << std::endl;
+            densities_out << level_densities_vec[level][i] << std::endl;
         }
         
         // Save parent-child relationships for non-boundary levels

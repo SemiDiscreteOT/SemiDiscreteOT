@@ -109,11 +109,11 @@ public:
         double functional_value{0.0};
         Vector<double> gradient_values;  // Local gradient contribution
         double C_integral{0.0};
-        Vector<double> weight_values;  // For softmax refinement
+        Vector<double> potential_values;  // For softmax refinement
 
         CopyData(const unsigned int n_target_points)
             : gradient_values(n_target_points),
-              weight_values(n_target_points) 
+              potential_values(n_target_points) 
         {
             gradient_values = 0;  // Initialize local gradient to zero
         }
@@ -133,14 +133,14 @@ public:
                      const Vector<double>& target_density);
 
     // Main solver interface
-    void solve(Vector<double>& weights,
-              const ParameterManager::SolverParameters& params = ParameterManager::SolverParameters());
+    void solve(Vector<double>& potential,
+              const ParameterManager::SolverParameters& params);
 
     // Alternative solve interface if measures not set up beforehand
-    void solve(Vector<double>& weights,
+    void solve(Vector<double>& potential,
               const SourceMeasure& source,
               const TargetMeasure& target,
-              const ParameterManager::SolverParameters& params = ParameterManager::SolverParameters());
+              const ParameterManager::SolverParameters& params);
 
     // Getters for solver results
     double get_last_functional_value() const { return global_functional; }
@@ -152,8 +152,8 @@ public:
 
 private:
     // Core evaluation method
-    double evaluate_functional(const Vector<double>& weights, 
-                             Vector<double>& gradient);
+    double evaluate_functional(const Vector<double>& potential,
+                             Vector<double>& gradient_out);
 
     // Local assembly methods
     void local_assemble(const typename DoFHandler<dim>::active_cell_iterator& cell,
@@ -207,7 +207,7 @@ private:
     mutable double current_distance_threshold;
     mutable double effective_distance_threshold;
     mutable bool is_caching_active;
-    const Vector<double>* current_weights;
+    const Vector<double>* current_potential;
     double current_lambda;
     mutable double global_functional;
     mutable double global_C_integral;

@@ -11,15 +11,15 @@ DealIIPowerDiagram<dim>::DealIIPowerDiagram(const Triangulation<dim> &source_mes
 
 template <int dim>
 void DealIIPowerDiagram<dim>::set_generators(const std::vector<Point<dim>> &points,
-                                          const Vector<double> &weights)
+                                          const Vector<double> &potentials)
 {
-    Assert(points.size() == weights.size(),
-           ExcDimensionMismatch(points.size(), weights.size()));
+    Assert(points.size() == potentials.size(),
+           ExcDimensionMismatch(points.size(), potentials.size()));
     
     this->generator_points = points;
-    this->generator_weights.resize(weights.size());
-    for (unsigned int i = 0; i < weights.size(); ++i)
-        this->generator_weights[i] = weights[i];
+    this->generator_potentials.resize(potentials.size());
+    for (unsigned int i = 0; i < potentials.size(); ++i)
+        this->generator_potentials[i] = potentials[i];
 }
 
 template <int dim>
@@ -30,7 +30,7 @@ double DealIIPowerDiagram<dim>::power_distance(const Point<dim> &point,
            ExcIndexRange(generator_idx, 0, this->generator_points.size()));
     const double squared_distance = 
         point.distance_square(this->generator_points[generator_idx]);
-    return squared_distance - this->generator_weights[generator_idx];
+    return squared_distance - this->generator_potentials[generator_idx];
 }
 
 template <int dim>

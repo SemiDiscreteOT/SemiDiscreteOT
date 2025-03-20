@@ -137,9 +137,9 @@ bool ExactSot::run() {
         OTM.optimize(max_iterations_);
         
         // Store results
-        weights.resize(OTM.nb_points());
+        potential.resize(OTM.nb_points());
         for (GEO::index_t i = 0; i < OTM.nb_points(); ++i) {
-            weights[i] = OTM.weight(i);
+            potential[i] = OTM.weight(i);
         }
         
         std::cout << "Optimization completed successfully" << std::endl;
@@ -150,22 +150,22 @@ bool ExactSot::run() {
     }
 }
 
-std::vector<double> ExactSot::get_weights() const {
-    return std::vector<double>(weights.begin(), weights.end());
+std::vector<double> ExactSot::get_potential() const {
+    return std::vector<double>(potential.begin(), potential.end());
 }
 
 std::vector<dealii::Point<3>> ExactSot::get_target_points() const {
     return target_points;
 }
 
-bool ExactSot::save_results(const std::string& weights_file,
+bool ExactSot::save_results(const std::string& potential_file,
                           const std::string& points_file,
                           const std::string& io_coding) const {
     try {
-        std::cout << "Saving weights to " << weights_file << std::endl;
-        // Save weights using Utils
-        std::vector<double> weights_vec(weights.begin(), weights.end());
-        Utils::write_vector(weights_vec, weights_file, io_coding);
+        std::cout << "Saving potential to " << potential_file << std::endl;
+        // Save potential using Utils
+        std::vector<double> potential_vec(potential.begin(), potential.end());
+        Utils::write_vector(potential_vec, potential_file, io_coding);
         
         std::cout << "Saving points to " << points_file << std::endl;
         // Save points directly using Utils

@@ -31,7 +31,7 @@ public:
     virtual ~PowerDiagramBase() = default;
     
     virtual void set_generators(const std::vector<Point<dim>> &points,
-                              const Vector<double> &weights) = 0;
+                              const Vector<double> &potentials) = 0;
                        
     virtual void compute_power_diagram() = 0;
     
@@ -43,7 +43,7 @@ public:
 
 protected:
     std::vector<Point<dim>> generator_points;
-    std::vector<double> generator_weights;
+    std::vector<double> generator_potentials;
     std::vector<Point<dim>> cell_centroids;
 };
 
@@ -53,7 +53,7 @@ public:
     DealIIPowerDiagram(const Triangulation<dim> &source_mesh);
     
     void set_generators(const std::vector<Point<dim>> &points,
-                       const Vector<double> &weights) override;
+                       const Vector<double> &potentials) override;
                        
     double power_distance(const Point<dim> &point,
                          const unsigned int generator_idx) const;
@@ -81,7 +81,7 @@ public:
     ~GeogramPowerDiagram();
     
     void set_generators(const std::vector<Point<dim>> &points,
-                       const Vector<double> &weights) override;
+                       const Vector<double> &potentials) override;
                        
     void compute_power_diagram() override;
     

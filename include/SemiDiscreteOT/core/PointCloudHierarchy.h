@@ -33,7 +33,7 @@ public:
     /**
      * @brief Generate hierarchy of point clouds from input points
      * @param input_points Vector of input points (finest level)
-     * @param input_weights Vector of input weights (optional, uniform weights if empty)
+     * @param input_density Vector of input density values (optional, uniform density if empty)
      * @param output_dir Directory to save the point cloud hierarchy
      * @return Number of levels generated
      * @throws std::runtime_error if processing fails
@@ -41,7 +41,7 @@ public:
     template <int dim>
     int generateHierarchy(
         const std::vector<Point<dim>>& input_points,
-        const std::vector<double>& input_weights,
+        const std::vector<double>& input_density,
         const std::string& output_dir);
 
     /**
@@ -105,18 +105,18 @@ private:
     /**
      * @brief Performs parallel k-means clustering on a set of points with parent-child tracking
      * @param points Input points from finer level
-     * @param weights Input weights
+     * @param densities Input densities
      * @param k Number of clusters (points at coarser level)
      * @return Tuple of:
      *         - cluster centers (parent points)
-     *         - aggregated weights for parents
+     *         - aggregated densities for parents
      *         - assignments (mapping of each child to its parent cluster)
      */
     template <int dim>
     std::tuple<std::vector<std::array<double, dim>>, std::vector<double>, std::vector<int>>
     kmeansClustering(
         const std::vector<std::array<double, dim>>& points,
-        const std::vector<double>& weights,
+        const std::vector<double>& densities,
         size_t k);
 };
 

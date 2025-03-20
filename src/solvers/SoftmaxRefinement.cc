@@ -67,7 +67,7 @@ void SoftmaxRefinement<dim>::local_assemble(
     const std::vector<Point<dim>> &q_points = scratch_data.fe_values.get_quadrature_points();
     scratch_data.fe_values.get_function_values(source_density, scratch_data.density_values);
 
-    copy_data.weight_values = 0;
+    copy_data.potential_values = 0;
 
     const unsigned int n_q_points = q_points.size();
     const double lambda_inv = 1.0 / current_lambda;
@@ -81,14 +81,14 @@ void SoftmaxRefinement<dim>::local_assemble(
     const unsigned int n_target_points_coarse = cell_target_indices_coarse.size();
     std::vector<Point<dim>> target_positions_coarse(n_target_points_coarse);
     std::vector<double> target_densities_coarse(n_target_points_coarse);
-    std::vector<double> weight_values_coarse(n_target_points_coarse);
+    std::vector<double> potential_values_coarse(n_target_points_coarse);
     
     // Load coarse target point data
     for (size_t i = 0; i < n_target_points_coarse; ++i) {
         const size_t idx = cell_target_indices_coarse[i];
         target_positions_coarse[i] = (*current_target_points_coarse)[idx];
         target_densities_coarse[i] = (*current_target_density_coarse)[idx];
-        weight_values_coarse[i] = (*current_weights_coarse)[idx];
+        potential_values_coarse[i] = (*current_potential_coarse)[idx];
     }
 
     // Get fine points that are children of the coarse points
@@ -144,14 +144,14 @@ void SoftmaxRefinement<dim>::local_assemble(
             const double local_dist2 = (x - target_positions_coarse[i]).norm_square();
             if (local_dist2 <= threshold_sq) {
                 exp_terms_coarse[i] = target_densities_coarse[i] * 
-                    std::exp((weight_values_coarse[i] - 0.5 * local_dist2) * lambda_inv);
+                    std::exp((potential_values_coarse[i] - 0.5 * local_dist2) * lambda_inv);
                 total_sum_exp += exp_terms_coarse[i];
             }
         }
 
         if (total_sum_exp <= 0.0) continue;
 
-        // Now update weights for fine points using their parent's exp term for normalization
+        // Now update potential for fine points using their parent's exp term for normalization
         const double scale = density_value * JxW / total_sum_exp;
         
         #pragma omp simd
@@ -159,7 +159,7 @@ void SoftmaxRefinement<dim>::local_assemble(
             const double local_dist2_fine = (x - target_positions_fine[i]).norm_square();
             if (local_dist2_fine <= threshold_sq) {
                 const double exp_term_fine = std::exp((- 0.5 * local_dist2_fine) * lambda_inv);
-                copy_data.weight_values[cell_target_indices_fine[i]] += scale * exp_term_fine;
+                copy_data.potential_values[cell_target_indices_fine[i]] += scale * exp_term_fine;
             }
         }
     }
@@ -171,7 +171,7 @@ Vector<double> SoftmaxRefinement<dim>::compute_refinement(
     const Vector<double>& target_density_fine,
     const std::vector<Point<dim>>& target_points_coarse,
     const Vector<double>& target_density_coarse,
-    const Vector<double>& weights_coarse,
+    const Vector<double>& potential_coarse,
     double regularization_param,
     int level,
     const std::vector<std::vector<std::vector<size_t>>>& child_indices)
@@ -181,7 +181,7 @@ Vector<double> SoftmaxRefinement<dim>::compute_refinement(
     current_target_density_fine = &target_density_fine;
     current_target_points_coarse = &target_points_coarse;
     current_target_density_coarse = &target_density_coarse;
-    current_weights_coarse = &weights_coarse;
+    current_potential_coarse = &potential_coarse;
     current_child_indices = &child_indices;
     current_level = level;
     current_lambda = regularization_param;
@@ -189,9 +189,9 @@ Vector<double> SoftmaxRefinement<dim>::compute_refinement(
     // Initialize RTree for spatial queries
     setup_rtree();
 
-    // Initialize output weights
-    Vector<double> weights_fine(target_points_fine.size());
-    Vector<double> local_process_weights(target_points_fine.size());
+    // Initialize output potential
+    Vector<double> potential_fine(target_points_fine.size());
+    Vector<double> local_process_potential(target_points_fine.size());
 
     // Create appropriate quadrature
     std::unique_ptr<Quadrature<dim>> quadrature;
@@ -222,29 +222,29 @@ Vector<double> SoftmaxRefinement<dim>::compute_refinement(
                CopyData &copy_data) {
             this->local_assemble(cell, scratch_data, copy_data);
         },
-        [&local_process_weights](const CopyData &copy_data) {
-            local_process_weights += copy_data.weight_values;
+        [&local_process_potential](const CopyData &copy_data) {
+            local_process_potential += copy_data.potential_values;
         },
         scratch_data,
         copy_data);
 
     // Sum up contributions across all MPI processes
-    weights_fine = 0;
-    Utilities::MPI::sum(local_process_weights, mpi_communicator, weights_fine);
+    potential_fine = 0;
+    Utilities::MPI::sum(local_process_potential, mpi_communicator, potential_fine);
 
-    // Apply epsilon scaling to weights
+    // Apply epsilon scaling to potential
     if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
         for (unsigned int i = 0; i < target_points_fine.size(); ++i) {
-            if (weights_fine[i] > 0.0) {
-                weights_fine[i] = -regularization_param * std::log(weights_fine[i]);
+            if (potential_fine[i] > 0.0) {
+                potential_fine[i] = -regularization_param * std::log(potential_fine[i]);
             }
         }
     }
 
-    // Broadcast final weights to all processes
-    weights_fine = Utilities::MPI::broadcast(mpi_communicator, weights_fine, 0);
+    // Broadcast final potential to all processes
+    potential_fine = Utilities::MPI::broadcast(mpi_communicator, potential_fine, 0);
 
-    return weights_fine;
+    return potential_fine;
 }
 
 // Explicit instantiation

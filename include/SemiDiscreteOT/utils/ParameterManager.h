@@ -86,7 +86,7 @@ public:
         int target_min_points = 100;            ///< Minimum points for coarsest target level
         int target_max_points = 1000;           ///< Maximum points for finest target level
         std::string target_hierarchy_dir = "output/data_multilevel/target_multilevel";  ///< Target hierarchy directory
-        bool use_softmax_weight_transfer = true;///< Use softmax for weight transfer between target levels
+        bool use_softmax_potential_transfer = true;///< Use softmax for potential transfer between target levels
         
         // Python clustering parameters
         bool use_python_clustering = false;     ///< Whether to use Python scripts for clustering

@@ -50,8 +50,6 @@ public:
     SemiDiscreteOT(const MPI_Comm &mpi_communicator);
     void run();
     void save_discrete_measures();
-    void run_sot(const std::vector<Point<dim>>& custom_target_points, 
-                 const std::vector<double>& custom_target_weights);
 
 private:
     // MPI-related members
@@ -96,10 +94,10 @@ private:
     void prepare_target_multilevel();
     void run_multilevel_sot();
     void run_target_multilevel(const std::string& source_mesh_file = "",
-                             Vector<double>* output_weights = nullptr,
+                             Vector<double>* output_potentials = nullptr,
                              bool save_results_to_files = true);
     void run_target_multilevel_for_source_level(const std::string& source_mesh_file, 
-                                              Vector<double>& weights);
+                                              Vector<double>& potentials);
 
     // Setup methods
     void setup_source_finite_elements();
@@ -107,7 +105,7 @@ private:
     void setup_finite_elements();
     void setup_target_points();
     void setup_multilevel_finite_elements();
-    void save_results(const Vector<double>& weights, const std::string& filename);
+    void save_results(const Vector<double>& potentials, const std::string& filename);
 
     // Exact SOT method (3D only)
     template <int d = dim>
@@ -131,17 +129,17 @@ private:
     Vector<double> target_density_coarse;          // Coarse level densities
     mutable double current_distance_threshold{0.0}; // Current distance threshold for computations
 
-    // Weight transfer between hierarchy levels
-    void assign_weights_by_hierarchy(Vector<double>& weights, 
+    // Potential transfer between hierarchy levels
+    void assign_potentials_by_hierarchy(Vector<double>& potentials, 
                                    int coarse_level, 
                                    int fine_level, 
-                                   const Vector<double>& prev_weights);
+                                   const Vector<double>& prev_potentials);
 
     // Helper methods
     std::vector<std::pair<std::string, std::string>> get_target_hierarchy_files() const;
     std::vector<std::string> get_mesh_hierarchy_files() const;
     void load_target_points_at_level(const std::string& points_file, 
-                                   const std::string& weights_file);
+                                   const std::string& density_file);
 
     // Solver member
     std::unique_ptr<SotSolver<dim>> sot_solver;

@@ -92,13 +92,13 @@ std::vector<std::pair<std::string, std::string>> SemiDiscreteOT<dim>::get_target
 template <int dim>
 void SemiDiscreteOT<dim>::load_target_points_at_level(
     const std::string& points_file, 
-    const std::string& weights_file)
+    const std::string& density_file)
 {
     pcout << "Loading target points from: " << points_file << std::endl;
-    pcout << "Loading target weights from: " << weights_file << std::endl;
+    pcout << "Loading target densities from: " << density_file << std::endl;
     
     std::vector<Point<dim>> local_target_points;
-    std::vector<double> local_weights;
+    std::vector<double> local_densities;
     bool load_success = true;
     
     // Only rank 0 reads files
@@ -109,9 +109,9 @@ void SemiDiscreteOT<dim>::load_target_points_at_level(
             load_success = false;
         }
         
-        // Read weights
-        if (load_success && !Utils::read_vector(local_weights, weights_file, io_coding)) {
-            pcout << Color::red << Color::bold << "Error: Cannot read weights file: " << weights_file << Color::reset << std::endl;
+        // Read potentials
+        if (load_success && !Utils::read_vector(local_densities, density_file, io_coding)) {
+            pcout << Color::red << Color::bold << "Error: Cannot read densities file: " << density_file << Color::reset << std::endl;
             load_success = false;
         }
     }
@@ -119,7 +119,7 @@ void SemiDiscreteOT<dim>::load_target_points_at_level(
     // Broadcast success status
     load_success = Utilities::MPI::broadcast(mpi_communicator, load_success, 0);
     if (!load_success) {
-        throw std::runtime_error("Failed to load target points or weights");
+        throw std::runtime_error("Failed to load target points or densities");
     }
     
     // Broadcast sizes
@@ -132,20 +132,20 @@ void SemiDiscreteOT<dim>::load_target_points_at_level(
     // Resize containers on non-root ranks
     if (Utilities::MPI::this_mpi_process(mpi_communicator) != 0) {
         local_target_points.resize(n_points);
-        local_weights.resize(n_points);
+        local_densities.resize(n_points);
     }
     
     // Broadcast data
     for (unsigned int i = 0; i < n_points; ++i) {
         local_target_points[i] = Utilities::MPI::broadcast(mpi_communicator, local_target_points[i], 0);
-        local_weights[i] = Utilities::MPI::broadcast(mpi_communicator, local_weights[i], 0);
+        local_densities[i] = Utilities::MPI::broadcast(mpi_communicator, local_densities[i], 0);
     }
     
     // Update class members
     target_points = std::move(local_target_points);
     target_density.reinit(n_points);
     for (unsigned int i = 0; i < n_points; ++i) {
-        target_density[i] = local_weights[i];
+        target_density[i] = local_densities[i];
     }
     
     pcout << Color::green << "Successfully loaded " << n_points << " target points at this level" << Color::reset << std::endl;
@@ -440,27 +440,27 @@ void SemiDiscreteOT<dim>::setup_target_points()
 }
 
 template <int dim>
-void SemiDiscreteOT<dim>::assign_weights_by_hierarchy(
-    Vector<double>& weights, int coarse_level, int fine_level, const Vector<double>& prev_weights) {
+void SemiDiscreteOT<dim>::assign_potentials_by_hierarchy(
+    Vector<double>& potentials, int coarse_level, int fine_level, const Vector<double>& prev_potentials) {
     
     if (!has_hierarchy_data_ || coarse_level < 0 || fine_level < 0) {
-        std::cerr << "Invalid hierarchy levels for weight assignment" << std::endl;
+        std::cerr << "Invalid hierarchy levels for potential assignment" << std::endl;
         return;
     }
     
     // Direct assignment if same level
     if (coarse_level == fine_level) {
-        weights = prev_weights;
+        potentials = prev_potentials;
         return;
     }
 
-    // Initialize weights for current level
-    weights.reinit(target_points.size());
+    // Initialize potentials for current level
+    potentials.reinit(target_points.size());
 
-    if (multilevel_params.use_softmax_weight_transfer) {
-        pcout << "Applying softmax-based weight assignment from level " << coarse_level
+    if (multilevel_params.use_softmax_potential_transfer) {
+        pcout << "Applying softmax-based potential assignment from level " << coarse_level
               << " to level " << fine_level << std::endl;
-        pcout << "Source points: " << prev_weights.size() 
+        pcout << "Source points: " << prev_potentials.size() 
               << ", Target points: " << target_points.size() << std::endl;
 
         // Create SoftmaxRefinement instance
@@ -474,37 +474,37 @@ void SemiDiscreteOT<dim>::assign_weights_by_hierarchy(
             current_distance_threshold);
 
         // Apply softmax refinement
-        weights = softmax_refiner.compute_refinement(
+        potentials = softmax_refiner.compute_refinement(
             target_points,           // target_points_fine
             target_density,         // target_density_fine
             target_points_coarse,   // target_points_coarse
             target_density_coarse,  // target_density_coarse
-            prev_weights,          // weights_coarse
+            prev_potentials,          // potentials_coarse
             solver_params.regularization_param,
             fine_level,
             child_indices_);
         
-        pcout << "Softmax-based weight assignment completed." << std::endl;
+        pcout << "Softmax-based potential assignment completed." << std::endl;
     }
     else {
-        pcout << "Applying direct weight assignment from level " << coarse_level
+        pcout << "Applying direct potential assignment from level " << coarse_level
               << " to level " << fine_level << std::endl;
-        pcout << "Source points: " << prev_weights.size() 
+        pcout << "Source points: " << prev_potentials.size() 
               << ", Target points: " << target_points.size() << std::endl;
 
         if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
-            // Going from coarse to fine: Each child gets its parent's weight
+            // Going from coarse to fine: Each child gets its parent's potential
             #pragma omp parallel for
-            for (size_t j = 0; j < prev_weights.size(); ++j) {
+            for (size_t j = 0; j < prev_potentials.size(); ++j) {
                 const auto& children = child_indices_[fine_level][j];
                 for (size_t child : children) {
-                    weights[child] = prev_weights[j];
+                    potentials[child] = prev_potentials[j];
                 }
             }
         }
 
-        // Broadcast the weights to all processes
-        Utilities::MPI::broadcast(mpi_communicator, weights, 0);
+        // Broadcast the potentials to all processes
+        Utilities::MPI::broadcast(mpi_communicator, potentials, 0);
     }
 }
 
@@ -534,13 +534,13 @@ void SemiDiscreteOT<dim>::run_sot()
     // Set up target measure
     sot_solver->setup_target(target_points, target_density);
 
-    Vector<double> weights(target_points.size());
+    Vector<double> potential(target_points.size());
 
     if (solver_config.use_epsilon_scaling && epsilon_scaling_handler) {
         pcout << "Using epsilon scaling with EpsilonScalingHandler:" << std::endl
               << "  Initial epsilon: " << solver_config.regularization_param << std::endl
               << "  Scaling factor: " << solver_config.epsilon_scaling_factor << std::endl
-                  << "  Number of steps: " << solver_config.epsilon_scaling_steps << std::endl;
+              << "  Number of steps: " << solver_config.epsilon_scaling_steps << std::endl;
         // Compute epsilon distribution for a single level
         std::vector<std::vector<double>> epsilon_distribution = 
             epsilon_scaling_handler->compute_epsilon_distribution(1, true, false);
@@ -556,12 +556,12 @@ void SemiDiscreteOT<dim>::run_sot()
                 solver_config.regularization_param = epsilon_sequence[i];
                 
                 try {
-                    sot_solver->solve(weights, solver_config);
+                    sot_solver->solve(potential, solver_config);
                     
                     // Save intermediate results
                     if (i < epsilon_sequence.size() - 1) {
                         std::string eps_suffix = "_eps" + std::to_string(i + 1);
-                        save_results(weights, "weights" + eps_suffix);
+                        save_results(potential, "potential" + eps_suffix);
                     }
                     
                 } catch (const SolverControl::NoConvergence& exc) {
@@ -576,14 +576,14 @@ void SemiDiscreteOT<dim>::run_sot()
     } else {
         // Run single optimization with original epsilon
         try {
-            sot_solver->solve(weights, solver_config);
+            sot_solver->solve(potential, solver_config);
         } catch (const SolverControl::NoConvergence& exc) {
             pcout << Color::red << Color::bold << "Warning: Optimization did not converge." << Color::reset << std::endl;
         }
     }
 
     // Save final results
-    save_results(weights, "weights");
+    save_results(potential, "potential");
 
     timer.stop();
     pcout << "\n" << Color::green << Color::bold << "SOT optimization completed in " << timer.wall_time() << " seconds" << Color::reset << std::endl;
@@ -592,7 +592,7 @@ void SemiDiscreteOT<dim>::run_sot()
 template <int dim>
 void SemiDiscreteOT<dim>::run_target_multilevel(
     const std::string& source_mesh_file,
-    Vector<double>* output_weights,
+    Vector<double>* output_potentials,
     bool save_results_to_files)
 {
     Timer global_timer;
@@ -660,8 +660,8 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
         epsilon_scaling_handler->print_epsilon_distribution();
     }
     
-    // Vector to store current weights solution
-    Vector<double> level_weights;
+    // Vector to store current potentials solution
+    Vector<double> level_potentials;
     
     // Configure solver parameters for this level
     ParameterManager::SolverParameters& solver_config = solver_params;
@@ -678,11 +678,11 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
         int level_number = 0;
         std::string level_output_dir;
         std::string points_file;
-        std::string weights_file;
+        std::string potentials_file;
         if(Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
             const auto& hierarchy_file = hierarchy_files[level];
             points_file = hierarchy_file.first;
-            weights_file = hierarchy_file.second;
+            potentials_file = hierarchy_file.second;
         
             // Extract level number from filename
             std::string level_num = points_file.substr(
@@ -711,18 +711,18 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
             target_points_coarse = target_points;
             target_density_coarse = target_density;
         }
-        load_target_points_at_level(points_file, weights_file);
+        load_target_points_at_level(points_file, potentials_file);
         pcout << "Target points loaded for level " << level_number << std::endl;
         pcout << "Target points size: " << target_points.size() << std::endl;
         
         // Set up target measure for this level
         sot_solver->setup_target(target_points, target_density);
         
-        // Initialize weights for this level
-        Vector<double> current_level_weights(target_points.size());
+        // Initialize potentials for this level
+        Vector<double> current_level_potentials(target_points.size());
         if (level > 0) {
-            // Use hierarchy-based weight transfer from previous level
-            assign_weights_by_hierarchy(current_level_weights, level_number+1, level_number, level_weights);
+            // Use hierarchy-based potential transfer from previous level
+            assign_potentials_by_hierarchy(current_level_potentials, level_number+1, level_number, level_potentials);
         }
 
         // Apply epsilon scaling for this level if enabled
@@ -746,7 +746,7 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
                     
                     try {
                         // Run optimization with current epsilon
-                        sot_solver->solve(current_level_weights, solver_config);
+                        sot_solver->solve(current_level_potentials, solver_config);
                         
                         level_timer.stop();
                         pcout << "  Completed in " << level_timer.wall_time() << " seconds" << std::endl;
@@ -754,7 +754,7 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
                         // Save intermediate results if this is not the last epsilon for this level
                         if (save_results_to_files && eps_idx < level_epsilons.size() - 1) {
                             std::string eps_suffix = "_eps" + std::to_string(eps_idx + 1);
-                            save_results(current_level_weights, level_output_dir + "/weights" + eps_suffix);
+                            save_results(current_level_potentials, level_output_dir + "/potentials" + eps_suffix);
                         }
                     } catch (const SolverControl::NoConvergence& exc) {
                         if (exc.last_step >= solver_params.max_iterations) {
@@ -776,7 +776,7 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
                 
                 try {
                     // Run optimization with default epsilon
-                    sot_solver->solve(current_level_weights, solver_config);
+                    sot_solver->solve(current_level_potentials, solver_config);
                     
                     level_timer.stop();
                     pcout << "  Completed in " << level_timer.wall_time() << " seconds" << std::endl;
@@ -797,7 +797,7 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
             
             try {
                 // Run optimization for this level
-                sot_solver->solve(current_level_weights, solver_config);
+                sot_solver->solve(current_level_potentials, solver_config);
                 
                 level_timer.stop();
                 pcout << "  Completed in " << level_timer.wall_time() << " seconds" << std::endl;
@@ -810,13 +810,13 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
                 pcout << Color::red << Color::bold << "Warning: Optimization did not converge for level " << level_number << Color::reset << std::endl;
                 pcout << "  Iterations: " << exc.last_step << std::endl;
                 if (level == 0) return;  // If coarsest level fails, abort
-                // Otherwise continue to next level with current weights
+                // Otherwise continue to next level with current potentials
             }
         }
             
         // Save results for this level (if requested)
         if(save_results_to_files) {
-            save_results(current_level_weights, level_output_dir + "/weights");
+            save_results(current_level_potentials, level_output_dir + "/potentials");
             if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
                 std::ofstream conv_info(level_output_dir + "/convergence_info.txt");
                 conv_info << "Regularization parameter (λ): " << solver_params.regularization_param << "\n";
@@ -824,20 +824,20 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
                 conv_info << "Final function value: " << sot_solver->get_last_functional_value() << "\n";
                 conv_info << "Convergence achieved: " << sot_solver->get_convergence_status() << "\n";
                 conv_info << "Level: " << level_number << "\n";
-                pcout << "Level " << level_number << " results saved to " << level_output_dir << "/weights" << std::endl;
+                pcout << "Level " << level_number << " results saved to " << level_output_dir << "/potentials" << std::endl;
             }
         } else {
             pcout << "Level " << level_number << " completed" << std::endl;
         }
         
-        // Store weights for next level
-        level_weights = current_level_weights;
+        // Store potentials for next level
+        level_potentials = current_level_potentials;
         current_distance_threshold = sot_solver->get_last_distance_threshold();
     }
     
-    // If output_weights is provided, copy the final weights
-    if (output_weights != nullptr) {
-        *output_weights = level_weights;
+    // If output_potentials is provided, copy the final potentials
+    if (output_potentials != nullptr) {
+        *output_potentials = level_potentials;
     }
     
     // Restore original parameters
@@ -855,9 +855,9 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
 
 template <int dim>
 void SemiDiscreteOT<dim>::run_target_multilevel_for_source_level(
-    const std::string& source_mesh_file, Vector<double>& weights)
+    const std::string& source_mesh_file, Vector<double>& potentials)
 {
-    run_target_multilevel(source_mesh_file, &weights, false);
+    run_target_multilevel(source_mesh_file, &potentials, false);
 }
 
 template <int dim>
@@ -929,15 +929,15 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
         epsilon_scaling_handler->print_epsilon_distribution();
     }
 
-    // Vector to store final weights
-    Vector<double> final_weights;
+    // Vector to store final potentials
+    Vector<double> final_potentials;
 
     // Process source mesh levels
     if (multilevel_params.source_enabled) {
         pcout << "\n" << Color::yellow << Color::bold << "Processing source mesh hierarchy..." << Color::reset << std::endl;
         
-        // Vector to store weights between source mesh levels
-        Vector<double> previous_source_weights;
+        // Vector to store potentials between source mesh levels
+        Vector<double> previous_source_potentials;
         
         for (size_t source_level = 0; source_level < source_mesh_files.size(); ++source_level) {
             pcout << "\n" << Color::cyan << Color::bold << "============================================" << Color::reset << std::endl;
@@ -949,18 +949,18 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
             std::string source_level_dir = eps_dir + "/" + multilevel_dir + "/source_level_" + std::to_string(source_level);
             fs::create_directories(source_level_dir);
 
-            Vector<double> source_level_weights;
+            Vector<double> source_level_potentials;
             if (source_level == 0) {
                 // For the first source level, run target multilevel if enabled
                 if (multilevel_params.target_enabled) {
-                    run_target_multilevel_for_source_level(source_mesh_files[source_level], source_level_weights);
+                    run_target_multilevel_for_source_level(source_mesh_files[source_level], source_level_potentials);
                 } else {
                     // If target multilevel is not enabled, just run regular SOT
                     mesh_manager->load_mesh_at_level(source_mesh, dof_handler_source, source_mesh_files[source_level]);
                     setup_multilevel_finite_elements();
                     setup_target_points();
                     
-                    source_level_weights.reinit(target_points.size());
+                    source_level_potentials.reinit(target_points.size());
                     sot_solver->setup_source(dof_handler_source, *mapping, *fe_system,
                                           source_density, solver_params.quadrature_order);
                     sot_solver->setup_target(target_points, target_density);
@@ -984,12 +984,12 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
                                 
                                 try {
                                     // Run optimization with current epsilon
-                                    sot_solver->solve(source_level_weights, solver_params);
+                                    sot_solver->solve(source_level_potentials, solver_params);
                                     
                                     // Save intermediate results if this is not the last epsilon for this level
                                     if (eps_idx < level_epsilons.size() - 1) {
                                         std::string eps_suffix = "_eps" + std::to_string(eps_idx + 1);
-                                        save_results(source_level_weights, source_level_dir + "/weights" + eps_suffix);
+                                        save_results(source_level_potentials, source_level_dir + "/potentials" + eps_suffix);
                                     }
                                 } catch (const SolverControl::NoConvergence& exc) {
                                     if (exc.last_step >= solver_params.max_iterations) {
@@ -1005,14 +1005,14 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
                         } else {
                             // If no epsilon values for this level, use the default epsilon
                             solver_params.regularization_param = original_regularization;
-                            sot_solver->solve(source_level_weights, solver_params);
+                            sot_solver->solve(source_level_potentials, solver_params);
                         }
                     } else {
                         // No epsilon scaling, just run the optimization once
-                        sot_solver->solve(source_level_weights, solver_params);
+                        sot_solver->solve(source_level_potentials, solver_params);
                     }
                 }
-                previous_source_weights = source_level_weights;
+                previous_source_potentials = source_level_potentials;
             } else {
                 // Load the mesh for this level
                 mesh_manager->load_mesh_at_level(source_mesh, dof_handler_source, source_mesh_files[source_level]);
@@ -1028,9 +1028,9 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
                 pcout << "  Tolerance: " << solver_params.tolerance << std::endl;
                 pcout << "  Max iterations: " << solver_params.max_iterations << std::endl;
                 
-                // Initialize weights from previous level
-                Vector<double> level_weights(target_points.size());
-                level_weights = previous_source_weights;
+                // Initialize potentials from previous level
+                Vector<double> level_potentials(target_points.size());
+                level_potentials = previous_source_potentials;
                 
                 try {
                     Timer level_timer;
@@ -1065,12 +1065,12 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
                                 
                                 try {
                                     // Run optimization with current epsilon
-                                    sot_solver->solve(level_weights, solver_params);
+                                    sot_solver->solve(level_potentials, solver_params);
                                     
                                     // Save intermediate results if this is not the last epsilon for this level
                                     if (eps_idx < level_epsilons.size() - 1) {
                                         std::string eps_suffix = "_eps" + std::to_string(eps_idx + 1);
-                                        save_results(level_weights, source_level_dir + "/weights" + eps_suffix);
+                                        save_results(level_potentials, source_level_dir + "/potentials" + eps_suffix);
                                     }
                                 } catch (const SolverControl::NoConvergence& exc) {
                                     if (exc.last_step >= solver_params.max_iterations) {
@@ -1086,22 +1086,22 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
                         } else {
                             // If no epsilon values for this level, use the default epsilon
                             solver_params.regularization_param = original_regularization;
-                            sot_solver->solve(level_weights, solver_params);
+                            sot_solver->solve(level_potentials, solver_params);
                         }
                     } else {
                         // No epsilon scaling, just run the optimization once
-                        sot_solver->solve(level_weights, solver_params);
+                        sot_solver->solve(level_potentials, solver_params);
                     }
                     
                     level_timer.stop();
                     
                     // Save results for this level
-                    save_results(level_weights, source_level_dir + "/weights");
+                    save_results(level_potentials, source_level_dir + "/potentials");
                     
                     // Store current solution for next level and as final result
-                    previous_source_weights = level_weights;
+                    previous_source_potentials = level_potentials;
                     if (source_level == source_mesh_files.size() - 1) {
-                        final_weights = level_weights;
+                        final_potentials = level_potentials;
                     }
                     
                     pcout << "\n" << Color::blue << Color::bold << "Source level " << source_level << " summary:" << Color::reset << std::endl;
@@ -1114,17 +1114,17 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
                 } catch (const std::exception& e) {
                     pcout << Color::red << Color::bold << "Error at source level " << source_level << ": " << e.what() << Color::reset << std::endl;
                     if (source_level == 0) return;  // If coarsest level fails, abort
-                    // Otherwise continue to next level with previous weights
+                    // Otherwise continue to next level with previous potentials
                 }
             }
         }
     } else if (multilevel_params.target_enabled) {
         // If only target multilevel is enabled, run it directly
-        run_target_multilevel("", &final_weights, true);
+        run_target_multilevel("", &final_potentials, true);
     }
 
     // Save final results
-    save_results(final_weights, multilevel_dir + "/weights");
+    save_results(final_potentials, multilevel_dir + "/potentials");
 
     // Restore original parameters
     solver_params.max_iterations = original_max_iterations;
@@ -1178,7 +1178,7 @@ typename std::enable_if<d == 3>::type SemiDiscreteOT<dim>::run_exact_sot()
 
     // Save results
     if (!exact_solver.save_results(
-            output_dir + "/weights",
+            output_dir + "/potentials",
             output_dir + "/points")) {
         pcout << "Failed to save exact SOT results" << std::endl;
         return;
@@ -1283,17 +1283,18 @@ void SemiDiscreteOT<dim>::prepare_target_multilevel()
             );
 
             try {
-                // Convert target density to weights vector
-                std::vector<double> target_weights(target_points.size());
-                for (size_t i = 0; i < target_points.size(); ++i) {
-                    target_weights[i] = target_density[i];
-                }
 
                 pcout << "Generating hierarchy with " << target_points.size() << " points..." << std::endl;
 
+                // Convert dealii vector to std::vector
+                std::vector<double> target_densities(target_points.size());
+                for (size_t i = 0; i < target_points.size(); ++i) {
+                    target_densities[i] = target_density[i];
+                }
+
                 int num_levels = hierarchy_manager.generateHierarchy<dim>(
                     target_points,
-                    target_weights,
+                    target_densities,
                     multilevel_params.target_hierarchy_dir
                 );
 
@@ -1306,15 +1307,13 @@ void SemiDiscreteOT<dim>::prepare_target_multilevel()
         }
         // Load the hierarchy data for use in computations
         load_hierarchy_data(multilevel_params.target_hierarchy_dir);
-        pcout << "Loaded hierarchy data for direct parent-child weight assignment" << std::endl;
     }
     MPI_Barrier(mpi_communicator);
 }
 
 
 template <int dim>
-void SemiDiscreteOT<dim>::save_results(const Vector<double> &weights,
-                                     const std::string &filename)
+void SemiDiscreteOT<dim>::save_results(const Vector<double>& potential, const std::string& filename)
 {
     // Only rank 0 should create directories and write files
     if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
@@ -1322,9 +1321,9 @@ void SemiDiscreteOT<dim>::save_results(const Vector<double> &weights,
         std::string eps_dir = "output/epsilon_" + std::to_string(solver_params.regularization_param);
         fs::create_directories(eps_dir);
 
-        // Save weights
-        std::vector<double> weights_vec(weights.begin(), weights.end());
-        Utils::write_vector(weights_vec, eps_dir + "/" + filename, io_coding);
+        // Save potential
+        std::vector<double> potential_vec(potential.begin(), potential.end());
+        Utils::write_vector(potential_vec, eps_dir + "/" + filename, io_coding);
     }
     // Make sure all processes wait for rank 0 to finish writing
     MPI_Barrier(mpi_communicator);
@@ -1389,16 +1388,16 @@ void SemiDiscreteOT<dim>::compute_transport_map()
     for (const auto& selected_folder : selected_folders) {
         pcout << "\nProcessing folder: " << selected_folder << std::endl;
 
-        // Read weights from selected folder's results
-        std::vector<double> weights_vec;
-        bool success = Utils::read_vector(weights_vec, "output/" + selected_folder + "/weights", io_coding);
+        // Read potentials from selected folder's results
+        std::vector<double> potentials_vec;
+        bool success = Utils::read_vector(potentials_vec, "output/" + selected_folder + "/potentials", io_coding);
         if (!success) {
-            pcout << "Failed to read weights from output/" + selected_folder + "/weights" << std::endl;
+            pcout << "Failed to read potentials from output/" + selected_folder + "/potentials" << std::endl;
             continue; // Skip to next folder
         }
 
-        if (weights_vec.size() != target_points.size()) {
-            pcout << Color::red << Color::bold << "Error: Mismatch between weights size (" << weights_vec.size()
+        if (potentials_vec.size() != target_points.size()) {
+            pcout << Color::red << Color::bold << "Error: Mismatch between potentials size (" << potentials_vec.size()
                   << ") and target points size (" << target_points.size() << ")" << Color::reset << std::endl;
             continue; // Skip to next folder
         }
@@ -1411,14 +1410,14 @@ void SemiDiscreteOT<dim>::compute_transport_map()
         const std::string output_dir = "output/" + selected_folder + "/transport_map";
         fs::create_directories(output_dir);
 
-        // Convert weights to dealii::Vector format
-        Vector<double> weights_dealii(weights_vec.size());
-        std::copy(weights_vec.begin(), weights_vec.end(), weights_dealii.begin());
+        // Convert potentials to dealii::Vector format
+        Vector<double> potentials_dealii(potentials_vec.size());
+        std::copy(potentials_vec.begin(), potentials_vec.end(), potentials_dealii.begin());
 
         // Set up the transport plan
         transport_plan.set_source_measure(source_points, source_density_vec);
         transport_plan.set_target_measure(target_points, target_density_vec);
-        transport_plan.set_potential(weights_dealii, regularization_param);
+        transport_plan.set_potential(potentials_dealii, regularization_param);
 
         // Try different strategies and save results
         for (const auto& strategy : transport_plan.get_available_strategies()) {
@@ -1456,23 +1455,23 @@ void SemiDiscreteOT<dim>::compute_power_diagram()
     for (const auto& selected_folder : selected_folders) {
         pcout << "\nProcessing folder: " << selected_folder << std::endl;
 
-        // Read weights from selected folder's results
-        std::vector<double> weights_vec;
-        bool success = Utils::read_vector(weights_vec, "output/" + selected_folder + "/weights", io_coding);
+        // Read potentials from selected folder's results
+        std::vector<double> potentials_vec;
+        bool success = Utils::read_vector(potentials_vec, "output/" + selected_folder + "/potentials", io_coding);
         if (!success) {
-            pcout << "Failed to read weights from output/" << selected_folder << "/weights" << std::endl;
+            pcout << "Failed to read potentials from output/" << selected_folder << "/potentials" << std::endl;
             continue; // Skip to next folder
         }
 
-        if (weights_vec.size() != target_points.size()) {
-            pcout << Color::red << Color::bold << "Error: Mismatch between weights size (" << weights_vec.size()
+        if (potentials_vec.size() != target_points.size()) {
+            pcout << Color::red << Color::bold << "Error: Mismatch between potentials size (" << potentials_vec.size()
                   << ") and target points size (" << target_points.size() << ")" << Color::reset << std::endl;
             continue; // Skip to next folder
         }
 
         // Convert to dealii::Vector
-        Vector<double> weights(weights_vec.size());
-        std::copy(weights_vec.begin(), weights_vec.end(), weights.begin());
+        Vector<double> potentials(potentials_vec.size());
+        std::copy(potentials_vec.begin(), potentials_vec.end(), potentials.begin());
 
         // Create output directory
         const std::string output_dir = "output/" + selected_folder + "/power_diagram_"+power_diagram_params.implementation;
@@ -1520,7 +1519,7 @@ void SemiDiscreteOT<dim>::compute_power_diagram()
         }
 
         // Set generators and compute power diagram
-        power_diagram->set_generators(target_points, weights);
+        power_diagram->set_generators(target_points, potentials);
         power_diagram->compute_power_diagram();
         power_diagram->compute_cell_centroids();
 

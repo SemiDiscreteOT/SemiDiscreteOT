@@ -110,8 +110,8 @@ ParameterManager::ParameterManager(const MPI_Comm &comm)
                      "Maximum number of points for the finest target level");
         add_parameter("target_hierarchy_dir", multilevel_params.target_hierarchy_dir,
                      "Directory to store target point cloud hierarchy");
-        add_parameter("use_softmax_weight_transfer", multilevel_params.use_softmax_weight_transfer,
-                     "Whether to use softmax-based weight transfer between target levels");
+        add_parameter("use_softmax_potential_transfer", multilevel_params.use_softmax_potential_transfer,
+                     "Whether to use softmax-based potential transfer between target levels");
         
         // Python clustering parameters
         add_parameter("use_python_clustering", multilevel_params.use_python_clustering,
@@ -247,7 +247,7 @@ void ParameterManager::print_task_information() const
         {"load_meshes", "Load pre-existing source and target meshes"},
         {"sot", "Run standard semidiscrete optimal transport"},
         {"exact_sot", "Run exact semidiscrete optimal transport (no regularization)"},
-        {"power_diagram", "Compute power diagram for given weights"},
+        {"power_diagram", "Compute power diagram for given potentials"},
         {"map", "Compute transport map between source and target"},
         {"prepare_source_multilevel", "Prepare source mesh hierarchy for multilevel approach"},
         {"prepare_target_multilevel", "Prepare target point cloud hierarchy for multilevel approach"},
@@ -342,7 +342,7 @@ void ParameterManager::print_multilevel_parameters() const
         pcout << "    Minimum Points: " << BOLD << multilevel_params.target_min_points << RESET << std::endl;
         pcout << "    Maximum Points: " << BOLD << multilevel_params.target_max_points << RESET << std::endl;
         pcout << "    Hierarchy Directory: " << BOLD << multilevel_params.target_hierarchy_dir << RESET << std::endl;
-        pcout << "    Softmax Weight Transfer: " << BOLD << (multilevel_params.use_softmax_weight_transfer ? "enabled" : "disabled") << RESET << std::endl;
+        pcout << "    Softmax Potential Transfer: " << BOLD << (multilevel_params.use_softmax_potential_transfer ? "enabled" : "disabled") << RESET << std::endl;
         
         // Python clustering parameters
         pcout << "    Python Clustering: " << BOLD << (multilevel_params.use_python_clustering ? "enabled" : "disabled") << RESET << std::endl;
