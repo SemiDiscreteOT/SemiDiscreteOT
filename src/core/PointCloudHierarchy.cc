@@ -83,7 +83,6 @@ PointCloudHierarchyManager::kmeansClustering(
     size_t k) {
 
     const size_t n_points = points.size();
-    std::cout << "Using " << omp_get_max_threads() << " OpenMP threads" << std::endl;
     
     if (points.size() <= k) {
         // If fewer points than clusters, return original points

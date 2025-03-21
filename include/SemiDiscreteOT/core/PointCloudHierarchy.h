@@ -10,7 +10,6 @@
 #include "SemiDiscreteOT/utils/dkm/dkm.hpp"
 #include "SemiDiscreteOT/utils/dkm/dkm_parallel.hpp"
 #include "SemiDiscreteOT/utils/dkm/dkm_utils.hpp"
-#include <omp.h>
 
 using namespace dealii;
 
