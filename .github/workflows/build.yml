@@ -1,0 +1,33 @@
+name: Build
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+env:
+  BUILD_TYPE: Release
+  DOCKER_IMAGE_NAME: semidiscreteot-builder
+  GEOGRAM_DIR: /usr/local/geogram
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Log in to Docker Hub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    - name: Build project
+      run: |
+        docker run --rm \
+          -v ${{github.workspace}}:/workspace \
+          -e GEOGRAM_DIR=${GEOGRAM_DIR} \
+          ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.DOCKER_IMAGE_NAME }}:latest \
+          bash -c "cmake -B build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DGEOGRAM_DIR=${GEOGRAM_DIR} && cmake --build build --config ${{env.BUILD_TYPE}}"
