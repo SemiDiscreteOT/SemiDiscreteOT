@@ -75,6 +75,10 @@ private:
     DoFHandler<dim> dof_handler_source;
     DoFHandler<dim> dof_handler_target;
 
+    DoFHandler<dim> vtk_dof_handler_source;
+    Vector<double> vtk_field_source;
+    Triangulation<dim> vtk_tria_source;
+
     // Mesh manager
     std::unique_ptr<MeshManager<dim>> mesh_manager;
 

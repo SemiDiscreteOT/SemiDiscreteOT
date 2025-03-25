@@ -17,7 +17,6 @@
 #include <deal.II/base/function.h>
 namespace fs = std::filesystem;
 
-
 template <int dim>
 SemiDiscreteOT<dim>::SemiDiscreteOT(const MPI_Comm &comm)
     : mpi_communicator(comm)
@@ -163,7 +162,7 @@ template <int dim>
 void SemiDiscreteOT<dim>::setup_source_finite_elements()
 {
     // Check if we're using tetrahedral meshes
-    bool use_simplex = (source_params.use_tetrahedral_mesh || target_params.use_tetrahedral_mesh);
+    bool use_simplex = source_params.use_tetrahedral_mesh;
 
     if (use_simplex) {
         fe_system = std::make_unique<FE_SimplexP<dim>>(1);
@@ -189,9 +188,8 @@ void SemiDiscreteOT<dim>::setup_source_finite_elements()
         try {
             if (source_params.density_file_format == "vtk") {
                 // Read VTK file - all processes need to do this
-                Triangulation<dim> vtk_tria;
                 GridIn<dim> grid_in;
-                grid_in.attach_triangulation(vtk_tria);
+                grid_in.attach_triangulation(vtk_tria_source);
                 
                 std::ifstream vtk_file(source_params.density_file_path);
                 if (!vtk_file) {
@@ -200,20 +198,22 @@ void SemiDiscreteOT<dim>::setup_source_finite_elements()
                           << Color::reset << std::endl;
                 } else {
                     grid_in.read_vtk(vtk_file);
-                    pcout << "VTK mesh: " << vtk_tria.n_active_cells() << " cells" << std::endl;
+                    pcout << "VTK mesh: " << vtk_tria_source.n_active_cells() << " cells" << std::endl;
                     
                     // Setup finite element space for VTK mesh
                     std::unique_ptr<FiniteElement<dim>> vtk_fe;
+                    use_simplex = false;
                     if (use_simplex) {
                         vtk_fe = std::make_unique<FE_SimplexP<dim>>(1);
                     } else {
                         vtk_fe = std::make_unique<FE_Q<dim>>(1);
                     }
+                    use_simplex = true;
                     
-                    DoFHandler<dim> vtk_dof_handler(vtk_tria);
-                    vtk_dof_handler.distribute_dofs(*vtk_fe);
+                    vtk_dof_handler_source.reinit(vtk_tria_source);
+                    vtk_dof_handler_source.distribute_dofs(*vtk_fe);
                     
-                    Vector<double> vtk_field(vtk_dof_handler.n_dofs());
+                    vtk_field_source.reinit(vtk_dof_handler_source.n_dofs());
                     bool found_scalars = false;
                     if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
                         // Read scalar field data from VTK
@@ -232,8 +232,8 @@ void SemiDiscreteOT<dim>::setup_source_finite_elements()
                                 std::getline(vtk_reader, line);
 
                                 // Read scalar values
-                                for (unsigned int i = 0; i < vtk_dof_handler.n_dofs(); ++i) {
-                                    if (!(vtk_reader >> vtk_field[i])) {
+                                for (unsigned int i = 0; i < vtk_dof_handler_source.n_dofs(); ++i) {
+                                    if (!(vtk_reader >> vtk_field_source[i])) {
                                         found_scalars = false;
                                         break;
                                     }
@@ -246,10 +246,10 @@ void SemiDiscreteOT<dim>::setup_source_finite_elements()
                     
                     if (found_scalars) {
                         // broadcast the vtk_field
-                        vtk_field = Utilities::MPI::broadcast(mpi_communicator, vtk_field, 0);
+                        vtk_field_source = Utilities::MPI::broadcast(mpi_communicator, vtk_field_source, 0);
                         // Each process interpolates only on its locally owned cells
                         source_density = 0;  // Initialize to zero
-                        Functions::FEFieldFunction<dim> field_function(vtk_dof_handler, vtk_field);
+                        Functions::FEFieldFunction<dim> field_function(vtk_dof_handler_source, vtk_field_source);
                         VectorTools::interpolate(dof_handler_source, field_function, source_density);
                         
                         density_loaded = true;
@@ -418,7 +418,7 @@ void SemiDiscreteOT<dim>::setup_target_finite_elements()
                         
                         // Setup finite element space for VTK mesh
                         std::unique_ptr<FiniteElement<dim>> vtk_fe;
-                        bool use_simplex = (source_params.use_tetrahedral_mesh || target_params.use_tetrahedral_mesh);
+                        bool use_simplex = target_params.use_tetrahedral_mesh;
                         if (use_simplex) {
                             vtk_fe = std::make_unique<FE_SimplexP<dim>>(1);
                         } else {
@@ -477,6 +477,7 @@ void SemiDiscreteOT<dim>::setup_target_finite_elements()
                         } else {
                             // Now interpolate the VTK field to the target points
                             dof_handler_target.distribute_dofs(*fe_system);
+
                             Functions::FEFieldFunction<dim> field_function_target(vtk_dof_handler, vtk_field);
                             VectorTools::interpolate(dof_handler_target, field_function_target, target_density);
                             pcout << "L1 norm of target density: " << target_density.l1_norm() << std::endl;
@@ -545,17 +546,6 @@ void SemiDiscreteOT<dim>::setup_target_finite_elements()
 template <int dim>
 void SemiDiscreteOT<dim>::setup_finite_elements()
 {
-    // Check if we're using tetrahedral meshes
-    bool use_simplex = (source_params.use_tetrahedral_mesh || target_params.use_tetrahedral_mesh);
-
-    if (use_simplex) {
-        fe_system = std::make_unique<FE_SimplexP<dim>>(1);
-        mapping = std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
-    } else {
-        fe_system = std::make_unique<FE_Q<dim>>(1);
-        mapping = std::make_unique<MappingQ1<dim>>();
-    }
-
     setup_source_finite_elements();
     setup_target_finite_elements();
 }
@@ -568,12 +558,19 @@ void SemiDiscreteOT<dim>::setup_multilevel_finite_elements()
     // Only distribute DoFs for source mesh
     dof_handler_source.distribute_dofs(*fe_system);
 
+
     // Initialize source density
     IndexSet locally_owned_dofs = dof_handler_source.locally_owned_dofs();
     IndexSet locally_relevant_dofs;
     DoFTools::extract_locally_relevant_dofs(dof_handler_source, locally_relevant_dofs);
 
     source_density.reinit(locally_owned_dofs, locally_relevant_dofs, mpi_communicator);
+
+    if (source_params.use_custom_density && source_params.density_file_format == "vtk") {
+        Functions::FEFieldFunction<dim> field_function(vtk_dof_handler_source, vtk_field_source);
+        // TODO: interpolate source density, we can't do this with vectortools::interpolate because the VTK mesh is not aligned with the source mesh (coarse mesh)
+    }
+
     source_density = 1.0;
     source_density.update_ghost_values();
 
@@ -1060,10 +1057,10 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
             pcout << "No source mesh hierarchy found. Please run prepare_source_multilevel first." << std::endl;
             return;
         }
-    } else {
-        // If only target multilevel is enabled, we need to load the base source mesh
-        mesh_manager->load_source_mesh(source_mesh);
-        setup_source_finite_elements();
+    } else if (multilevel_params.target_enabled) {
+        // If only target multilevel is enabled, just run target multilevel directly
+        run_target_multilevel("", nullptr, true);
+        return;  // Exit after running target multilevel
     }
     
     // Store original solver parameters
@@ -1112,6 +1109,9 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
 
     // Process source mesh levels
     if (multilevel_params.source_enabled) {
+        mesh_manager->load_source_mesh(source_mesh);
+        setup_source_finite_elements();
+
         pcout << "\n" << Color::yellow << Color::bold << "Processing source mesh hierarchy..." << Color::reset << std::endl;
         
         // Vector to store potentials between source mesh levels
