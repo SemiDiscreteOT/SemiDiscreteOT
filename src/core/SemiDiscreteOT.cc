@@ -17,6 +17,250 @@
 #include <deal.II/base/function.h>
 namespace fs = std::filesystem;
 
+using namespace dealii;
+
+template <int dim, int spacedim>
+void interpolate_non_conforming_nearest(const DoFHandler<dim, spacedim> &source_dh,
+                                        const Vector<double>            &source_field,
+                                        const DoFHandler<dim, spacedim> &target_dh,
+                             LinearAlgebra::distributed::Vector<double> &target_field)
+
+{
+  Assert(source_field.size() == source_dh.n_dofs(),
+         ExcDimensionMismatch(source_field.size(), source_dh.n_dofs()));
+  Assert(target_field.size() == target_dh.n_dofs(),
+         ExcDimensionMismatch(target_field.size(), target_dh.n_dofs()));
+
+  const auto &source_fe = source_dh.get_fe();
+  const auto &target_fe = target_dh.get_fe();
+
+  std::unique_ptr<Mapping<dim>> source_mapping;
+  if (source_fe.reference_cell() == ReferenceCells::get_hypercube<dim>())
+    source_mapping = std::make_unique<MappingQ1<dim>>();
+  else
+    source_mapping = std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
+
+  std::unique_ptr<Mapping<dim>> target_mapping;
+  if (target_fe.reference_cell() == ReferenceCells::get_hypercube<dim>())
+    target_mapping = std::make_unique<MappingQ1<dim>>();
+  else
+    target_mapping = std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
+
+  const Quadrature<dim> target_quadrature(target_fe.get_generalized_support_points());
+  FEValues<dim> target_fe_values(*target_mapping,
+                                 target_fe,
+                                 target_quadrature,
+                                 update_quadrature_points);
+
+  std::vector<types::global_dof_index> source_dof_indices(source_fe.n_dofs_per_cell());
+  std::vector<types::global_dof_index> target_dof_indices(target_fe.n_dofs_per_cell());
+  Vector<double> source_cell_values(source_fe.n_dofs_per_cell());
+
+  Vector<double> target_values(target_field.size());
+  Vector<double> weights(target_field.size());
+
+  std::vector<std::pair<Point<spacedim>, typename DoFHandler<dim, spacedim>::active_cell_iterator>> cell_centers;
+  for (const auto &cell : source_dh.active_cell_iterators())
+  {
+    if (!cell->is_locally_owned())
+      continue;
+    cell_centers.emplace_back(cell->center(), cell);
+  }
+
+  std::vector<std::pair<Point<spacedim>, unsigned int>> indexed_points;
+  indexed_points.reserve(cell_centers.size());
+  for (unsigned int i = 0; i < cell_centers.size(); ++i)
+    indexed_points.emplace_back(cell_centers[i].first, i);
+
+  using RTreeParams = boost::geometry::index::rstar<8>;
+  boost::geometry::index::rtree<std::pair<Point<spacedim>, unsigned int>, RTreeParams>
+    rtree(indexed_points.begin(), indexed_points.end());
+
+  for (const auto &target_cell : target_dh.active_cell_iterators())
+  {
+    if (!target_cell->is_locally_owned())
+      continue;
+
+    target_fe_values.reinit(target_cell);
+    const std::vector<Point<dim>> &target_points = target_fe_values.get_quadrature_points();
+    target_cell->get_dof_indices(target_dof_indices);
+
+    // For each support point in the target cell:
+    for (unsigned int q = 0; q < target_points.size(); ++q)
+    {
+      const Point<spacedim> &target_point = target_points[q];
+
+      // Query the RTree for the **nearest** source cell center.
+      std::vector<std::pair<Point<spacedim>, unsigned int>> nearest;
+      rtree.query(boost::geometry::index::nearest(target_point, 1), std::back_inserter(nearest));
+
+      if (nearest.empty()) 
+        continue; // If no nearest cell found, skip this point.
+
+      const unsigned int nearest_index = nearest.front().second;
+      auto chosen_source_cell = cell_centers[nearest_index].second;
+
+      Point<dim> p_unit;
+      try
+      {
+        p_unit = source_mapping->transform_real_to_unit_cell(chosen_source_cell, target_point);
+      }
+      catch (...)
+      {
+        continue; // Skip if transformation fails.
+      }
+
+      chosen_source_cell->get_dof_indices(source_dof_indices);
+      for (unsigned int i = 0; i < source_dof_indices.size(); ++i)
+        source_cell_values[i] = source_field[source_dof_indices[i]];
+
+      double source_value = 0.0;
+      for (unsigned int i = 0; i < source_fe.n_dofs_per_cell(); ++i)
+        source_value += source_cell_values[i] * source_fe.shape_value(i, p_unit);
+
+      const unsigned int target_dof = target_dof_indices[q];
+      target_values[target_dof] += source_value;
+      weights[target_dof] += 1.0;
+    }
+  }
+
+  // Compute the weighted average of the contributions.
+  for (types::global_dof_index i = 0; i < target_field.size(); ++i)
+    if (weights[i] > 0)
+      target_field[i] = target_values[i] / weights[i];
+
+  target_field.compress(VectorOperation::insert);
+}
+
+
+
+template <int dim, int spacedim>
+void interpolate_non_conforming(const DoFHandler<dim, spacedim> &source_dh,
+                                const Vector<double>              &source_field,
+                                const DoFHandler<dim, spacedim>   &target_dh,
+                                LinearAlgebra::distributed::Vector<double> &target_field)
+{
+  Assert(source_field.size() == source_dh.n_dofs(),
+         ExcDimensionMismatch(source_field.size(), source_dh.n_dofs()));
+  Assert(target_field.size() == target_dh.n_dofs(),
+         ExcDimensionMismatch(target_field.size(), target_dh.n_dofs()));
+
+  std::cout << "target_field.size(): " << target_field.size() << std::endl;
+  std::cout << "source_field.size(): " << source_field.size() << std::endl;
+
+  const auto &source_fe = source_dh.get_fe();
+  const auto &target_fe = target_dh.get_fe();
+
+  // Create appropriate mappings for source and target
+  std::unique_ptr<Mapping<dim>> source_mapping;
+  if (source_dh.get_fe().reference_cell() == ReferenceCells::get_hypercube<dim>())
+    source_mapping = std::make_unique<MappingQ1<dim>>();
+  else
+    source_mapping = std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
+
+  std::unique_ptr<Mapping<dim>> target_mapping;
+  if (target_dh.get_fe().reference_cell() == ReferenceCells::get_hypercube<dim>())
+    target_mapping = std::make_unique<MappingQ1<dim>>();
+  else
+    target_mapping = std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
+
+  // Store source cells and their centers for RTree
+  std::vector<std::pair<Point<spacedim>, typename DoFHandler<dim, spacedim>::active_cell_iterator>>
+    cell_centers;
+
+  for (const auto &cell : source_dh.active_cell_iterators())
+    {
+      if (!cell->is_locally_owned())
+        continue;
+      cell_centers.emplace_back(cell->center(), cell);
+    }
+
+  // Create RTree for fast cell location
+  std::vector<std::pair<Point<spacedim>, unsigned int>> indexed_points;
+  indexed_points.reserve(cell_centers.size());
+  for (unsigned int i = 0; i < cell_centers.size(); ++i)
+    indexed_points.emplace_back(cell_centers[i].first, i);
+
+  using RTreeParams = boost::geometry::index::rstar<8>;
+  boost::geometry::index::rtree<std::pair<Point<spacedim>, unsigned int>, RTreeParams>
+    rtree(indexed_points.begin(), indexed_points.end());
+
+  // Create FEValues objects with appropriate update flags
+  const Quadrature<dim> quadrature(target_fe.get_unit_support_points());
+
+  FEValues<dim> source_fe_values(*source_mapping,
+                                source_fe,
+                                quadrature,
+                                update_values | update_quadrature_points);
+
+  FEValues<dim> target_fe_values(*target_mapping,
+                                target_fe,
+                                quadrature,
+                                update_quadrature_points);
+
+  std::vector<types::global_dof_index> source_dof_indices(source_fe.n_dofs_per_cell());
+  std::vector<types::global_dof_index> target_dof_indices(target_fe.n_dofs_per_cell());
+  Vector<double> source_cell_values(source_fe.n_dofs_per_cell());
+
+  // Storage for target values and weights for averaging
+  Vector<double> target_values(target_dh.n_dofs());
+  Vector<double> weights(target_dh.n_dofs());
+
+  // Loop over all target cells
+  for (const auto &target_cell : target_dh.active_cell_iterators())
+    {
+      if (!target_cell->is_locally_owned())
+        continue;
+
+      target_fe_values.reinit(target_cell);
+      const std::vector<Point<dim>> &target_points =
+        target_fe_values.get_quadrature_points();
+
+      target_cell->get_dof_indices(target_dof_indices);
+
+      // For each support point in target cell
+      for (unsigned int q = 0; q < target_points.size(); ++q)
+        {
+          const Point<dim> &target_point = target_points[q];
+
+          // Find nearest source cell using RTree
+          std::vector<std::pair<Point<spacedim>, unsigned int>> nearest;
+          rtree.query(boost::geometry::index::nearest(target_point, 1),
+                     std::back_inserter(nearest));
+
+          Assert(!nearest.empty(), ExcInternalError("RTree nearest neighbor search failed"));
+
+          // Get the source cell
+          const auto &source_cell = cell_centers[nearest[0].second].second;
+
+          // Get source cell values
+          source_fe_values.reinit(source_cell);
+          source_cell->get_dof_indices(source_dof_indices);
+
+          for (unsigned int i = 0; i < source_dof_indices.size(); ++i)
+            source_cell_values[i] = source_field[source_dof_indices[i]];
+
+          // Evaluate source field at target point
+          double source_value = 0;
+          for (unsigned int i = 0; i < source_fe.n_dofs_per_cell(); ++i)
+            source_value += source_cell_values[i] * source_fe_values.shape_value(i, q);
+
+          // Add contribution to target DoF
+          const unsigned int target_dof = target_dof_indices[q];
+          target_values[target_dof] += source_value;
+          weights[target_dof] += 1.0;
+        }
+    }
+
+  // Average values where we have multiple contributions
+  for (types::global_dof_index i = 0; i < target_dh.n_dofs(); ++i)
+    if (weights[i] > 0)
+      target_field[i] = target_values[i] / weights[i];
+
+  // Synchronize parallel vectors
+  target_field.compress(VectorOperation::insert);
+}
+
 template <int dim>
 SemiDiscreteOT<dim>::SemiDiscreteOT(const MPI_Comm &comm)
     : mpi_communicator(comm)
@@ -39,10 +283,6 @@ SemiDiscreteOT<dim>::SemiDiscreteOT(const MPI_Comm &comm)
     , mesh_manager(std::make_unique<MeshManager<dim>>(comm))
     , sot_solver(std::make_unique<SotSolver<dim>>(comm))
 {
-    // Initialize with default hexahedral elements
-    fe_system = std::make_unique<FE_Q<dim>>(1);
-    mapping = std::make_unique<MappingQ1<dim>>();
-    
 }
 
 template <int dim>
@@ -71,16 +311,16 @@ void SemiDiscreteOT<dim>::load_meshes()
     mesh_manager->load_target_mesh(target_mesh);
 
     // Print mesh statistics
-    const unsigned int n_global_cells = 
+    const unsigned int n_global_cells =
         Utilities::MPI::sum(source_mesh.n_locally_owned_active_cells(), mpi_communicator);
-    const unsigned int n_global_vertices = 
+    const unsigned int n_global_vertices =
         Utilities::MPI::sum(source_mesh.n_vertices(), mpi_communicator);
 
-    pcout << "Source mesh: " << n_global_cells << " cells, " 
+    pcout << "Source mesh: " << n_global_cells << " cells, "
           << n_global_vertices << " vertices" << std::endl;
 
     if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
-        pcout << "Target mesh: " << target_mesh.n_active_cells() << " cells, " 
+        pcout << "Target mesh: " << target_mesh.n_active_cells() << " cells, "
               << target_mesh.n_vertices() << " vertices" << std::endl;
     }
 }
@@ -93,16 +333,16 @@ std::vector<std::pair<std::string, std::string>> SemiDiscreteOT<dim>::get_target
 
 template <int dim>
 void SemiDiscreteOT<dim>::load_target_points_at_level(
-    const std::string& points_file, 
+    const std::string& points_file,
     const std::string& density_file)
 {
     pcout << "Loading target points from: " << points_file << std::endl;
     pcout << "Loading target densities from: " << density_file << std::endl;
-    
+
     std::vector<Point<dim>> local_target_points;
     std::vector<double> local_densities;
     bool load_success = true;
-    
+
     // Only rank 0 reads files
     if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
         // Read points
@@ -110,46 +350,46 @@ void SemiDiscreteOT<dim>::load_target_points_at_level(
             pcout << Color::red << Color::bold << "Error: Cannot read points file: " << points_file << Color::reset << std::endl;
             load_success = false;
         }
-        
+
         // Read potentials
         if (load_success && !Utils::read_vector(local_densities, density_file, io_coding)) {
             pcout << Color::red << Color::bold << "Error: Cannot read densities file: " << density_file << Color::reset << std::endl;
             load_success = false;
         }
     }
-    
+
     // Broadcast success status
     load_success = Utilities::MPI::broadcast(mpi_communicator, load_success, 0);
     if (!load_success) {
         throw std::runtime_error("Failed to load target points or densities");
     }
-    
+
     // Broadcast sizes
     unsigned int n_points = 0;
     if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
         n_points = local_target_points.size();
     }
     n_points = Utilities::MPI::broadcast(mpi_communicator, n_points, 0);
-    
+
     // Resize containers on non-root ranks
     if (Utilities::MPI::this_mpi_process(mpi_communicator) != 0) {
         local_target_points.resize(n_points);
         local_densities.resize(n_points);
     }
-    
+
     // Broadcast data
     for (unsigned int i = 0; i < n_points; ++i) {
         local_target_points[i] = Utilities::MPI::broadcast(mpi_communicator, local_target_points[i], 0);
         local_densities[i] = Utilities::MPI::broadcast(mpi_communicator, local_densities[i], 0);
     }
-    
+
     // Update class members
     target_points = std::move(local_target_points);
     target_density.reinit(n_points);
     for (unsigned int i = 0; i < n_points; ++i) {
         target_density[i] = local_densities[i];
     }
-    
+
     pcout << Color::green << "Successfully loaded " << n_points << " target points at this level" << Color::reset << std::endl;
 }
 
@@ -161,15 +401,25 @@ void SemiDiscreteOT<dim>::load_hierarchy_data(const std::string& hierarchy_dir, 
 template <int dim>
 void SemiDiscreteOT<dim>::setup_source_finite_elements()
 {
-    // Check if we're using tetrahedral meshes
-    bool use_simplex = source_params.use_tetrahedral_mesh;
+    // Check cell types in source mesh
+    bool has_quads_or_hexes = false;
+    bool has_triangles_or_tets = false;
+    for (const auto& cell : source_mesh.active_cell_iterators()) {
+        if (cell->reference_cell() == ReferenceCells::get_hypercube<dim>())
+            has_quads_or_hexes = true;
+        if (cell->reference_cell() == ReferenceCells::get_simplex<dim>())
+            has_triangles_or_tets = true;
+    }
 
-    if (use_simplex) {
+    // Create appropriate finite element and mapping based on cell types
+    if (has_triangles_or_tets) {
         fe_system = std::make_unique<FE_SimplexP<dim>>(1);
         mapping = std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
-    } else {
+    } else if (has_quads_or_hexes) {
         fe_system = std::make_unique<FE_Q<dim>>(1);
         mapping = std::make_unique<MappingQ1<dim>>();
+    } else {
+        throw std::runtime_error("Could not determine mesh cell type in source mesh");
     }
 
     dof_handler_source.distribute_dofs(*fe_system);
@@ -179,40 +429,50 @@ void SemiDiscreteOT<dim>::setup_source_finite_elements()
     DoFTools::extract_locally_relevant_dofs(dof_handler_source, locally_relevant_dofs);
 
     source_density.reinit(locally_owned_dofs, locally_relevant_dofs, mpi_communicator);
-    
+
     // Handle custom source density if enabled
     if (source_params.use_custom_density) {
         pcout << "Using custom source density from file: " << source_params.density_file_path << std::endl;
         bool density_loaded = false;
-        
+
         try {
             if (source_params.density_file_format == "vtk") {
                 // Read VTK file - all processes need to do this
                 GridIn<dim> grid_in;
                 grid_in.attach_triangulation(vtk_tria_source);
-                
+
                 std::ifstream vtk_file(source_params.density_file_path);
                 if (!vtk_file) {
-                    pcout << Color::red << Color::bold 
-                          << "Error: Could not open VTK file: " << source_params.density_file_path 
+                    pcout << Color::red << Color::bold
+                          << "Error: Could not open VTK file: " << source_params.density_file_path
                           << Color::reset << std::endl;
                 } else {
                     grid_in.read_vtk(vtk_file);
                     pcout << "VTK mesh: " << vtk_tria_source.n_active_cells() << " cells" << std::endl;
-                    
+
+                    // Check cell types in VTK mesh
+                    bool vtk_has_quads_or_hexes = false;
+                    bool vtk_has_triangles_or_tets = false;
+                    for (const auto& cell : vtk_tria_source.active_cell_iterators()) {
+                        if (cell->reference_cell() == ReferenceCells::get_hypercube<dim>())
+                            vtk_has_quads_or_hexes = true;
+                        if (cell->reference_cell() == ReferenceCells::get_simplex<dim>())
+                            vtk_has_triangles_or_tets = true;
+                    }
+
                     // Setup finite element space for VTK mesh
                     std::unique_ptr<FiniteElement<dim>> vtk_fe;
-                    use_simplex = false;
-                    if (use_simplex) {
+                    if (vtk_has_triangles_or_tets) {
                         vtk_fe = std::make_unique<FE_SimplexP<dim>>(1);
-                    } else {
+                    } else if (vtk_has_quads_or_hexes) {
                         vtk_fe = std::make_unique<FE_Q<dim>>(1);
+                    } else {
+                        throw std::runtime_error("Could not determine mesh cell type in VTK mesh");
                     }
-                    use_simplex = true;
-                    
+
                     vtk_dof_handler_source.reinit(vtk_tria_source);
                     vtk_dof_handler_source.distribute_dofs(*vtk_fe);
-                    
+
                     vtk_field_source.reinit(vtk_dof_handler_source.n_dofs());
                     bool found_scalars = false;
                     if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
@@ -220,7 +480,7 @@ void SemiDiscreteOT<dim>::setup_source_finite_elements()
                         std::ifstream vtk_reader(source_params.density_file_path);
                         std::string line;
                         bool found_point_data = false;
-                    
+
                         while (std::getline(vtk_reader, line)) {
                             if (line.find("POINT_DATA") != std::string::npos) {
                                 found_point_data = true;
@@ -243,7 +503,7 @@ void SemiDiscreteOT<dim>::setup_source_finite_elements()
                         }
                     }
                     found_scalars = Utilities::MPI::broadcast(mpi_communicator, found_scalars, 0);
-                    
+
                     if (found_scalars) {
                         // broadcast the vtk_field
                         vtk_field_source = Utilities::MPI::broadcast(mpi_communicator, vtk_field_source, 0);
@@ -251,30 +511,30 @@ void SemiDiscreteOT<dim>::setup_source_finite_elements()
                         source_density = 0;  // Initialize to zero
                         Functions::FEFieldFunction<dim> field_function(vtk_dof_handler_source, vtk_field_source);
                         VectorTools::interpolate(dof_handler_source, field_function, source_density);
-                        
+
                         density_loaded = true;
-                        
-                        std::cout << "Interpolated density on process " << this_mpi_process 
-                              << " for " << dof_handler_source.locally_owned_dofs().n_elements() 
+
+                        std::cout << "Interpolated density on process " << this_mpi_process
+                              << " for " << dof_handler_source.locally_owned_dofs().n_elements()
                               << " DoFs" << std::endl;
                     }
                 }
             } else if (source_params.density_file_format == "h5") {
                 pcout << "HDF5 file reading not yet implemented" << std::endl;
                 density_loaded = false;
-            } 
+            }
         } catch (const std::exception& e) {
-            pcout << Color::red << Color::bold 
-                  << "Exception during density loading: " << e.what() 
+            pcout << Color::red << Color::bold
+                  << "Exception during density loading: " << e.what()
                   << Color::reset << std::endl;
             density_loaded = false;
         }
-        
+
         // Broadcast success flag
         density_loaded = Utilities::MPI::broadcast(mpi_communicator, density_loaded, 0);
-        
+
         if (!density_loaded) {
-            pcout << Color::yellow << "Warning: Failed to load custom density, using uniform density instead" 
+            pcout << Color::yellow << "Warning: Failed to load custom density, using uniform density instead"
                   << Color::reset << std::endl;
             source_density = 1.0;
         }
@@ -288,7 +548,7 @@ void SemiDiscreteOT<dim>::setup_source_finite_elements()
 
     // Create appropriate quadrature
     std::unique_ptr<Quadrature<dim>> quadrature;
-    if (use_simplex) {
+    if (has_triangles_or_tets) {
         quadrature = std::make_unique<QGaussSimplex<dim>>(solver_params.quadrature_order);
     } else {
         quadrature = std::make_unique<QGauss<dim>>(solver_params.quadrature_order);
@@ -344,6 +604,28 @@ void SemiDiscreteOT<dim>::setup_source_finite_elements()
 template <int dim>
 void SemiDiscreteOT<dim>::setup_target_finite_elements()
 {
+    // Check cell types in target mesh
+    bool has_quads_or_hexes = false;
+    bool has_triangles_or_tets = false;
+    for (const auto& cell : target_mesh.active_cell_iterators()) {
+        if (cell->reference_cell() == ReferenceCells::get_hypercube<dim>())
+            has_quads_or_hexes = true;
+        if (cell->reference_cell() == ReferenceCells::get_simplex<dim>())
+            has_triangles_or_tets = true;
+    }
+
+    // Create appropriate finite element and mapping based on cell types
+    if (has_triangles_or_tets) {
+        fe_system_target = std::make_unique<FE_SimplexP<dim>>(1);
+        mapping_target = std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
+    } else if (has_quads_or_hexes) {
+        fe_system_target = std::make_unique<FE_Q<dim>>(1);
+        mapping_target = std::make_unique<MappingQ1<dim>>();
+    } else {
+        throw std::runtime_error("Could not determine mesh cell type in target mesh");
+    }
+    dof_handler_target.distribute_dofs(*fe_system_target);
+
     // Load or compute target points (shared across all processes)
     const std::string directory = "output/data_points";
     bool points_loaded = false;
@@ -355,9 +637,8 @@ void SemiDiscreteOT<dim>::setup_target_finite_elements()
             points_loaded = true;
             pcout << "Target points loaded from file" << std::endl;
         } else {
-            dof_handler_target.distribute_dofs(*fe_system);
             std::map<types::global_dof_index, Point<dim>> support_points_target;
-            DoFTools::map_dofs_to_support_points(*mapping, dof_handler_target, support_points_target);
+            DoFTools::map_dofs_to_support_points(*mapping_target, dof_handler_target, support_points_target);
             for (const auto &point_pair : support_points_target) {
                 target_points.push_back(point_pair.second);
             }
@@ -401,65 +682,76 @@ void SemiDiscreteOT<dim>::setup_target_finite_elements()
             if (target_params.density_file_format == "vtk") {
                 // Read density from VTK file
                 try {
-                    Triangulation<dim> vtk_tria;
+                    Triangulation<dim> vtk_tria_target;
                     GridIn<dim> grid_in;
-                    grid_in.attach_triangulation(vtk_tria);
-                    
+                    grid_in.attach_triangulation(vtk_tria_target);
+
                     std::ifstream vtk_file(target_params.density_file_path);
                     if (!vtk_file) {
-                        pcout << Color::red << Color::bold 
-                              << "Error: Could not open VTK file: " << target_params.density_file_path 
+                        pcout << Color::red << Color::bold
+                              << "Error: Could not open VTK file: " << target_params.density_file_path
                               << Color::reset << std::endl;
                         density_loaded = false;
                     } else {
                         // Read VTK file
                         grid_in.read_vtk(vtk_file);
-                        pcout << "VTK mesh: " << vtk_tria.n_active_cells() << " cells" << std::endl;
-                        
+                        pcout << "VTK mesh: " << vtk_tria_target.n_active_cells() << " cells" << std::endl;
+
+                        // Check cell types in VTK mesh
+                        bool vtk_has_quads_or_hexes = false;
+                        bool vtk_has_triangles_or_tets = false;
+                        for (const auto& cell : vtk_tria_target.active_cell_iterators()) {
+                            if (cell->reference_cell() == ReferenceCells::get_hypercube<dim>())
+                                vtk_has_quads_or_hexes = true;
+                            if (cell->reference_cell() == ReferenceCells::get_simplex<dim>())
+                                vtk_has_triangles_or_tets = true;
+                        }
+
                         // Setup finite element space for VTK mesh
                         std::unique_ptr<FiniteElement<dim>> vtk_fe;
-                        bool use_simplex = target_params.use_tetrahedral_mesh;
-                        if (use_simplex) {
+                        if (vtk_has_triangles_or_tets) {
                             vtk_fe = std::make_unique<FE_SimplexP<dim>>(1);
-                        } else {
+                        } else if (vtk_has_quads_or_hexes) {
                             vtk_fe = std::make_unique<FE_Q<dim>>(1);
+                        } else {
+                            throw std::runtime_error("Could not determine mesh cell type in VTK mesh");
                         }
-                        
-                        DoFHandler<dim> vtk_dof_handler(vtk_tria);
-                        vtk_dof_handler.distribute_dofs(*vtk_fe);
-                        
+
+                        DoFHandler<dim> vtk_dof_handler_target(vtk_tria_target);
+                        vtk_dof_handler_target.distribute_dofs(*vtk_fe);
+
                         // Create vector for the scalar field
-                        Vector<double> vtk_field(vtk_dof_handler.n_dofs());
-                        
+                        Vector<double> vtk_field_target(vtk_dof_handler_target.n_dofs());
+
                         // Read scalar field data from VTK
                         std::ifstream vtk_reader(target_params.density_file_path);
                         std::string line;
-                        
+
                         // Skip header until we find POINT_DATA
                         bool found_point_data = false;
                         bool found_scalars = false;
                         std::string field_name;
-                        
+
                         while (std::getline(vtk_reader, line)) {
                             if (line.find("POINT_DATA") != std::string::npos) {
                                 found_point_data = true;
                             }
-                            
+
                             if (found_point_data && line.find("SCALARS") != std::string::npos) {
                                 found_scalars = true;
                                 std::istringstream iss(line);
                                 std::string dummy;
                                 iss >> dummy >> field_name;
                                 pcout << "Found scalar field: " << field_name << std::endl;
-                                
+
                                 // Skip LOOKUP_TABLE line
                                 std::getline(vtk_reader, line);
-                                
+
                                 // Read scalar values
-                                for (unsigned int i = 0; i < vtk_dof_handler.n_dofs(); ++i) {
-                                    if (!(vtk_reader >> vtk_field[i])) {
-                                        pcout << Color::red << Color::bold 
-                                              << "Error reading scalar field data from VTK" 
+                                for (unsigned int i = 0; i < vtk_dof_handler_target.n_dofs(); ++i) {
+                                    if (!(vtk_reader >> vtk_field_target[i])) {
+                                        pcout << Color::red << Color::bold
+                                              << "Error reading scalar field data from VTK"
                                               << Color::reset << std::endl;
                                         found_scalars = false;
                                         break;
@@ -468,17 +760,16 @@ void SemiDiscreteOT<dim>::setup_target_finite_elements()
                                 break;
                             }
                         }
-                        
+
                         if (!found_scalars) {
-                            pcout << Color::red << Color::bold 
-                                  << "Error: Could not find scalar field data in VTK file" 
+                            pcout << Color::red << Color::bold
+                                  << "Error: Could not find scalar field data in VTK file"
                                   << Color::reset << std::endl;
                             density_loaded = false;
                         } else {
                             // Now interpolate the VTK field to the target points
-                            dof_handler_target.distribute_dofs(*fe_system);
 
-                            Functions::FEFieldFunction<dim> field_function_target(vtk_dof_handler, vtk_field);
+                            Functions::FEFieldFunction<dim> field_function_target(vtk_dof_handler_target, vtk_field_target);
                             VectorTools::interpolate(dof_handler_target, field_function_target, target_density);
                             pcout << "L1 norm of target density: " << target_density.l1_norm() << std::endl;
                             target_density /= target_density.l1_norm();
@@ -487,8 +778,8 @@ void SemiDiscreteOT<dim>::setup_target_finite_elements()
                         }
                     }
                 } catch (const std::exception& e) {
-                    pcout << Color::red << Color::bold 
-                          << "Exception during VTK density loading: " << e.what() 
+                    pcout << Color::red << Color::bold
+                          << "Exception during VTK density loading: " << e.what()
                           << Color::reset << std::endl;
                     density_loaded = false;
                 }
@@ -511,15 +802,14 @@ void SemiDiscreteOT<dim>::setup_target_finite_elements()
 
         // Broadcast success flag
         density_loaded = Utilities::MPI::broadcast(mpi_communicator, density_loaded, 0);
-        
+
         if (!density_loaded) {
-            pcout << Color::yellow << "Warning: Failed to load custom density, using uniform density instead" 
+            pcout << Color::yellow << "Warning: Failed to load custom density, using uniform density instead"
                   << Color::reset << std::endl;
             target_density = 1.0 / target_points.size();
         } else {
             // Broadcast target density
             target_density = Utilities::MPI::broadcast(mpi_communicator, target_density, 0);
-            // Save the target density to a file for later use
         }
     } else {
         // Use uniform density if no custom density is specified
@@ -532,11 +822,11 @@ void SemiDiscreteOT<dim>::setup_target_finite_elements()
         // Create output directory if it doesn't exist
         std::string output_dir = "output/data_density";
         fs::create_directories(output_dir);
-        
+
         // Save density to file
         std::string density_file = output_dir + "/target_density";
         std::vector<double> output_density_values(target_density.begin(), target_density.end());
-        
+
         Utils::write_vector(output_density_values, density_file, io_coding);
         pcout << "Target density saved to " << density_file << std::endl;
     }
@@ -553,11 +843,29 @@ void SemiDiscreteOT<dim>::setup_finite_elements()
 template <int dim>
 void SemiDiscreteOT<dim>::setup_multilevel_finite_elements()
 {
-    // Check if we're using tetrahedral meshes
-    bool use_simplex = (source_params.use_tetrahedral_mesh || target_params.use_tetrahedral_mesh);
+    // Check cell types in source mesh
+    bool has_quads_or_hexes = false;
+    bool has_triangles_or_tets = false;
+    for (const auto& cell : source_mesh.active_cell_iterators()) {
+        if (cell->reference_cell() == ReferenceCells::get_hypercube<dim>())
+            has_quads_or_hexes = true;
+        if (cell->reference_cell() == ReferenceCells::get_simplex<dim>())
+            has_triangles_or_tets = true;
+    }
+
+    // Create appropriate finite element and mapping based on cell types
+    if (has_triangles_or_tets) {
+        fe_system = std::make_unique<FE_SimplexP<dim>>(1);
+        mapping = std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
+    } else if (has_quads_or_hexes) {
+        fe_system = std::make_unique<FE_Q<dim>>(1);
+        mapping = std::make_unique<MappingQ1<dim>>();
+    } else {
+        throw std::runtime_error("Could not determine mesh cell type in source mesh");
+    }
+
     // Only distribute DoFs for source mesh
     dof_handler_source.distribute_dofs(*fe_system);
-
 
     // Initialize source density
     IndexSet locally_owned_dofs = dof_handler_source.locally_owned_dofs();
@@ -567,17 +875,23 @@ void SemiDiscreteOT<dim>::setup_multilevel_finite_elements()
     source_density.reinit(locally_owned_dofs, locally_relevant_dofs, mpi_communicator);
 
     if (source_params.use_custom_density && source_params.density_file_format == "vtk") {
+        // print in green
+        pcout << Color::green << "Interpolating source density from VTK to source mesh" << Color::reset << std::endl;
         Functions::FEFieldFunction<dim> field_function(vtk_dof_handler_source, vtk_field_source);
+        interpolate_non_conforming_nearest(vtk_dof_handler_source, vtk_field_source, dof_handler_source, source_density);
         // TODO: interpolate source density, we can't do this with vectortools::interpolate because the VTK mesh is not aligned with the source mesh (coarse mesh)
     }
+    else {
+        pcout << Color::green << "Using uniform source density" << Color::reset << std::endl;
+        source_density = 1.0;
+    }
 
-    source_density = 1.0;
     source_density.update_ghost_values();
 
     // Normalize source density
     double local_l1_norm = 0.0;
     std::unique_ptr<Quadrature<dim>> quadrature;
-    if (use_simplex) {
+    if (has_triangles_or_tets) {
         quadrature = std::make_unique<QGaussSimplex<dim>>(solver_params.quadrature_order);
     } else {
         quadrature = std::make_unique<QGauss<dim>>(solver_params.quadrature_order);
@@ -603,7 +917,7 @@ void SemiDiscreteOT<dim>::setup_multilevel_finite_elements()
     source_density /= global_l1_norm;
     source_density.update_ghost_values();
 
-    pcout << "Source mesh finite elements initialized with " 
+    pcout << "Source mesh finite elements initialized with "
           << dof_handler_source.n_dofs() << " DoFs" << std::endl;
 }
 
@@ -617,12 +931,12 @@ void SemiDiscreteOT<dim>::setup_target_points()
 template <int dim>
 void SemiDiscreteOT<dim>::assign_potentials_by_hierarchy(
     Vector<double>& potentials, int coarse_level, int fine_level, const Vector<double>& prev_potentials) {
-    
+
     if (!has_hierarchy_data_ || coarse_level < 0 || fine_level < 0) {
         std::cerr << "Invalid hierarchy levels for potential assignment" << std::endl;
         return;
     }
-    
+
     // Direct assignment if same level
     if (coarse_level == fine_level) {
         potentials = prev_potentials;
@@ -635,7 +949,7 @@ void SemiDiscreteOT<dim>::assign_potentials_by_hierarchy(
     if (multilevel_params.use_softmax_potential_transfer) {
         pcout << "Applying softmax-based potential assignment from level " << coarse_level
               << " to level " << fine_level << std::endl;
-        pcout << "Source points: " << prev_potentials.size() 
+        pcout << "Source points: " << prev_potentials.size()
               << ", Target points: " << target_points.size() << std::endl;
 
         // Create SoftmaxRefinement instance
@@ -658,13 +972,13 @@ void SemiDiscreteOT<dim>::assign_potentials_by_hierarchy(
             solver_params.regularization_param,
             fine_level,
             child_indices_);
-        
+
         pcout << "Softmax-based potential assignment completed." << std::endl;
     }
     else {
         pcout << "Applying direct potential assignment from level " << coarse_level
               << " to level " << fine_level << std::endl;
-        pcout << "Source points: " << prev_potentials.size() 
+        pcout << "Source points: " << prev_potentials.size()
               << ", Target points: " << target_points.size() << std::endl;
 
         if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
@@ -717,28 +1031,28 @@ void SemiDiscreteOT<dim>::run_sot()
               << "  Scaling factor: " << solver_config.epsilon_scaling_factor << std::endl
               << "  Number of steps: " << solver_config.epsilon_scaling_steps << std::endl;
         // Compute epsilon distribution for a single level
-        std::vector<std::vector<double>> epsilon_distribution = 
+        std::vector<std::vector<double>> epsilon_distribution =
             epsilon_scaling_handler->compute_epsilon_distribution(1, true, false);
-        
+
         if (!epsilon_distribution.empty() && !epsilon_distribution[0].empty()) {
             const auto& epsilon_sequence = epsilon_distribution[0];
-            
+
             // Run optimization for each epsilon value
             for (size_t i = 0; i < epsilon_sequence.size(); ++i) {
                 pcout << "\nEpsilon scaling step " << i + 1 << "/" << epsilon_sequence.size()
                       << " (λ = " << epsilon_sequence[i] << ")" << std::endl;
-                
+
                 solver_config.regularization_param = epsilon_sequence[i];
-                
+
                 try {
                     sot_solver->solve(potential, solver_config);
-                    
+
                     // Save intermediate results
                     if (i < epsilon_sequence.size() - 1) {
                         std::string eps_suffix = "_eps" + std::to_string(i + 1);
                         save_results(potential, "potential" + eps_suffix);
                     }
-                    
+
                 } catch (const SolverControl::NoConvergence& exc) {
                     if (exc.last_step >= solver_params.max_iterations) {
                         pcout << Color::red << Color::bold << "  Warning: Optimization failed at step " << i + 1
@@ -747,7 +1061,7 @@ void SemiDiscreteOT<dim>::run_sot()
                     }
                 }
             }
-        } 
+        }
     } else {
         // Run single optimization with original epsilon
         try {
@@ -772,23 +1086,24 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
 {
     Timer global_timer;
     global_timer.start();
-    
+
     if (save_results_to_files) {
         pcout << Color::yellow << Color::bold << "Starting target point cloud multilevel SOT computation..." << Color::reset << std::endl;
     } else {
         pcout << "Running target multilevel optimization for source mesh: " << source_mesh_file << std::endl;
     }
-    
+
     // Load source mesh based on input parameters
     if (source_mesh_file.empty()) {
         mesh_manager->load_source_mesh(source_mesh);
+        setup_source_finite_elements();
     } else {
         pcout << "Source mesh loaded from file: " << source_mesh_file << std::endl;
         mesh_manager->load_mesh_at_level(source_mesh, dof_handler_source, source_mesh_file);
+        setup_multilevel_finite_elements();
         pcout << "Source mesh loaded from file: " << source_mesh_file << std::endl;
     }
-    setup_source_finite_elements();
-    
+
     // Get target point cloud hierarchy files (sorted from coarsest to finest)
     unsigned int num_levels = 0;
     std::vector<std::pair<std::string, std::string>> hierarchy_files;
@@ -800,7 +1115,7 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
             pcout << "Please run prepare_target_multilevel first." << std::endl;
             return;
         }
-    
+
         if (hierarchy_files.empty()) {
             pcout << "No target point cloud hierarchy found. Please run prepare_target_multilevel first." << std::endl;
             return;
@@ -809,23 +1124,23 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
     }
 
     num_levels = Utilities::MPI::broadcast(mpi_communicator, num_levels, 0);
-    
+
     // Initialize hierarchy data structure but don't load data yet
     if (!has_hierarchy_data_) {
         pcout << "Initializing hierarchy data structure..." << std::endl;
         load_hierarchy_data(multilevel_params.target_hierarchy_dir, -1);
     }
-    
+
     if (!has_hierarchy_data_) {
         pcout << "Failed to initialize hierarchy data. Cannot proceed with multilevel computation." << std::endl;
         return;
     }
-    
+
     // Store original solver parameters
     const unsigned int original_max_iterations = solver_params.max_iterations;
     const double original_tolerance = solver_params.tolerance;
     const double original_regularization = solver_params.regularization_param;
-    
+
     // Setup epsilon scaling if enabled
     std::vector<std::vector<double>> epsilon_distribution;
     if (solver_params.use_epsilon_scaling && epsilon_scaling_handler) {
@@ -834,20 +1149,20 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
             num_levels, true, false);
         epsilon_scaling_handler->print_epsilon_distribution();
     }
-    
+
     // Vector to store current potentials solution
     Vector<double> level_potentials;
-    
+
     // Configure solver parameters for this level
     ParameterManager::SolverParameters& solver_config = solver_params;
-    
+
     // Set up source measure (this remains constant across levels)
     sot_solver->setup_source(dof_handler_source,
                            *mapping,
                            *fe_system,
                            source_density,
                            solver_config.quadrature_order);
-    
+
     // Process each level of the hierarchy (from coarsest to finest)
     for (size_t level = 0; level < num_levels; ++level) {
         int level_number = 0;
@@ -858,14 +1173,14 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
             const auto& hierarchy_file = hierarchy_files[level];
             points_file = hierarchy_file.first;
             potentials_file = hierarchy_file.second;
-        
+
             // Extract level number from filename
             std::string level_num = points_file.substr(
-                points_file.find("level_") + 6, 
+                points_file.find("level_") + 6,
                 points_file.find("_points") - points_file.find("level_") - 6
             );
             level_number = std::stoi(level_num);
-        
+
             // Create output directory for this level (if saving results)
             if (save_results_to_files) {
                 level_output_dir = multilevel_params.output_prefix + "/level_" + level_num;
@@ -873,14 +1188,14 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
             }
         }
         level_number = Utilities::MPI::broadcast(mpi_communicator, level_number, 0);
-        
+
         pcout << "\n" << Color::magenta << Color::bold << "----------------------------------------" << Color::reset << std::endl;
         pcout << Color::magenta << Color::bold << "Processing target point cloud level " << level_number << Color::reset << std::endl;
         pcout << Color::magenta << Color::bold << "----------------------------------------" << Color::reset << std::endl;
 
         // Load hierarchy data for this level only
         load_hierarchy_data(multilevel_params.target_hierarchy_dir, level_number);
-        
+
         // Load target points for this level
         if (level > 0) {
             target_points_coarse = target_points;
@@ -889,10 +1204,10 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
         load_target_points_at_level(points_file, potentials_file);
         pcout << "Target points loaded for level " << level_number << std::endl;
         pcout << "Target points size: " << target_points.size() << std::endl;
-        
+
         // Set up target measure for this level
         sot_solver->setup_target(target_points, target_density);
-        
+
         // Initialize potentials for this level
         Vector<double> current_level_potentials(target_points.size());
         if (level > 0) {
@@ -903,29 +1218,29 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
         // Apply epsilon scaling for this level if enabled
         if (solver_params.use_epsilon_scaling && epsilon_scaling_handler && !epsilon_distribution.empty()) {
             const auto& level_epsilons = epsilon_scaling_handler->get_epsilon_values_for_level(level);
-            
+
             if (!level_epsilons.empty()) {
                 pcout << "Using " << level_epsilons.size() << " epsilon values for level " << level_number << std::endl;
-                
+
                 // Process each epsilon value for this level
                 for (size_t eps_idx = 0; eps_idx < level_epsilons.size(); ++eps_idx) {
                     double current_epsilon = level_epsilons[eps_idx];
                     pcout << "  Epsilon scaling step " << eps_idx + 1 << "/" << level_epsilons.size()
                           << " (λ = " << current_epsilon << ")" << std::endl;
-                    
+
                     // Update regularization parameter
                     solver_config.regularization_param = current_epsilon;
-                    
+
                     Timer level_timer;
                     level_timer.start();
-                    
+
                     try {
                         // Run optimization with current epsilon
                         sot_solver->solve(current_level_potentials, solver_config);
-                        
+
                         level_timer.stop();
                         pcout << "  Completed in " << level_timer.wall_time() << " seconds" << std::endl;
-                        
+
                         // Save intermediate results if this is not the last epsilon for this level
                         if (save_results_to_files && eps_idx < level_epsilons.size() - 1) {
                             std::string eps_suffix = "_eps" + std::to_string(eps_idx + 1);
@@ -937,7 +1252,7 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
                                   << " (epsilon=" << current_epsilon << "): Max iterations reached"
                                   << Color::reset << std::endl;
                         }
-                        pcout << Color::red << Color::bold << "  Warning: Optimization did not converge for epsilon " 
+                        pcout << Color::red << Color::bold << "  Warning: Optimization did not converge for epsilon "
                               << current_epsilon << " at source level " << level_number << Color::reset << std::endl;
                         // Continue with next epsilon value
                     }
@@ -945,14 +1260,14 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
             } else {
                 // If no epsilon values for this level, use the smallest epsilon from the sequence
                 solver_config.regularization_param = original_regularization;
-                
+
                 Timer level_timer;
                 level_timer.start();
-                
+
                 try {
                     // Run optimization with default epsilon
                     sot_solver->solve(current_level_potentials, solver_config);
-                    
+
                     level_timer.stop();
                     pcout << "  Completed in " << level_timer.wall_time() << " seconds" << std::endl;
                 } catch (const SolverControl::NoConvergence& exc) {
@@ -969,11 +1284,11 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
             // No epsilon scaling, just run the optimization once
             Timer level_timer;
             level_timer.start();
-            
+
             try {
                 // Run optimization for this level
                 sot_solver->solve(current_level_potentials, solver_config);
-                
+
                 level_timer.stop();
                 pcout << "  Completed in " << level_timer.wall_time() << " seconds" << std::endl;
             } catch (SolverControl::NoConvergence& exc) {
@@ -988,7 +1303,7 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
                 // Otherwise continue to next level with current potentials
             }
         }
-            
+
         // Save results for this level (if requested)
         if(save_results_to_files) {
             save_results(current_level_potentials, level_output_dir + "/potentials");
@@ -1004,22 +1319,22 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
         } else {
             pcout << "Level " << level_number << " completed" << std::endl;
         }
-        
+
         // Store potentials for next level
         level_potentials = current_level_potentials;
         current_distance_threshold = sot_solver->get_last_distance_threshold();
     }
-    
+
     // If output_potentials is provided, copy the final potentials
     if (output_potentials != nullptr) {
         *output_potentials = level_potentials;
     }
-    
+
     // Restore original parameters
     solver_params.tolerance = original_tolerance;
     solver_params.max_iterations = original_max_iterations;
     solver_params.regularization_param = original_regularization;
-    
+
     if (save_results_to_files) {
         global_timer.stop();
         pcout << "\n" << Color::magenta << Color::bold << "----------------------------------------" << Color::reset << std::endl;
@@ -1040,9 +1355,9 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
 {
     Timer global_timer;
     global_timer.start();
-    
+
     pcout << Color::yellow << Color::bold << "Starting multilevel SOT computation..." << Color::reset << std::endl;
-    
+
     // Check if either source or target multilevel is enabled
     if (!multilevel_params.source_enabled && !multilevel_params.target_enabled) {
         pcout << Color::red << Color::bold << "Error: Neither source nor target multilevel is enabled. Please enable at least one in parameters.prm" << Color::reset << std::endl;
@@ -1062,12 +1377,12 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
         run_target_multilevel("", nullptr, true);
         return;  // Exit after running target multilevel
     }
-    
+
     // Store original solver parameters
     const unsigned int original_max_iterations = solver_params.max_iterations;
     const double original_tolerance = solver_params.tolerance;
     const double original_regularization = solver_params.regularization_param;
-    
+
     // Create output directory structure
     std::string eps_dir = "output/epsilon_" + std::to_string(original_regularization);
     std::string multilevel_dir = "multilevel";
@@ -1087,18 +1402,18 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
     std::vector<std::vector<double>> epsilon_distribution;
     if (solver_params.use_epsilon_scaling && epsilon_scaling_handler) {
         pcout << "Computing epsilon distribution for multilevel optimization..." << std::endl;
-        
+
         unsigned int num_levels = 0;
         if (multilevel_params.target_enabled) {
             // Get number of target levels
-            std::vector<std::pair<std::string, std::string>> target_files = 
+            std::vector<std::pair<std::string, std::string>> target_files =
                 Utils::get_target_hierarchy_files(multilevel_params.target_hierarchy_dir);
             num_levels = target_files.size();
         } else if (multilevel_params.source_enabled) {
             // Get number of source levels
             num_levels = source_mesh_files.size();
         }
-        
+
         epsilon_distribution = epsilon_scaling_handler->compute_epsilon_distribution(
             num_levels, multilevel_params.target_enabled, multilevel_params.source_enabled);
         epsilon_scaling_handler->print_epsilon_distribution();
@@ -1113,13 +1428,13 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
         setup_source_finite_elements();
 
         pcout << "\n" << Color::yellow << Color::bold << "Processing source mesh hierarchy..." << Color::reset << std::endl;
-        
+
         // Vector to store potentials between source mesh levels
         Vector<double> previous_source_potentials;
-        
+
         for (size_t source_level = 0; source_level < source_mesh_files.size(); ++source_level) {
             pcout << "\n" << Color::cyan << Color::bold << "============================================" << Color::reset << std::endl;
-            pcout << Color::cyan << Color::bold << "Processing source mesh level " << source_level 
+            pcout << Color::cyan << Color::bold << "Processing source mesh level " << source_level
                   << " (mesh: " << source_mesh_files[source_level] << ")" << Color::reset << std::endl;
             pcout << Color::cyan << Color::bold << "============================================" << Color::reset << std::endl;
 
@@ -1137,33 +1452,33 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
                     mesh_manager->load_mesh_at_level(source_mesh, dof_handler_source, source_mesh_files[source_level]);
                     setup_multilevel_finite_elements();
                     setup_target_points();
-                    
+
                     source_level_potentials.reinit(target_points.size());
                     sot_solver->setup_source(dof_handler_source, *mapping, *fe_system,
                                           source_density, solver_params.quadrature_order);
                     sot_solver->setup_target(target_points, target_density);
-                    
+
                     // Apply epsilon scaling for this source level if enabled
                     if (solver_params.use_epsilon_scaling && epsilon_scaling_handler && !epsilon_distribution.empty()) {
                         const auto& level_epsilons = epsilon_scaling_handler->get_epsilon_values_for_level(source_level);
-                        
+
                         if (!level_epsilons.empty()) {
-                            pcout << "Using " << level_epsilons.size() << " epsilon values for source level " 
+                            pcout << "Using " << level_epsilons.size() << " epsilon values for source level "
                                   << source_level << std::endl;
-                            
+
                             // Process each epsilon value for this level
                             for (size_t eps_idx = 0; eps_idx < level_epsilons.size(); ++eps_idx) {
                                 double current_epsilon = level_epsilons[eps_idx];
                                 pcout << "  Epsilon scaling step " << eps_idx + 1 << "/" << level_epsilons.size()
                                       << " (λ = " << current_epsilon << ")" << std::endl;
-                                
+
                                 // Update regularization parameter
                                 solver_params.regularization_param = current_epsilon;
-                                
+
                                 try {
                                     // Run optimization with current epsilon
                                     sot_solver->solve(source_level_potentials, solver_params);
-                                    
+
                                     // Save intermediate results if this is not the last epsilon for this level
                                     if (eps_idx < level_epsilons.size() - 1) {
                                         std::string eps_suffix = "_eps" + std::to_string(eps_idx + 1);
@@ -1175,7 +1490,7 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
                                               << " (epsilon=" << current_epsilon << "): Max iterations reached"
                                               << Color::reset << std::endl;
                                     }
-                                    pcout << Color::red << Color::bold << "  Warning: Optimization did not converge for epsilon " 
+                                    pcout << Color::red << Color::bold << "  Warning: Optimization did not converge for epsilon "
                                           << current_epsilon << " at source level " << source_level << Color::reset << std::endl;
                                     // Continue with next epsilon value
                                 }
@@ -1195,56 +1510,56 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
                 // Load the mesh for this level
                 mesh_manager->load_mesh_at_level(source_mesh, dof_handler_source, source_mesh_files[source_level]);
                 setup_multilevel_finite_elements();
-                
+
                 // Adjust solver parameters based on level
                 double num_levels = static_cast<double>(source_mesh_files.size());
                 double tolerance_exponent = static_cast<double>(source_level) - num_levels + 1.0;
                 solver_params.tolerance = original_tolerance * std::pow(2.0, tolerance_exponent);
-                
+
                 pcout << "\nSource level " << source_level << " solver parameters:" << std::endl;
                 pcout << "  Level: " << source_level << " of " << num_levels << std::endl;
                 pcout << "  Tolerance: " << solver_params.tolerance << std::endl;
                 pcout << "  Max iterations: " << solver_params.max_iterations << std::endl;
-                
+
                 // Initialize potentials from previous level
                 Vector<double> level_potentials(target_points.size());
                 level_potentials = previous_source_potentials;
-                
+
                 try {
                     Timer level_timer;
                     level_timer.start();
-                    
+
                     // Set up source measure for SotSolver
                     sot_solver->setup_source(dof_handler_source,
                                            *mapping,
                                            *fe_system,
                                            source_density,
                                            solver_params.quadrature_order);
-                    
+
                     // Set up target measure for SotSolver
                     sot_solver->setup_target(target_points, target_density);
-                    
+
                     // Apply epsilon scaling for this source level if enabled
                     if (solver_params.use_epsilon_scaling && epsilon_scaling_handler && !epsilon_distribution.empty()) {
                         const auto& level_epsilons = epsilon_scaling_handler->get_epsilon_values_for_level(source_level);
-                        
+
                         if (!level_epsilons.empty()) {
-                            pcout << "Using " << level_epsilons.size() << " epsilon values for source level " 
+                            pcout << "Using " << level_epsilons.size() << " epsilon values for source level "
                                   << source_level << std::endl;
-                            
+
                             // Process each epsilon value for this level
                             for (size_t eps_idx = 0; eps_idx < level_epsilons.size(); ++eps_idx) {
                                 double current_epsilon = level_epsilons[eps_idx];
                                 pcout << "  Epsilon scaling step " << eps_idx + 1 << "/" << level_epsilons.size()
                                       << " (λ = " << current_epsilon << ")" << std::endl;
-                                
+
                                 // Update regularization parameter
                                 solver_params.regularization_param = current_epsilon;
-                                
+
                                 try {
                                     // Run optimization with current epsilon
                                     sot_solver->solve(level_potentials, solver_params);
-                                    
+
                                     // Save intermediate results if this is not the last epsilon for this level
                                     if (eps_idx < level_epsilons.size() - 1) {
                                         std::string eps_suffix = "_eps" + std::to_string(eps_idx + 1);
@@ -1256,7 +1571,7 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
                                               << " (epsilon=" << current_epsilon << "): Max iterations reached"
                                               << Color::reset << std::endl;
                                     }
-                                    pcout << Color::red << Color::bold << "  Warning: Optimization did not converge for epsilon " 
+                                    pcout << Color::red << Color::bold << "  Warning: Optimization did not converge for epsilon "
                                           << current_epsilon << " at source level " << source_level << Color::reset << std::endl;
                                     // Continue with next epsilon value
                                 }
@@ -1270,25 +1585,25 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
                         // No epsilon scaling, just run the optimization once
                         sot_solver->solve(level_potentials, solver_params);
                     }
-                    
+
                     level_timer.stop();
-                    
+
                     // Save results for this level
                     save_results(level_potentials, source_level_dir + "/potentials");
-                    
+
                     // Store current solution for next level and as final result
                     previous_source_potentials = level_potentials;
                     if (source_level == source_mesh_files.size() - 1) {
                         final_potentials = level_potentials;
                     }
-                    
+
                     pcout << "\n" << Color::blue << Color::bold << "Source level " << source_level << " summary:" << Color::reset << std::endl;
                     pcout << Color::blue << "  Status: Completed successfully" << Color::reset << std::endl;
                     pcout << Color::blue << "  Time taken: " << level_timer.wall_time() << " seconds" << Color::reset << std::endl;
                     pcout << Color::blue << "  Final number of iterations: " << sot_solver->get_last_iteration_count() << Color::reset << std::endl;
                     pcout << Color::blue << "  Final function value: " << sot_solver->get_last_functional_value() << Color::reset << std::endl;
                     pcout << Color::blue << "  Results saved in: " << source_level_dir << Color::reset << std::endl;
-                    
+
                 } catch (const std::exception& e) {
                     pcout << Color::red << Color::bold << "Error at source level " << source_level << ": " << e.what() << Color::reset << std::endl;
                     if (source_level == 0) return;  // If coarsest level fails, abort
@@ -1412,7 +1727,7 @@ void SemiDiscreteOT<dim>::prepare_target_multilevel()
         pcout << "Preparing target point cloud hierarchy..." << std::endl;
         // First ensure we have target points and density
         if (target_points.empty()) {
-            setup_target_finite_elements(); 
+            setup_target_finite_elements();
         }
 
         if (target_points.empty()) {
@@ -1448,7 +1763,7 @@ void SemiDiscreteOT<dim>::prepare_target_multilevel()
                 int result = std::system(python_cmd.c_str());
 
                 if (result != 0) {
-                    pcout << Color::red << Color::bold << "Error: Python script execution failed with code " 
+                    pcout << Color::red << Color::bold << "Error: Python script execution failed with code "
                           << result << Color::reset << std::endl;
                     return;
                 }
@@ -1476,7 +1791,7 @@ void SemiDiscreteOT<dim>::prepare_target_multilevel()
                     multilevel_params.target_hierarchy_dir
                 );
 
-                pcout << Color::green << Color::bold << "Successfully generated " << num_levels 
+                pcout << Color::green << Color::bold << "Successfully generated " << num_levels
                       << " levels of point cloud hierarchy" << Color::reset << std::endl;
             } catch (const std::exception& e) {
                 pcout << Color::red << Color::bold << "Error: " << e.what() << Color::reset << std::endl;
@@ -1600,11 +1915,11 @@ void SemiDiscreteOT<dim>::compute_transport_map()
         // Try different strategies and save results
         for (const auto& strategy : transport_plan.get_available_strategies()) {
             pcout << "Computing transport map using " << strategy << " strategy..." << std::endl;
-            
+
             transport_plan.set_strategy(strategy);
             transport_plan.compute_map();
             transport_plan.save_map(output_dir + "/" + strategy);
-            
+
             pcout << "Results saved in " << output_dir + "/" + strategy << std::endl;
         }
     }

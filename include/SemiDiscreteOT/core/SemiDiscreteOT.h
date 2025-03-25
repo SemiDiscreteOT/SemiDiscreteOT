@@ -118,6 +118,8 @@ private:
     // Finite element and mapping members
     std::unique_ptr<FiniteElement<dim>> fe_system;
     std::unique_ptr<Mapping<dim>> mapping;
+    std::unique_ptr<FiniteElement<dim>> fe_system_target;
+    std::unique_ptr<Mapping<dim>> mapping_target;
     LinearAlgebra::distributed::Vector<double> source_density;
     std::vector<Point<dim>> target_points;
     std::vector<Point<dim>> source_points;
