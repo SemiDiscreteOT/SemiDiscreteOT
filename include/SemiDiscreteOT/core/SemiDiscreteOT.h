@@ -107,7 +107,7 @@ private:
                                               Vector<double>& potentials);
 
     // Setup methods
-    void setup_source_finite_elements();
+    void setup_source_finite_elements(bool is_multilevel = false);
     void setup_target_finite_elements();
     void setup_finite_elements();
     void setup_target_points();

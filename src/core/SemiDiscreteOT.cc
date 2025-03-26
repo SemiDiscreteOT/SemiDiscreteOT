@@ -185,72 +185,91 @@ void SemiDiscreteOT<dim>::normalize_density(LinearAlgebra::distributed::Vector<d
     density.update_ghost_values();
 }
 
+
 template <int dim>
-void SemiDiscreteOT<dim>::setup_source_finite_elements()
+void SemiDiscreteOT<dim>::setup_source_finite_elements(const bool is_multilevel)
 {
-    // Create appropriate finite element and mapping based on cell types
+    // Create finite element and mapping for the mesh.
     auto [fe, map] = Utils::create_fe_and_mapping_for_mesh<dim>(source_mesh);
     fe_system = std::move(fe);
     mapping = std::move(map);
 
+    // Distribute DoFs.
     dof_handler_source.distribute_dofs(*fe_system);
-
     IndexSet locally_owned_dofs = dof_handler_source.locally_owned_dofs();
     IndexSet locally_relevant_dofs;
     DoFTools::extract_locally_relevant_dofs(dof_handler_source, locally_relevant_dofs);
 
+    // Initialize source density.
     source_density.reinit(locally_owned_dofs, locally_relevant_dofs, mpi_communicator);
 
-    // Handle custom source density if enabled
-    if (source_params.use_custom_density) {
-        pcout << "Using custom source density from file: " << source_params.density_file_path << std::endl;
-        bool density_loaded = false;
-
-        if (source_params.density_file_format == "vtk") {
-            // Read VTK file and broadcast field to all processes for source case
-            density_loaded = Utils::read_vtk_field<dim>(source_params.density_file_path,
-                                                      vtk_dof_handler_source,
-                                                      vtk_field_source,
-                                                      vtk_tria_source,
-                                                      mpi_communicator,
-                                                      pcout,
-                                                      true); 
-
-            if (density_loaded) {
+    // Handle custom density if enabled.
+    if (source_params.use_custom_density)
+    {
+        if (source_params.density_file_format == "vtk")
+        {
+            if (is_multilevel)
+            {
                 pcout << Color::green << "Interpolating source density from VTK to source mesh" << Color::reset << std::endl;
-                Functions::FEFieldFunction<dim> field_function(vtk_dof_handler_source, vtk_field_source);
-                VectorTools::interpolate(dof_handler_source, field_function, source_density);
+                // For multilevel, use non-conforming nearest neighbor interpolation.
+                Utils::interpolate_non_conforming_nearest(vtk_dof_handler_source,
+                                                          vtk_field_source,
+                                                          dof_handler_source,
+                                                          source_density);
+                pcout << "Source density interpolated from VTK to source mesh" << std::endl;
+            }
+            else
+            {
+                pcout << "Using custom source density from file: " << source_params.density_file_path << std::endl;
+                bool density_loaded = false;
+                // For the regular case, read the VTK field and then interpolate.
+                density_loaded = Utils::read_vtk_field<dim>(source_params.density_file_path,
+                                                            vtk_dof_handler_source,
+                                                            vtk_field_source,
+                                                            vtk_tria_source,
+                                                            mpi_communicator,
+                                                            pcout,
+                                                            true);
+                if (density_loaded)
+                {
+                    pcout << Color::green << "Interpolating source density from VTK to source mesh" << Color::reset << std::endl;
+                    Functions::FEFieldFunction<dim> field_function(vtk_dof_handler_source, vtk_field_source);
+                    VectorTools::interpolate(dof_handler_source, field_function, source_density);
+                }
+                else
+                {
+                    pcout << Color::red << "Failed to load custom density, using uniform density" << Color::reset << std::endl;
+                    source_density = 1.0;
+                }
             }
         }
-
-        if (!density_loaded) {
-            pcout << Color::red << "Failed to load custom density, using uniform density" << Color::reset << std::endl;
+        else
+        {
+            pcout << Color::red << "Unsupported density file format, using uniform density" << Color::reset << std::endl;
             source_density = 1.0;
         }
-    } else {
+    }
+    else
+    {
         pcout << Color::green << "Using uniform source density" << Color::reset << std::endl;
         source_density = 1.0;
     }
 
     source_density.update_ghost_values();
+    normalize_density(source_density);
 
-
-    // Debug info about parallel distribution
     unsigned int n_locally_owned = 0;
-    for (const auto &cell : dof_handler_source.active_cell_iterators()) {
+    for (const auto &cell : dof_handler_source.active_cell_iterators())
+    {
         if (cell->is_locally_owned())
             ++n_locally_owned;
     }
-    const unsigned int n_total_owned =
-        Utilities::MPI::sum(n_locally_owned, mpi_communicator);
-
+    const unsigned int n_total_owned = Utilities::MPI::sum(n_locally_owned, mpi_communicator);
     pcout << "Total cells: " << source_mesh.n_active_cells()
           << ", Locally owned on proc " << this_mpi_process
           << ": " << n_locally_owned
           << ", Sum of owned: " << n_total_owned << std::endl;
-
-    normalize_density(source_density);
-
+    pcout << "Source mesh finite elements initialized with " << dof_handler_source.n_dofs() << " DoFs" << std::endl;
 }
 
 template <int dim>
@@ -377,40 +396,6 @@ void SemiDiscreteOT<dim>::setup_finite_elements()
     setup_target_finite_elements();
 }
 
-template <int dim>
-void SemiDiscreteOT<dim>::setup_multilevel_finite_elements()
-{
-    auto [fe, map] = Utils::create_fe_and_mapping_for_mesh<dim>(source_mesh);
-    fe_system = std::move(fe);
-    mapping = std::move(map);
-
-    // Only distribute DoFs for source mesh
-    dof_handler_source.distribute_dofs(*fe_system);
-
-    // Initialize source density
-    IndexSet locally_owned_dofs = dof_handler_source.locally_owned_dofs();
-    IndexSet locally_relevant_dofs;
-    DoFTools::extract_locally_relevant_dofs(dof_handler_source, locally_relevant_dofs);
-
-    source_density.reinit(locally_owned_dofs, locally_relevant_dofs, mpi_communicator);
-
-    if (source_params.use_custom_density && source_params.density_file_format == "vtk") {
-        pcout << Color::green << "Interpolating source density from VTK to source mesh" << Color::reset << std::endl;
-        // TODO: interpolate source density, we can't do this with vectortools::interpolate because the VTK mesh is not aligned with the source mesh (coarse mesh)
-        Utils::interpolate_non_conforming_nearest(vtk_dof_handler_source, vtk_field_source, dof_handler_source, source_density);
-        std::cout << "Source density interpolated from VTK to source mesh" << std::endl;
-    }
-    else {
-        pcout << Color::green << "Using uniform source density" << Color::reset << std::endl;
-        source_density = 1.0;
-    }
-
-    source_density.update_ghost_values();
-
-    normalize_density(source_density);
-    pcout << "Source mesh finite elements initialized with "
-          << dof_handler_source.n_dofs() << " DoFs" << std::endl;
-}
 
 template <int dim>
 void SemiDiscreteOT<dim>::setup_target_points()
@@ -591,7 +576,8 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
     } else {
         pcout << "Source mesh loaded from file: " << source_mesh_file << std::endl;
         mesh_manager->load_mesh_at_level(source_mesh, dof_handler_source, source_mesh_file);
-        setup_multilevel_finite_elements();
+        // setup_multilevel_finite_elements();
+        setup_source_finite_elements(true);
         pcout << "Source mesh loaded from file: " << source_mesh_file << std::endl;
     }
 
@@ -849,257 +835,214 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
 
     pcout << Color::yellow << Color::bold << "Starting multilevel SOT computation..." << Color::reset << std::endl;
 
-    // Check if either source or target multilevel is enabled
-    if (!multilevel_params.source_enabled && !multilevel_params.target_enabled) {
-        pcout << Color::red << Color::bold << "Error: Neither source nor target multilevel is enabled. Please enable at least one in parameters.prm" << Color::reset << std::endl;
+    // Check that at least one multilevel (source or target) is enabled.
+    if (!multilevel_params.source_enabled && !multilevel_params.target_enabled)
+    {
+        pcout << Color::red << Color::bold
+              << "Error: Neither source nor target multilevel is enabled. Please enable at least one in parameters.prm"
+              << Color::reset << std::endl;
         return;
     }
 
-    // If source multilevel is enabled, get mesh hierarchy files
+    // Retrieve source mesh hierarchy files if source multilevel is enabled.
     std::vector<std::string> source_mesh_files;
-    if (multilevel_params.source_enabled) {
+    unsigned int num_levels = 0;
+    if (multilevel_params.source_enabled)
+    {
         source_mesh_files = mesh_manager->get_mesh_hierarchy_files(multilevel_params.source_hierarchy_dir);
-        if (source_mesh_files.empty()) {
+        if (source_mesh_files.empty())
+        {
             pcout << "No source mesh hierarchy found. Please run prepare_source_multilevel first." << std::endl;
             return;
         }
-    } 
-    
-    // Store original solver parameters
+        num_levels = source_mesh_files.size();
+    }
+
+    // Backup original solver parameters.
     const unsigned int original_max_iterations = solver_params.max_iterations;
     const double original_tolerance = solver_params.tolerance;
     const double original_regularization = solver_params.regularization_param;
 
-    // Create output directory structure
+    // Create output directory structure.
     std::string eps_dir = "output/epsilon_" + std::to_string(original_regularization);
     std::string multilevel_dir = "multilevel";
     fs::create_directories(eps_dir + "/" + multilevel_dir);
 
-    // Setup epsilon scaling if enabled
+    // Setup epsilon scaling if enabled (and target multilevel is not enabled).
     std::vector<std::vector<double>> epsilon_distribution;
-    if (solver_params.use_epsilon_scaling && epsilon_scaling_handler && !multilevel_params.target_enabled) {
+    if (solver_params.use_epsilon_scaling && epsilon_scaling_handler && !multilevel_params.target_enabled)
+    {
         pcout << "Computing epsilon distribution for multilevel optimization..." << std::endl;
-
-        unsigned int num_levels = 0;
-        // Get number of source levels
-        num_levels = source_mesh_files.size();
-        epsilon_distribution = epsilon_scaling_handler->compute_epsilon_distribution(
-            num_levels);
+        epsilon_distribution = epsilon_scaling_handler->compute_epsilon_distribution(num_levels);
         epsilon_scaling_handler->print_epsilon_distribution();
     }
 
-    // Vector to store final potentials
+    // Lambda to encapsulate the epsilon scaling and solver call.
+    auto process_epsilon_scaling = [this, &original_regularization, &epsilon_distribution](Vector<double> &potentials,
+                                                                                         const unsigned int level,
+                                                                                         const std::string &level_dir)
+
+    {
+        if (solver_params.use_epsilon_scaling && epsilon_scaling_handler && !epsilon_distribution.empty())
+        {
+            const auto &level_epsilons = epsilon_scaling_handler->get_epsilon_values_for_level(level);
+            if (!level_epsilons.empty())
+            {
+                pcout << "Using " << level_epsilons.size() << " epsilon values for source level " << level << std::endl;
+                for (size_t eps_idx = 0; eps_idx < level_epsilons.size(); ++eps_idx)
+                {
+                    double current_epsilon = level_epsilons[eps_idx];
+                    pcout << "  Epsilon scaling step " << eps_idx + 1 << "/" << level_epsilons.size()
+                          << " (λ = " << current_epsilon << ")" << std::endl;
+                    solver_params.regularization_param = current_epsilon;
+
+                    try
+                    {
+                        sot_solver->solve(potentials, solver_params);
+                        if (eps_idx < level_epsilons.size() - 1)
+                        {
+                            std::string eps_suffix = "_eps" + std::to_string(eps_idx + 1);
+                            save_results(potentials, level_dir + "/potentials" + eps_suffix);
+                        }
+                    }
+                    catch (const SolverControl::NoConvergence &exc)
+                    {
+                        if (exc.last_step >= solver_params.max_iterations)
+                        {
+                            pcout << Color::red << Color::bold << "  Warning: Optimization failed at step " << eps_idx + 1
+                                  << " (epsilon=" << current_epsilon << "): Max iterations reached" << Color::reset << std::endl;
+                        }
+                        pcout << Color::red << Color::bold << "  Warning: Optimization did not converge for epsilon "
+                              << current_epsilon << " at source level " << level << Color::reset << std::endl;
+                        // Continue with the next epsilon value.
+                    }
+                }
+                return;
+            }
+        }
+        // If no epsilon scaling is applied or no epsilon values exist for this level.
+        solver_params.regularization_param = original_regularization;
+        sot_solver->solve(potentials, solver_params);
+    };
+
+    // Vector to hold the final potentials.
     Vector<double> final_potentials;
 
-    // Process source mesh levels
-    if (multilevel_params.source_enabled) {
+    // Process source mesh levels if source multilevel is enabled.
+    if (multilevel_params.source_enabled)
+    {
+        // Always load the source mesh initially.
         mesh_manager->load_source_mesh(source_mesh);
         setup_source_finite_elements();
 
         pcout << "\n" << Color::yellow << Color::bold << "Processing source mesh hierarchy..." << Color::reset << std::endl;
 
-        // Vector to store potentials between source mesh levels
+        // This vector will hold potentials from the previous level.
         Vector<double> previous_source_potentials;
 
-        for (size_t source_level = 0; source_level < source_mesh_files.size(); ++source_level) {
-            pcout << "\n" << Color::cyan << Color::bold << "============================================" << Color::reset << std::endl;
-            pcout << Color::cyan << Color::bold << "Processing source mesh level " << source_level
+        for (size_t source_level = 0; source_level < source_mesh_files.size(); ++source_level)
+        {
+            const unsigned int level_name = num_levels - source_level -1;
+            pcout << "\n" << Color::cyan << Color::bold
+                  << "============================================" << Color::reset << std::endl;
+            pcout << Color::cyan << Color::bold << "Processing source mesh level " << level_name
                   << " (mesh: " << source_mesh_files[source_level] << ")" << Color::reset << std::endl;
-            pcout << Color::cyan << Color::bold << "============================================" << Color::reset << std::endl;
+            pcout << Color::cyan << Color::bold
+                  << "============================================" << Color::reset << std::endl;
 
-            // Create directory for this source level
-            std::string source_level_dir = eps_dir + "/" + multilevel_dir + "/source_level_" + std::to_string(source_level);
+            // Create directory for this source level.
+            std::string source_level_dir = eps_dir + "/" + multilevel_dir + "/source_level_" + std::to_string(level_name);
             fs::create_directories(source_level_dir);
 
-            Vector<double> source_level_potentials;
-            if (source_level == 0) {
-                // For the first source level, run target multilevel if enabled
-                if (multilevel_params.target_enabled) {
-                    run_target_multilevel_for_source_level(source_mesh_files[source_level], source_level_potentials);
-                } else {
-                    // If target multilevel is not enabled, just run regular SOT
-                    mesh_manager->load_mesh_at_level(source_mesh, dof_handler_source, source_mesh_files[source_level]);
-                    setup_multilevel_finite_elements();
-                    setup_target_points();
+            Vector<double> level_potentials;
+            Timer level_timer;
+            level_timer.start();
 
-                    source_level_potentials.reinit(target_points.size());
-                    sot_solver->setup_source(dof_handler_source, *mapping, *fe_system,
-                                          source_density, solver_params.quadrature_order);
-                    sot_solver->setup_target(target_points, target_density);
-
-                    // Apply epsilon scaling for this source level if enabled
-                    if (solver_params.use_epsilon_scaling && epsilon_scaling_handler && !epsilon_distribution.empty()) {
-                        const auto& level_epsilons = epsilon_scaling_handler->get_epsilon_values_for_level(source_level);
-
-                        if (!level_epsilons.empty()) {
-                            pcout << "Using " << level_epsilons.size() << " epsilon values for source level "
-                                  << source_level << std::endl;
-
-                            // Process each epsilon value for this level
-                            for (size_t eps_idx = 0; eps_idx < level_epsilons.size(); ++eps_idx) {
-                                double current_epsilon = level_epsilons[eps_idx];
-                                pcout << "  Epsilon scaling step " << eps_idx + 1 << "/" << level_epsilons.size()
-                                      << " (λ = " << current_epsilon << ")" << std::endl;
-
-                                // Update regularization parameter
-                                solver_params.regularization_param = current_epsilon;
-
-                                try {
-                                    // Run optimization with current epsilon
-                                    sot_solver->solve(source_level_potentials, solver_params);
-
-                                    // Save intermediate results if this is not the last epsilon for this level
-                                    if (eps_idx < level_epsilons.size() - 1) {
-                                        std::string eps_suffix = "_eps" + std::to_string(eps_idx + 1);
-                                        save_results(source_level_potentials, source_level_dir + "/potentials" + eps_suffix);
-                                    }
-                                } catch (const SolverControl::NoConvergence& exc) {
-                                    if (exc.last_step >= solver_params.max_iterations) {
-                                        pcout << Color::red << Color::bold << "  Warning: Optimization failed at step " << eps_idx + 1
-                                              << " (epsilon=" << current_epsilon << "): Max iterations reached"
-                                              << Color::reset << std::endl;
-                                    }
-                                    pcout << Color::red << Color::bold << "  Warning: Optimization did not converge for epsilon "
-                                          << current_epsilon << " at source level " << source_level << Color::reset << std::endl;
-                                    // Continue with next epsilon value
-                                }
-                            }
-                        } else {
-                            // If no epsilon values for this level, use the default epsilon
-                            solver_params.regularization_param = original_regularization;
-                            sot_solver->solve(source_level_potentials, solver_params);
-                        }
-                    } else {
-                        // No epsilon scaling, just run the optimization once
-                        sot_solver->solve(source_level_potentials, solver_params);
-                    }
+            if (source_level == 0)
+            {
+                // For level 0: either run target multilevel if enabled or load and prepare the mesh.
+                if (multilevel_params.target_enabled)
+                {
+                    run_target_multilevel_for_source_level(source_mesh_files[source_level], level_potentials);
                 }
-                previous_source_potentials = source_level_potentials;
-            } else {
-                // Load the mesh for this level
+                else
+                {
+                    mesh_manager->load_mesh_at_level(source_mesh, dof_handler_source, source_mesh_files[source_level]);
+                    setup_source_finite_elements(true);
+                    setup_target_points();
+                    level_potentials.reinit(target_points.size());
+                }
+            }
+            else
+            {
+                // For subsequent levels, load the new mesh and adjust solver tolerance.
                 mesh_manager->load_mesh_at_level(source_mesh, dof_handler_source, source_mesh_files[source_level]);
-                setup_multilevel_finite_elements();
+                setup_source_finite_elements(true);
 
-                // Adjust solver parameters based on level
                 double num_levels = static_cast<double>(source_mesh_files.size());
                 double tolerance_exponent = static_cast<double>(source_level) - num_levels + 1.0;
                 solver_params.tolerance = original_tolerance * std::pow(2.0, tolerance_exponent);
 
-                pcout << "\nSource level " << source_level << " solver parameters:" << std::endl;
-                pcout << "  Level: " << source_level << " of " << num_levels << std::endl;
+                pcout << "\nSource level " << level_name << " solver parameters:" << std::endl;
+                pcout << "  Level: " << level_name << " of " << num_levels << std::endl;
                 pcout << "  Tolerance: " << solver_params.tolerance << std::endl;
                 pcout << "  Max iterations: " << solver_params.max_iterations << std::endl;
 
-                // Initialize potentials from previous level
-                Vector<double> level_potentials(target_points.size());
+                // Initialize the potentials with the solution from the previous level.
+                level_potentials.reinit(previous_source_potentials.size());
                 level_potentials = previous_source_potentials;
-
-                try {
-                    Timer level_timer;
-                    level_timer.start();
-
-                    // Set up source measure for SotSolver
-                    sot_solver->setup_source(dof_handler_source,
-                                           *mapping,
-                                           *fe_system,
-                                           source_density,
-                                           solver_params.quadrature_order);
-
-                    // Set up target measure for SotSolver
-                    sot_solver->setup_target(target_points, target_density);
-
-                    // Apply epsilon scaling for this source level if enabled
-                    if (solver_params.use_epsilon_scaling && epsilon_scaling_handler && !epsilon_distribution.empty()) {
-                        const auto& level_epsilons = epsilon_scaling_handler->get_epsilon_values_for_level(source_level);
-
-                        if (!level_epsilons.empty()) {
-                            pcout << "Using " << level_epsilons.size() << " epsilon values for source level "
-                                  << source_level << std::endl;
-
-                            // Process each epsilon value for this level
-                            for (size_t eps_idx = 0; eps_idx < level_epsilons.size(); ++eps_idx) {
-                                double current_epsilon = level_epsilons[eps_idx];
-                                pcout << "  Epsilon scaling step " << eps_idx + 1 << "/" << level_epsilons.size()
-                                      << " (λ = " << current_epsilon << ")" << std::endl;
-
-                                // Update regularization parameter
-                                solver_params.regularization_param = current_epsilon;
-
-                                try {
-                                    // Run optimization with current epsilon
-                                    sot_solver->solve(level_potentials, solver_params);
-
-                                    // Save intermediate results if this is not the last epsilon for this level
-                                    if (eps_idx < level_epsilons.size() - 1) {
-                                        std::string eps_suffix = "_eps" + std::to_string(eps_idx + 1);
-                                        save_results(level_potentials, source_level_dir + "/potentials" + eps_suffix);
-                                    }
-                                } catch (const SolverControl::NoConvergence& exc) {
-                                    if (exc.last_step >= solver_params.max_iterations) {
-                                        pcout << Color::red << Color::bold << "  Warning: Optimization failed at step " << eps_idx + 1
-                                              << " (epsilon=" << current_epsilon << "): Max iterations reached"
-                                              << Color::reset << std::endl;
-                                    }
-                                    pcout << Color::red << Color::bold << "  Warning: Optimization did not converge for epsilon "
-                                          << current_epsilon << " at source level " << source_level << Color::reset << std::endl;
-                                    // Continue with next epsilon value
-                                }
-                            }
-                        } else {
-                            // If no epsilon values for this level, use the default epsilon
-                            solver_params.regularization_param = original_regularization;
-                            sot_solver->solve(level_potentials, solver_params);
-                        }
-                    } else {
-                        // No epsilon scaling, just run the optimization once
-                        sot_solver->solve(level_potentials, solver_params);
-                    }
-
-                    level_timer.stop();
-
-                    // Save results for this level
-                    save_results(level_potentials, source_level_dir + "/potentials");
-
-                    // Store current solution for next level and as final result
-                    previous_source_potentials = level_potentials;
-                    if (source_level == source_mesh_files.size() - 1) {
-                        final_potentials = level_potentials;
-                    }
-
-                    pcout << "\n" << Color::blue << Color::bold << "Source level " << source_level << " summary:" << Color::reset << std::endl;
-                    pcout << Color::blue << "  Status: Completed successfully" << Color::reset << std::endl;
-                    pcout << Color::blue << "  Time taken: " << level_timer.wall_time() << " seconds" << Color::reset << std::endl;
-                    pcout << Color::blue << "  Final number of iterations: " << sot_solver->get_last_iteration_count() << Color::reset << std::endl;
-                    pcout << Color::blue << "  Final function value: " << sot_solver->get_last_functional_value() << Color::reset << std::endl;
-                    pcout << Color::blue << "  Results saved in: " << source_level_dir << Color::reset << std::endl;
-
-                } catch (const std::exception& e) {
-                    pcout << Color::red << Color::bold << "Error at source level " << source_level << ": " << e.what() << Color::reset << std::endl;
-                    if (source_level == 0) return;  // If coarsest level fails, abort
-                    // Otherwise continue to next level with previous potentials
-                }
             }
+
+            // Setup solver (source and target measures).
+            sot_solver->setup_source(dof_handler_source, *mapping, *fe_system, source_density, solver_params.quadrature_order);
+            sot_solver->setup_target(target_points, target_density);
+
+            // Process epsilon scaling (or just a single solve) for this level.
+            process_epsilon_scaling(level_potentials, static_cast<unsigned int>(source_level), source_level_dir);
+
+            level_timer.stop();
+            // Save the result for the level.
+            save_results(level_potentials, source_level_dir + "/potentials");
+
+            // Log summary for this level.
+            pcout << "\n" << Color::blue << Color::bold << "Source level " << level_name << " summary:" << Color::reset << std::endl;
+            pcout << Color::blue << "  Status: Completed successfully" << Color::reset << std::endl;
+            pcout << Color::blue << "  Time taken: " << level_timer.wall_time() << " seconds" << Color::reset << std::endl;
+            pcout << Color::blue << "  Final number of iterations: " << sot_solver->get_last_iteration_count() << Color::reset << std::endl;
+            pcout << Color::blue << "  Final function value: " << sot_solver->get_last_functional_value() << Color::reset << std::endl;
+            pcout << Color::blue << "  Results saved in: " << source_level_dir << Color::reset << std::endl;
+
+            // Store the solution for use in the next level.
+            previous_source_potentials = level_potentials;
+            if (source_level == source_mesh_files.size() - 1)
+                final_potentials = level_potentials;
         }
-    } else if (multilevel_params.target_enabled) {
-        // If only target multilevel is enabled, run it directly
+    }
+    else if (multilevel_params.target_enabled)
+    {
+        // If only target multilevel is enabled, run it directly.
         run_target_multilevel("", &final_potentials, true);
     }
 
-    // Save final results
+    // Save final results.
     save_results(final_potentials, multilevel_dir + "/potentials");
 
-    // Restore original parameters
+    // Restore original solver parameters.
     solver_params.max_iterations = original_max_iterations;
     solver_params.tolerance = original_tolerance;
     solver_params.regularization_param = original_regularization;
 
     global_timer.stop();
-    pcout << "\n" << Color::green << Color::bold << "============================================" << Color::reset << std::endl;
+    pcout << "\n" << Color::green << Color::bold
+          << "============================================" << Color::reset << std::endl;
     pcout << Color::green << Color::bold << "Multilevel computation completed!" << Color::reset << std::endl;
     pcout << Color::green << Color::bold << "Total computation time: " << global_timer.wall_time() << " seconds" << Color::reset << std::endl;
     pcout << Color::green << "Final results saved in: " << eps_dir << "/" << multilevel_dir << Color::reset << std::endl;
-    pcout << Color::green << Color::bold << "============================================" << Color::reset << std::endl;
+    pcout << Color::green << Color::bold
+          << "============================================" << Color::reset << std::endl;
 }
+
+
 
 template <int dim>
 template <int d>
