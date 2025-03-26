@@ -93,6 +93,9 @@ private:
     void compute_power_diagram();
     void compute_transport_map();
 
+    // Density normalization helper
+    void normalize_density(LinearAlgebra::distributed::Vector<double>& density);
+
     // Multilevel methods
     void prepare_source_multilevel();
     void prepare_target_multilevel();
@@ -150,5 +153,5 @@ private:
     // Solver member
     std::unique_ptr<SotSolver<dim>> sot_solver;
 };
-
 #endif
+

@@ -22,6 +22,7 @@
 #include <deal.II/fe/mapping_q1.h>
 #include <deal.II/lac/vector.h>
 #include <deal.II/lac/la_parallel_vector.h>
+#include "SemiDiscreteOT/utils/ColorDefinitions.h"
 
 /**
  * @namespace Utils
@@ -818,6 +819,125 @@ std::unique_ptr<dealii::Quadrature<dim>> create_quadrature_for_mesh(
     } else {
         throw std::runtime_error("Could not determine mesh cell type for quadrature creation");
     }
+}
+
+/**
+ * @brief Read a scalar field from a VTK file
+ * 
+ * @param filename Path to the VTK file
+ * @param vtk_dof_handler DoF handler for the VTK mesh
+ * @param vtk_field Vector for the VTK field data
+ * @param vtk_tria Triangulation for the VTK mesh
+ * @param mpi_communicator MPI communicator
+ * @param pcout Parallel output stream
+ * @param broadcast_field Whether to broadcast the field to all processes (true for source, false for target)
+ * @return bool Success status
+ */
+template <int dim>
+bool read_vtk_field(
+    const std::string& filename,
+    dealii::DoFHandler<dim>& vtk_dof_handler,
+    dealii::Vector<double>& vtk_field,
+    dealii::Triangulation<dim>& vtk_tria,
+    const MPI_Comm& mpi_communicator,
+    dealii::ConditionalOStream& pcout,
+    bool broadcast_field = false)
+{
+    bool success = false;
+    // Clear any existing triangulation
+    vtk_tria.clear();
+
+    // Read mesh from VTK file
+    dealii::GridIn<dim> grid_in;
+    grid_in.attach_triangulation(vtk_tria);
+
+    std::ifstream vtk_file(filename);
+    if (!vtk_file) {
+        pcout << Color::red << Color::bold
+              << "Error: Could not open VTK file: " << filename
+              << Color::reset << std::endl;
+        return false;
+    }
+
+    // Read VTK file
+    grid_in.read_vtk(vtk_file);
+    pcout << "VTK mesh: " << vtk_tria.n_active_cells() << " cells" << std::endl;
+
+    // Create and store FE (must outlive DoFHandler usage)
+    auto fe = create_fe_for_mesh(vtk_tria);
+    
+    // Clear and reinitialize DoFHandler with triangulation
+    vtk_dof_handler.clear();
+    vtk_dof_handler.reinit(vtk_tria);
+    vtk_dof_handler.distribute_dofs(*fe);
+
+    // Initialize field vector
+    vtk_field.reinit(vtk_dof_handler.n_dofs());
+
+    // Only rank 0 reads the file
+    if (dealii::Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+        try {
+
+            // Read scalar field data
+            std::ifstream vtk_reader(filename);
+            std::string line;
+            bool found_point_data = false;
+            bool found_scalars = false;
+            std::string field_name;
+
+            while (std::getline(vtk_reader, line)) {
+                if (line.find("POINT_DATA") != std::string::npos) {
+                    found_point_data = true;
+                }
+
+                if (found_point_data && line.find("SCALARS") != std::string::npos) {
+                    found_scalars = true;
+                    std::istringstream iss(line);
+                    std::string dummy;
+                    iss >> dummy >> field_name;
+                    pcout << "Found scalar field: " << field_name << std::endl;
+
+                    // Skip LOOKUP_TABLE line
+                    std::getline(vtk_reader, line);
+
+                    // Read scalar values
+                    for (unsigned int i = 0; i < vtk_dof_handler.n_dofs(); ++i) {
+                        if (!(vtk_reader >> vtk_field[i])) {
+                            pcout << Color::red << Color::bold
+                                  << "Error reading scalar field data from VTK"
+                                  << Color::reset << std::endl;
+                            found_scalars = false;
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
+
+            success = found_scalars;
+            if (!success) {
+                pcout << Color::red << Color::bold
+                      << "Error: Could not find scalar field data in VTK file"
+                      << Color::reset << std::endl;
+            }
+        } catch (const std::exception& e) {
+            pcout << Color::red << Color::bold
+                  << "Exception during VTK file reading: " << e.what()
+                  << Color::reset << std::endl;
+            success = false;
+        }
+    }
+
+
+    if (broadcast_field) {
+        success = dealii::Utilities::MPI::broadcast(mpi_communicator, success, 0);
+        if (success) {
+            // For source case: Broadcast field data to all processes
+            vtk_field = dealii::Utilities::MPI::broadcast(mpi_communicator, vtk_field, 0);
+        }
+    }
+
+    return success;
 }
 
 } 

@@ -157,6 +157,35 @@ void SemiDiscreteOT<dim>::load_hierarchy_data(const std::string& hierarchy_dir, 
 }
 
 template <int dim>
+void SemiDiscreteOT<dim>::normalize_density(LinearAlgebra::distributed::Vector<double>& density)
+{
+    auto quadrature = Utils::create_quadrature_for_mesh<dim>(source_mesh, solver_params.quadrature_order);
+    // Calculate L1 norm
+    double local_l1_norm = 0.0;
+    FEValues<dim> fe_values(*mapping, *fe_system, *quadrature,
+                           update_values | update_JxW_values);
+    std::vector<double> density_values(quadrature->size());
+
+    for (const auto &cell : dof_handler_source.active_cell_iterators()) {
+        if (!cell->is_locally_owned())
+            continue;
+
+        fe_values.reinit(cell);
+        fe_values.get_function_values(density, density_values);
+
+        for (unsigned int q = 0; q < quadrature->size(); ++q) {
+            local_l1_norm += std::abs(density_values[q]) * fe_values.JxW(q);
+        }
+    }
+
+    const double global_l1_norm = Utilities::MPI::sum(local_l1_norm, mpi_communicator);
+    pcout << "Density L1 norm before normalization: " << global_l1_norm << std::endl;
+    
+    density /= global_l1_norm;
+    density.update_ghost_values();
+}
+
+template <int dim>
 void SemiDiscreteOT<dim>::setup_source_finite_elements()
 {
     // Create appropriate finite element and mapping based on cell types
@@ -177,102 +206,34 @@ void SemiDiscreteOT<dim>::setup_source_finite_elements()
         pcout << "Using custom source density from file: " << source_params.density_file_path << std::endl;
         bool density_loaded = false;
 
-        try {
-            if (source_params.density_file_format == "vtk") {
-                // Read VTK file - all processes need to do this
-                GridIn<dim> grid_in;
-                grid_in.attach_triangulation(vtk_tria_source);
+        if (source_params.density_file_format == "vtk") {
+            // Read VTK file and broadcast field to all processes for source case
+            density_loaded = Utils::read_vtk_field<dim>(source_params.density_file_path,
+                                                      vtk_dof_handler_source,
+                                                      vtk_field_source,
+                                                      vtk_tria_source,
+                                                      mpi_communicator,
+                                                      pcout,
+                                                      true); 
 
-                std::ifstream vtk_file(source_params.density_file_path);
-                if (!vtk_file) {
-                    pcout << Color::red << Color::bold
-                          << "Error: Could not open VTK file: " << source_params.density_file_path
-                          << Color::reset << std::endl;
-                } else {
-                    grid_in.read_vtk(vtk_file);
-                    pcout << "VTK mesh: " << vtk_tria_source.n_active_cells() << " cells" << std::endl;
-
-                    // Setup finite element space for VTK mesh
-                    auto vtk_fe = Utils::create_fe_for_mesh<dim>(vtk_tria_source);
-
-                    vtk_dof_handler_source.reinit(vtk_tria_source);
-                    vtk_dof_handler_source.distribute_dofs(*vtk_fe);
-
-                    vtk_field_source.reinit(vtk_dof_handler_source.n_dofs());
-                    bool found_scalars = false;
-                    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
-                        // Read scalar field data from VTK
-                        std::ifstream vtk_reader(source_params.density_file_path);
-                        std::string line;
-                        bool found_point_data = false;
-
-                        while (std::getline(vtk_reader, line)) {
-                            if (line.find("POINT_DATA") != std::string::npos) {
-                                found_point_data = true;
-                            }
-
-                            if (found_point_data && line.find("SCALARS") != std::string::npos) {
-                                found_scalars = true;
-                                // Skip LOOKUP_TABLE line
-                                std::getline(vtk_reader, line);
-
-                                // Read scalar values
-                                for (unsigned int i = 0; i < vtk_dof_handler_source.n_dofs(); ++i) {
-                                    if (!(vtk_reader >> vtk_field_source[i])) {
-                                        found_scalars = false;
-                                        break;
-                                    }
-                                }
-                                break;
-                            }
-                        }
-                    }
-                    found_scalars = Utilities::MPI::broadcast(mpi_communicator, found_scalars, 0);
-
-                    if (found_scalars) {
-                        // broadcast the vtk_field
-                        vtk_field_source = Utilities::MPI::broadcast(mpi_communicator, vtk_field_source, 0);
-                        // Each process interpolates only on its locally owned cells
-                        source_density = 0;  // Initialize to zero
-                        Functions::FEFieldFunction<dim> field_function(vtk_dof_handler_source, vtk_field_source);
-                        VectorTools::interpolate(dof_handler_source, field_function, source_density);
-
-                        density_loaded = true;
-
-                        std::cout << "Interpolated density on process " << this_mpi_process
-                              << " for " << dof_handler_source.locally_owned_dofs().n_elements()
-                              << " DoFs" << std::endl;
-                    }
-                }
-            } else if (source_params.density_file_format == "h5") {
-                pcout << "HDF5 file reading not yet implemented" << std::endl;
-                density_loaded = false;
+            if (density_loaded) {
+                pcout << Color::green << "Interpolating source density from VTK to source mesh" << Color::reset << std::endl;
+                Functions::FEFieldFunction<dim> field_function(vtk_dof_handler_source, vtk_field_source);
+                VectorTools::interpolate(dof_handler_source, field_function, source_density);
             }
-        } catch (const std::exception& e) {
-            pcout << Color::red << Color::bold
-                  << "Exception during density loading: " << e.what()
-                  << Color::reset << std::endl;
-            density_loaded = false;
         }
 
-        // Broadcast success flag
-        density_loaded = Utilities::MPI::broadcast(mpi_communicator, density_loaded, 0);
-
         if (!density_loaded) {
-            pcout << Color::yellow << "Warning: Failed to load custom density, using uniform density instead"
-                  << Color::reset << std::endl;
+            pcout << Color::red << "Failed to load custom density, using uniform density" << Color::reset << std::endl;
             source_density = 1.0;
         }
     } else {
-        // Use uniform density if no custom density is specified
+        pcout << Color::green << "Using uniform source density" << Color::reset << std::endl;
         source_density = 1.0;
-        pcout << "Using uniform source density" << std::endl;
     }
 
-    source_density.update_ghost_values();  // Ensure ghost values are updated
+    source_density.update_ghost_values();
 
-    // Create appropriate quadrature
-    auto quadrature = Utils::create_quadrature_for_mesh<dim>(source_mesh, solver_params.quadrature_order);
 
     // Debug info about parallel distribution
     unsigned int n_locally_owned = 0;
@@ -288,49 +249,13 @@ void SemiDiscreteOT<dim>::setup_source_finite_elements()
           << ": " << n_locally_owned
           << ", Sum of owned: " << n_total_owned << std::endl;
 
-    // Verify normalization
-    double local_l1_norm = 0.0;
-    unsigned int local_cell_count = 0;
-    FEValues<dim> fe_values(*mapping, *fe_system, *quadrature,
-                           update_values | update_JxW_values);
-    std::vector<double> density_values(quadrature->size());
+    normalize_density(source_density);
 
-    for (const auto &cell : dof_handler_source.active_cell_iterators())
-    {
-        if (!cell->is_locally_owned())
-            continue;
-
-        local_cell_count++;
-        fe_values.reinit(cell);
-        fe_values.get_function_values(source_density, density_values);
-
-        for (unsigned int q = 0; q < quadrature->size(); ++q)
-        {
-            local_l1_norm += std::abs(density_values[q]) * fe_values.JxW(q);
-        }
-    }
-
-    // Debug info about local contributions
-    std::cout << "Process " << this_mpi_process
-          << " processed " << local_cell_count << " cells"
-          << " with local L1 norm: " << local_l1_norm << std::endl;
-
-    const double global_l1_norm =
-        Utilities::MPI::sum(local_l1_norm, mpi_communicator);
-    pcout << "Source density L1 norm: " << global_l1_norm << std::endl;
-    source_density /= global_l1_norm; // Normalize to mass 1
 }
 
 template <int dim>
 void SemiDiscreteOT<dim>::setup_target_finite_elements()
 {
-    // Create appropriate finite element and mapping based on cell types
-    auto [fe, map] = Utils::create_fe_and_mapping_for_mesh<dim>(target_mesh);
-    fe_system_target = std::move(fe);
-    mapping_target = std::move(map);
-
-    dof_handler_target.distribute_dofs(*fe_system_target);
-
     // Load or compute target points (shared across all processes)
     const std::string directory = "output/data_points";
     bool points_loaded = false;
@@ -338,6 +263,60 @@ void SemiDiscreteOT<dim>::setup_target_finite_elements()
 
     // Only root process reads/computes points
     if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+        auto [fe, map] = Utils::create_fe_and_mapping_for_mesh<dim>(target_mesh);
+        fe_system_target = std::move(fe);
+        mapping_target = std::move(map);
+        dof_handler_target.distribute_dofs(*fe_system_target);
+
+        if (target_params.use_custom_density) {
+            pcout << "Using custom target density from file: " << target_params.density_file_path << std::endl;
+            bool density_loaded = false;
+
+            if (target_params.density_file_format == "vtk") {
+                DoFHandler<dim> vtk_dof_handler_target;
+                Vector<double> vtk_field_target;
+                Triangulation<dim> vtk_tria_target;
+                // Read VTK file only on rank 0, don't broadcast field
+                density_loaded = Utils::read_vtk_field<dim>(target_params.density_file_path,
+                                                          vtk_dof_handler_target,
+                                                          vtk_field_target,
+                                                          vtk_tria_target,
+                                                          mpi_communicator,
+                                                          pcout,
+                                                          false); // broadcast_field = false for target case
+
+                if (density_loaded) {
+                    pcout << "Target density loaded from VTK file" << std::endl;
+                    target_density.reinit(dof_handler_target.n_dofs());
+                    pcout << "Target density size: " << target_density.size() << std::endl;
+                    pcout << Color::green << "Interpolating target density from VTK to target mesh" << Color::reset << std::endl;
+                    Functions::FEFieldFunction<dim> field_function(vtk_dof_handler_target, vtk_field_target);
+                    VectorTools::interpolate(dof_handler_target, field_function, target_density);
+                    pcout << "Successfully interpolated VTK field to target mesh" << std::endl;
+                    pcout << "L1 norm of interpolated field: " << target_density.l1_norm() << std::endl;
+                    target_density /= target_density.l1_norm();
+                }
+            } else {
+                std::vector<double> density_values;
+                // Try reading as plain text file
+                density_loaded = Utils::read_vector(density_values, target_params.density_file_path);
+                // normalize target density
+                target_density = Vector<double>(density_values.size());
+                for (unsigned int i = 0; i < density_values.size(); ++i) {
+                    target_density[i] = density_values[i];
+                }
+                target_density /= target_density.l1_norm();
+            }
+            if (!density_loaded) {
+                pcout << Color::red << "Failed to load custom density, using uniform density" << Color::reset << std::endl;
+                target_density = 1.0/target_points.size();
+            }
+        } else {
+            pcout << Color::green << "Using uniform target density" << Color::reset << std::endl;
+            target_density = 1.0/target_points.size();
+        }
+
+        // Load or compute target points
         if (Utils::read_vector(target_points, directory + "/target_points", io_coding)) {
             points_loaded = true;
             pcout << "Target points loaded from file" << std::endl;
@@ -366,144 +345,14 @@ void SemiDiscreteOT<dim>::setup_target_finite_elements()
     }
     n_points = Utilities::MPI::broadcast(mpi_communicator, n_points, 0);
 
-    // Resize target_points on non-root processes
+    // Resize target points and density on non-root processes
     if (Utilities::MPI::this_mpi_process(mpi_communicator) != 0) {
         target_points.resize(n_points);
+        target_density.reinit(n_points);
     }
 
-    // Broadcast the actual points
-    for (unsigned int i = 0; i < n_points; ++i) {
-        target_points[i] = Utilities::MPI::broadcast(mpi_communicator, target_points[i], 0);
-    }
-
-    // Initialize target density
-    target_density.reinit(target_points.size());
-
-    // Handle custom target density if enabled
-    if (target_params.use_custom_density) {
-        pcout << "Using custom target density from file: " << target_params.density_file_path << std::endl;
-        bool density_loaded = false;
-        if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
-            if (target_params.density_file_format == "vtk") {
-                // Read density from VTK file
-                try {
-                    Triangulation<dim> vtk_tria_target;
-                    GridIn<dim> grid_in;
-                    grid_in.attach_triangulation(vtk_tria_target);
-
-                    std::ifstream vtk_file(target_params.density_file_path);
-                    if (!vtk_file) {
-                        pcout << Color::red << Color::bold
-                              << "Error: Could not open VTK file: " << target_params.density_file_path
-                              << Color::reset << std::endl;
-                        density_loaded = false;
-                    } else {
-                        // Read VTK file
-                        grid_in.read_vtk(vtk_file);
-                        pcout << "VTK mesh: " << vtk_tria_target.n_active_cells() << " cells" << std::endl;
-
-                        // Setup finite element space for VTK mesh
-                        auto vtk_fe = Utils::create_fe_for_mesh<dim>(vtk_tria_target);
-
-                        DoFHandler<dim> vtk_dof_handler_target(vtk_tria_target);
-                        vtk_dof_handler_target.distribute_dofs(*vtk_fe);
-
-                        // Create vector for the scalar field
-                        Vector<double> vtk_field_target(vtk_dof_handler_target.n_dofs());
-
-                        // Read scalar field data from VTK
-                        std::ifstream vtk_reader(target_params.density_file_path);
-                        std::string line;
-
-                        // Skip header until we find POINT_DATA
-                        bool found_point_data = false;
-                        bool found_scalars = false;
-                        std::string field_name;
-
-                        while (std::getline(vtk_reader, line)) {
-                            if (line.find("POINT_DATA") != std::string::npos) {
-                                found_point_data = true;
-                            }
-
-                            if (found_point_data && line.find("SCALARS") != std::string::npos) {
-                                found_scalars = true;
-                                std::istringstream iss(line);
-                                std::string dummy;
-                                iss >> dummy >> field_name;
-                                pcout << "Found scalar field: " << field_name << std::endl;
-
-                                // Skip LOOKUP_TABLE line
-                                std::getline(vtk_reader, line);
-
-                                // Read scalar values
-                                for (unsigned int i = 0; i < vtk_dof_handler_target.n_dofs(); ++i) {
-                                    if (!(vtk_reader >> vtk_field_target[i])) {
-                                        pcout << Color::red << Color::bold
-                                              << "Error reading scalar field data from VTK"
-                                              << Color::reset << std::endl;
-                                        found_scalars = false;
-                                        break;
-                                    }
-                                }
-                                break;
-                            }
-                        }
-
-                        if (!found_scalars) {
-                            pcout << Color::red << Color::bold
-                                  << "Error: Could not find scalar field data in VTK file"
-                                  << Color::reset << std::endl;
-                            density_loaded = false;
-                        } else {
-                            // Now interpolate the VTK field to the target points
-
-                            Functions::FEFieldFunction<dim> field_function_target(vtk_dof_handler_target, vtk_field_target);
-                            VectorTools::interpolate(dof_handler_target, field_function_target, target_density);
-                            pcout << "L1 norm of target density: " << target_density.l1_norm() << std::endl;
-                            target_density /= target_density.l1_norm();
-                            pcout << "Successfully interpolated density from VTK to target points" << std::endl;
-                            density_loaded = true;
-                        }
-                    }
-                } catch (const std::exception& e) {
-                    pcout << Color::red << Color::bold
-                          << "Exception during VTK density loading: " << e.what()
-                          << Color::reset << std::endl;
-                    density_loaded = false;
-                }
-            } else if (target_params.density_file_format == "h5") {
-                // TODO: Implement HDF5 file reading
-                pcout << "HDF5 file reading not yet implemented" << std::endl;
-                density_loaded = false;
-            } else {
-                std::vector<double> density_values;
-                // Try reading as plain text file
-                density_loaded = Utils::read_vector(density_values, target_params.density_file_path);
-                // normalize target density
-                target_density = Vector<double>(density_values.size());
-                for (unsigned int i = 0; i < density_values.size(); ++i) {
-                    target_density[i] = density_values[i];
-                }
-                target_density /= target_density.l1_norm();
-            }
-        }
-
-        // Broadcast success flag
-        density_loaded = Utilities::MPI::broadcast(mpi_communicator, density_loaded, 0);
-
-        if (!density_loaded) {
-            pcout << Color::yellow << "Warning: Failed to load custom density, using uniform density instead"
-                  << Color::reset << std::endl;
-            target_density = 1.0 / target_points.size();
-        } else {
-            // Broadcast target density
-            target_density = Utilities::MPI::broadcast(mpi_communicator, target_density, 0);
-        }
-    } else {
-        // Use uniform density if no custom density is specified
-        target_density = 1.0 / target_points.size();
-        pcout << "Using uniform target density" << std::endl;
-    }
+    target_points = Utilities::MPI::broadcast(mpi_communicator, target_points, 0);
+    target_density = Utilities::MPI::broadcast(mpi_communicator, target_density, 0);
 
     pcout << "Setup complete with " << target_points.size() << " target points" << std::endl;
     if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
@@ -549,6 +398,7 @@ void SemiDiscreteOT<dim>::setup_multilevel_finite_elements()
         pcout << Color::green << "Interpolating source density from VTK to source mesh" << Color::reset << std::endl;
         // TODO: interpolate source density, we can't do this with vectortools::interpolate because the VTK mesh is not aligned with the source mesh (coarse mesh)
         Utils::interpolate_non_conforming_nearest(vtk_dof_handler_source, vtk_field_source, dof_handler_source, source_density);
+        std::cout << "Source density interpolated from VTK to source mesh" << std::endl;
     }
     else {
         pcout << Color::green << "Using uniform source density" << Color::reset << std::endl;
@@ -557,30 +407,7 @@ void SemiDiscreteOT<dim>::setup_multilevel_finite_elements()
 
     source_density.update_ghost_values();
 
-    // Normalize source density
-    double local_l1_norm = 0.0;
-    auto quadrature = Utils::create_quadrature_for_mesh<dim>(source_mesh, solver_params.quadrature_order);
-
-    FEValues<dim> fe_values(*mapping, *fe_system, *quadrature,
-                           update_values | update_JxW_values);
-    std::vector<double> local_density_values(quadrature->size());
-
-    for (const auto &cell : dof_handler_source.active_cell_iterators()) {
-        if (!cell->is_locally_owned())
-            continue;
-
-        fe_values.reinit(cell);
-        fe_values.get_function_values(source_density, local_density_values);
-
-        for (unsigned int q = 0; q < quadrature->size(); ++q) {
-            local_l1_norm += std::abs(local_density_values[q]) * fe_values.JxW(q);
-        }
-    }
-
-    const double global_l1_norm = Utilities::MPI::sum(local_l1_norm, mpi_communicator);
-    source_density /= global_l1_norm;
-    source_density.update_ghost_values();
-
+    normalize_density(source_density);
     pcout << "Source mesh finite elements initialized with "
           << dof_handler_source.n_dofs() << " DoFs" << std::endl;
 }
@@ -1038,7 +865,7 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
         }
     } else if (multilevel_params.target_enabled) {
         // If only target multilevel is enabled, just run target multilevel directly
-        run_target_multilevel("", nullptr, true);
+        run_target_multilevel();
         return;  // Exit after running target multilevel
     }
 
@@ -1051,16 +878,6 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
     std::string eps_dir = "output/epsilon_" + std::to_string(original_regularization);
     std::string multilevel_dir = "multilevel";
     fs::create_directories(eps_dir + "/" + multilevel_dir);
-
-    // Initialize finite element system
-    bool use_simplex = (source_params.use_tetrahedral_mesh || target_params.use_tetrahedral_mesh);
-    if (use_simplex) {
-        fe_system = std::make_unique<FE_SimplexP<dim>>(1);
-        mapping = std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
-    } else {
-        fe_system = std::make_unique<FE_Q<dim>>(1);
-        mapping = std::make_unique<MappingQ1<dim>>();
-    }
 
     // Setup epsilon scaling if enabled
     std::vector<std::vector<double>> epsilon_distribution;
