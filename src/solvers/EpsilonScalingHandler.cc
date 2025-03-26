@@ -43,8 +43,7 @@ std::vector<double> EpsilonScalingHandler::generate_epsilon_sequence() const
 
 std::vector<std::vector<double>> EpsilonScalingHandler::distribute_epsilon_values(
     const std::vector<double>& epsilon_sequence,
-    unsigned int num_levels,
-    bool use_target)
+    unsigned int num_levels)
 {
     std::vector<std::vector<double>> distribution(num_levels);
     
@@ -91,31 +90,12 @@ std::vector<std::vector<double>> EpsilonScalingHandler::distribute_epsilon_value
 }
 
 std::vector<std::vector<double>> EpsilonScalingHandler::compute_epsilon_distribution(
-    unsigned int num_levels,
-    bool target_enabled,
-    bool source_enabled)
+    unsigned int num_levels)
 {
     // Generate the sequence of epsilon values
     std::vector<double> epsilon_sequence = generate_epsilon_sequence();
-    
-    // Determine which hierarchy to use for epsilon scaling
-    bool use_target = target_enabled;
-    
-    // If both hierarchies are enabled, prioritize target
-    if (target_enabled && source_enabled) {
-        use_target = true;
-        pcout << "Both target and source multilevel are enabled. "
-              << "Epsilon scaling will be applied to target levels." << std::endl;
-    } else if (!target_enabled && !source_enabled) {
-        pcout << "Warning: Neither target nor source multilevel is enabled. "
-              << "Epsilon scaling will not be effective." << std::endl;
-        // Return empty distribution
-        return std::vector<std::vector<double>>();
-    }
-    
     // Distribute epsilon values across levels
-    epsilon_distribution = distribute_epsilon_values(epsilon_sequence, num_levels, use_target);
-    
+    epsilon_distribution = distribute_epsilon_values(epsilon_sequence, num_levels);
     return epsilon_distribution;
 }
 

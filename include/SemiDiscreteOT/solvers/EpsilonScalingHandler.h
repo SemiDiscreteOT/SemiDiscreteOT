@@ -15,7 +15,6 @@ using namespace dealii;
  * 
  * This class manages the distribution of epsilon values across different levels
  * of a multilevel optimization process, either for target point clouds or source meshes.
- * It supports distributing epsilon values across levels according to user-defined strategies.
  */
 class EpsilonScalingHandler {
 public:
@@ -36,14 +35,10 @@ public:
      * @brief Compute epsilon distribution for multilevel optimization.
      * 
      * @param num_levels Number of levels in the hierarchy
-     * @param target_enabled Whether target multilevel is enabled
-     * @param source_enabled Whether source multilevel is enabled
      * @return Vector of vectors containing epsilon values for each level
      */
     std::vector<std::vector<double>> compute_epsilon_distribution(
-        unsigned int num_levels,
-        bool target_enabled,
-        bool source_enabled);
+        unsigned int num_levels);
 
     /**
      * @brief Get epsilon values for a specific level.
@@ -81,13 +76,11 @@ private:
      * 
      * @param epsilon_sequence Sequence of epsilon values
      * @param num_levels Number of levels
-     * @param use_target Whether to use target multilevel (if false, use source)
      * @return Vector of vectors containing epsilon values for each level
      */
     std::vector<std::vector<double>> distribute_epsilon_values(
         const std::vector<double>& epsilon_sequence,
-        unsigned int num_levels,
-        bool use_target);
+        unsigned int num_levels);
 };
 
 #endif // EPSILON_SCALING_HANDLER_H 

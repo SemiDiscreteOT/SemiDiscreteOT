@@ -523,7 +523,7 @@ void SemiDiscreteOT<dim>::run_sot()
               << "  Number of steps: " << solver_config.epsilon_scaling_steps << std::endl;
         // Compute epsilon distribution for a single level
         std::vector<std::vector<double>> epsilon_distribution =
-            epsilon_scaling_handler->compute_epsilon_distribution(1, true, false);
+            epsilon_scaling_handler->compute_epsilon_distribution(1);
 
         if (!epsilon_distribution.empty() && !epsilon_distribution[0].empty()) {
             const auto& epsilon_sequence = epsilon_distribution[0];
@@ -637,7 +637,7 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
     if (solver_params.use_epsilon_scaling && epsilon_scaling_handler) {
         pcout << "Computing epsilon distribution for target multilevel optimization..." << std::endl;
         epsilon_distribution = epsilon_scaling_handler->compute_epsilon_distribution(
-            num_levels, true, false);
+            num_levels);
         epsilon_scaling_handler->print_epsilon_distribution();
     }
 
@@ -863,12 +863,8 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
             pcout << "No source mesh hierarchy found. Please run prepare_source_multilevel first." << std::endl;
             return;
         }
-    } else if (multilevel_params.target_enabled) {
-        // If only target multilevel is enabled, just run target multilevel directly
-        run_target_multilevel();
-        return;  // Exit after running target multilevel
-    }
-
+    } 
+    
     // Store original solver parameters
     const unsigned int original_max_iterations = solver_params.max_iterations;
     const double original_tolerance = solver_params.tolerance;
@@ -881,22 +877,14 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
 
     // Setup epsilon scaling if enabled
     std::vector<std::vector<double>> epsilon_distribution;
-    if (solver_params.use_epsilon_scaling && epsilon_scaling_handler) {
+    if (solver_params.use_epsilon_scaling && epsilon_scaling_handler && !multilevel_params.target_enabled) {
         pcout << "Computing epsilon distribution for multilevel optimization..." << std::endl;
 
         unsigned int num_levels = 0;
-        if (multilevel_params.target_enabled) {
-            // Get number of target levels
-            std::vector<std::pair<std::string, std::string>> target_files =
-                Utils::get_target_hierarchy_files(multilevel_params.target_hierarchy_dir);
-            num_levels = target_files.size();
-        } else if (multilevel_params.source_enabled) {
-            // Get number of source levels
-            num_levels = source_mesh_files.size();
-        }
-
+        // Get number of source levels
+        num_levels = source_mesh_files.size();
         epsilon_distribution = epsilon_scaling_handler->compute_epsilon_distribution(
-            num_levels, multilevel_params.target_enabled, multilevel_params.source_enabled);
+            num_levels);
         epsilon_scaling_handler->print_epsilon_distribution();
     }
 
