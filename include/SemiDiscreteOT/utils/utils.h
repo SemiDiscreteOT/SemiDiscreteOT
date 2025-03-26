@@ -15,6 +15,13 @@
 #include <deal.II/dofs/dof_handler.h>
 #include <deal.II/base/utilities.h>
 #include <deal.II/base/conditional_ostream.h>
+#include <deal.II/fe/fe_values.h>
+#include <deal.II/fe/fe_simplex_p.h>
+#include <deal.II/fe/fe_q.h>
+#include <deal.II/fe/mapping_fe.h>
+#include <deal.II/fe/mapping_q1.h>
+#include <deal.II/lac/vector.h>
+#include <deal.II/lac/la_parallel_vector.h>
 
 /**
  * @namespace Utils
@@ -464,6 +471,352 @@ bool write_mesh(const dealii::Triangulation<dim>& mesh,
     catch (const std::exception& e) {
         std::cerr << "Error writing mesh: " << e.what() << std::endl;
         return false;
+    }
+}
+
+/**
+ * @brief Interpolate a field from a source mesh to a target mesh using nearest neighbor approach
+ * @tparam dim Dimension of the mesh
+ * @tparam spacedim Spatial dimension
+ * @param source_dh Source DoFHandler
+ * @param source_field Source field values
+ * @param target_dh Target DoFHandler
+ * @param target_field Target field values (output)
+ */
+template <int dim, int spacedim>
+void interpolate_non_conforming_nearest(const dealii::DoFHandler<dim, spacedim> &source_dh,
+                                      const dealii::Vector<double>            &source_field,
+                                      const dealii::DoFHandler<dim, spacedim> &target_dh,
+                                      dealii::LinearAlgebra::distributed::Vector<double> &target_field)
+{
+  using namespace dealii;
+  
+  Assert(source_field.size() == source_dh.n_dofs(),
+         ExcDimensionMismatch(source_field.size(), source_dh.n_dofs()));
+  Assert(target_field.size() == target_dh.n_dofs(),
+         ExcDimensionMismatch(target_field.size(), target_dh.n_dofs()));
+
+  const auto &source_fe = source_dh.get_fe();
+  const auto &target_fe = target_dh.get_fe();
+
+  std::unique_ptr<Mapping<dim>> source_mapping;
+  if (source_fe.reference_cell() == ReferenceCells::get_hypercube<dim>())
+    source_mapping = std::make_unique<MappingQ1<dim>>();
+  else
+    source_mapping = std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
+
+  std::unique_ptr<Mapping<dim>> target_mapping;
+  if (target_fe.reference_cell() == ReferenceCells::get_hypercube<dim>())
+    target_mapping = std::make_unique<MappingQ1<dim>>();
+  else
+    target_mapping = std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
+
+  const Quadrature<dim> target_quadrature(target_fe.get_generalized_support_points());
+  FEValues<dim> target_fe_values(*target_mapping,
+                                target_fe,
+                                target_quadrature,
+                                update_quadrature_points);
+
+  std::vector<types::global_dof_index> source_dof_indices(source_fe.n_dofs_per_cell());
+  std::vector<types::global_dof_index> target_dof_indices(target_fe.n_dofs_per_cell());
+  Vector<double> source_cell_values(source_fe.n_dofs_per_cell());
+
+  Vector<double> target_values(target_field.size());
+  Vector<double> weights(target_field.size());
+
+  std::vector<std::pair<Point<spacedim>, typename DoFHandler<dim, spacedim>::active_cell_iterator>> cell_centers;
+  for (const auto &cell : source_dh.active_cell_iterators())
+  {
+    if (!cell->is_locally_owned())
+      continue;
+    cell_centers.emplace_back(cell->center(), cell);
+  }
+
+  std::vector<std::pair<Point<spacedim>, unsigned int>> indexed_points;
+  indexed_points.reserve(cell_centers.size());
+  for (unsigned int i = 0; i < cell_centers.size(); ++i)
+    indexed_points.emplace_back(cell_centers[i].first, i);
+
+  using RTreeParams = boost::geometry::index::rstar<8>;
+  boost::geometry::index::rtree<std::pair<Point<spacedim>, unsigned int>, RTreeParams>
+    rtree(indexed_points.begin(), indexed_points.end());
+
+  for (const auto &target_cell : target_dh.active_cell_iterators())
+  {
+    if (!target_cell->is_locally_owned())
+      continue;
+
+    target_fe_values.reinit(target_cell);
+    const std::vector<Point<dim>> &target_points = target_fe_values.get_quadrature_points();
+    target_cell->get_dof_indices(target_dof_indices);
+
+    for (unsigned int q = 0; q < target_points.size(); ++q)
+    {
+      const Point<spacedim> &target_point = target_points[q];
+
+      std::vector<std::pair<Point<spacedim>, unsigned int>> nearest;
+      rtree.query(boost::geometry::index::nearest(target_point, 1), std::back_inserter(nearest));
+
+      if (nearest.empty()) 
+        continue;
+
+      const unsigned int nearest_index = nearest.front().second;
+      auto chosen_source_cell = cell_centers[nearest_index].second;
+
+      Point<dim> p_unit;
+      try
+      {
+        p_unit = source_mapping->transform_real_to_unit_cell(chosen_source_cell, target_point);
+      }
+      catch (...)
+      {
+        continue;
+      }
+
+      chosen_source_cell->get_dof_indices(source_dof_indices);
+      for (unsigned int i = 0; i < source_dof_indices.size(); ++i)
+        source_cell_values[i] = source_field[source_dof_indices[i]];
+
+      double source_value = 0.0;
+      for (unsigned int i = 0; i < source_fe.n_dofs_per_cell(); ++i)
+        source_value += source_cell_values[i] * source_fe.shape_value(i, p_unit);
+
+      const unsigned int target_dof = target_dof_indices[q];
+      target_values[target_dof] += source_value;
+      weights[target_dof] += 1.0;
+    }
+  }
+
+  for (types::global_dof_index i = 0; i < target_field.size(); ++i)
+    if (weights[i] > 0)
+      target_field[i] = target_values[i] / weights[i];
+
+  target_field.compress(VectorOperation::insert);
+}
+
+/**
+ * @brief Interpolate a field from a source mesh to a target mesh
+ * @tparam dim Dimension of the mesh
+ * @tparam spacedim Spatial dimension
+ * @param source_dh Source DoFHandler
+ * @param source_field Source field values
+ * @param target_dh Target DoFHandler
+ * @param target_field Target field values (output)
+ */
+template <int dim, int spacedim>
+void interpolate_non_conforming(const dealii::DoFHandler<dim, spacedim> &source_dh,
+                              const dealii::Vector<double>              &source_field,
+                              const dealii::DoFHandler<dim, spacedim>   &target_dh,
+                              dealii::LinearAlgebra::distributed::Vector<double> &target_field)
+{
+  using namespace dealii;
+  
+  Assert(source_field.size() == source_dh.n_dofs(),
+         ExcDimensionMismatch(source_field.size(), source_dh.n_dofs()));
+  Assert(target_field.size() == target_dh.n_dofs(),
+         ExcDimensionMismatch(target_field.size(), target_dh.n_dofs()));
+
+  const auto &source_fe = source_dh.get_fe();
+  const auto &target_fe = target_dh.get_fe();
+
+  std::unique_ptr<Mapping<dim>> source_mapping;
+  if (source_dh.get_fe().reference_cell() == ReferenceCells::get_hypercube<dim>())
+    source_mapping = std::make_unique<MappingQ1<dim>>();
+  else
+    source_mapping = std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
+
+  std::unique_ptr<Mapping<dim>> target_mapping;
+  if (target_dh.get_fe().reference_cell() == ReferenceCells::get_hypercube<dim>())
+    target_mapping = std::make_unique<MappingQ1<dim>>();
+  else
+    target_mapping = std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
+
+  std::vector<std::pair<Point<spacedim>, typename DoFHandler<dim, spacedim>::active_cell_iterator>>
+    cell_centers;
+
+  for (const auto &cell : source_dh.active_cell_iterators())
+  {
+    if (!cell->is_locally_owned())
+      continue;
+    cell_centers.emplace_back(cell->center(), cell);
+  }
+
+  std::vector<std::pair<Point<spacedim>, unsigned int>> indexed_points;
+  indexed_points.reserve(cell_centers.size());
+  for (unsigned int i = 0; i < cell_centers.size(); ++i)
+    indexed_points.emplace_back(cell_centers[i].first, i);
+
+  using RTreeParams = boost::geometry::index::rstar<8>;
+  boost::geometry::index::rtree<std::pair<Point<spacedim>, unsigned int>, RTreeParams>
+    rtree(indexed_points.begin(), indexed_points.end());
+
+  const Quadrature<dim> quadrature(target_fe.get_unit_support_points());
+
+  FEValues<dim> source_fe_values(*source_mapping,
+                                source_fe,
+                                quadrature,
+                                update_values | update_quadrature_points);
+
+  FEValues<dim> target_fe_values(*target_mapping,
+                                target_fe,
+                                quadrature,
+                                update_quadrature_points);
+
+  std::vector<types::global_dof_index> source_dof_indices(source_fe.n_dofs_per_cell());
+  std::vector<types::global_dof_index> target_dof_indices(target_fe.n_dofs_per_cell());
+  Vector<double> source_cell_values(source_fe.n_dofs_per_cell());
+
+  Vector<double> target_values(target_dh.n_dofs());
+  Vector<double> weights(target_dh.n_dofs());
+
+  for (const auto &target_cell : target_dh.active_cell_iterators())
+  {
+    if (!target_cell->is_locally_owned())
+      continue;
+
+    target_fe_values.reinit(target_cell);
+    const std::vector<Point<dim>> &target_points = target_fe_values.get_quadrature_points();
+    target_cell->get_dof_indices(target_dof_indices);
+
+    for (unsigned int q = 0; q < target_points.size(); ++q)
+    {
+      const Point<dim> &target_point = target_points[q];
+
+      std::vector<std::pair<Point<spacedim>, unsigned int>> nearest;
+      rtree.query(boost::geometry::index::nearest(target_point, 1),
+                   std::back_inserter(nearest));
+
+      Assert(!nearest.empty(), ExcInternalError("RTree nearest neighbor search failed"));
+
+      const auto &source_cell = cell_centers[nearest[0].second].second;
+
+      source_fe_values.reinit(source_cell);
+      source_cell->get_dof_indices(source_dof_indices);
+
+      for (unsigned int i = 0; i < source_dof_indices.size(); ++i)
+        source_cell_values[i] = source_field[source_dof_indices[i]];
+
+      double source_value = 0;
+      for (unsigned int i = 0; i < source_fe.n_dofs_per_cell(); ++i)
+        source_value += source_cell_values[i] * source_fe_values.shape_value(i, q);
+
+      const unsigned int target_dof = target_dof_indices[q];
+      target_values[target_dof] += source_value;
+      weights[target_dof] += 1.0;
+    }
+  }
+
+  for (types::global_dof_index i = 0; i < target_dh.n_dofs(); ++i)
+    if (weights[i] > 0)
+      target_field[i] = target_values[i] / weights[i];
+
+  target_field.compress(VectorOperation::insert);
+}
+
+/**
+ * @brief Detect cell types in a triangulation and create appropriate finite element
+ * @tparam dim Dimension of the mesh
+ * @param triangulation Input triangulation to analyze
+ * @param degree Polynomial degree for the finite element (defaults to 1)
+ * @return Unique pointer to appropriate finite element
+ * @throw std::runtime_error if cell type cannot be determined
+ */
+template <int dim>
+std::unique_ptr<dealii::FiniteElement<dim>> create_fe_for_mesh(
+    const dealii::Triangulation<dim>& triangulation,
+    const unsigned int degree = 1)
+{
+    bool has_quads_or_hexes = false;
+    bool has_triangles_or_tets = false;
+    
+    for (const auto& cell : triangulation.active_cell_iterators()) {
+        if (cell->reference_cell() == dealii::ReferenceCells::get_hypercube<dim>())
+            has_quads_or_hexes = true;
+        if (cell->reference_cell() == dealii::ReferenceCells::get_simplex<dim>())
+            has_triangles_or_tets = true;
+    }
+
+    if (has_triangles_or_tets && !has_quads_or_hexes) {
+        return std::make_unique<dealii::FE_SimplexP<dim>>(degree);
+    } else if (has_quads_or_hexes && !has_triangles_or_tets) {
+        return std::make_unique<dealii::FE_Q<dim>>(degree);
+    } else {
+        throw std::runtime_error("Mixed cell types or no cells found in triangulation");
+    }
+}
+
+/**
+ * @brief Create appropriate finite element and mapping for a triangulation
+ * @tparam dim Dimension of the mesh
+ * @param triangulation Input triangulation to analyze
+ * @param fe_degree Polynomial degree for the finite element (defaults to 1)
+ * @param mapping_degree Polynomial degree for the mapping (defaults to 1)
+ * @return Pair of unique pointers to appropriate finite element and mapping
+ * @throw std::runtime_error if cell type cannot be determined
+ */
+template <int dim>
+std::pair<std::unique_ptr<dealii::FiniteElement<dim>>, 
+          std::unique_ptr<dealii::Mapping<dim>>> 
+create_fe_and_mapping_for_mesh(
+    const dealii::Triangulation<dim>& triangulation,
+    const unsigned int fe_degree = 1,
+    const unsigned int mapping_degree = 1)
+{
+    bool has_quads_or_hexes = false;
+    bool has_triangles_or_tets = false;
+    
+    for (const auto& cell : triangulation.active_cell_iterators()) {
+        if (cell->reference_cell() == dealii::ReferenceCells::get_hypercube<dim>())
+            has_quads_or_hexes = true;
+        if (cell->reference_cell() == dealii::ReferenceCells::get_simplex<dim>())
+            has_triangles_or_tets = true;
+    }
+
+    std::unique_ptr<dealii::FiniteElement<dim>> fe;
+    std::unique_ptr<dealii::Mapping<dim>> mapping;
+
+    if (has_triangles_or_tets) {
+        fe = std::make_unique<dealii::FE_SimplexP<dim>>(fe_degree);
+        mapping = std::make_unique<dealii::MappingFE<dim>>(dealii::FE_SimplexP<dim>(mapping_degree));
+    } else if (has_quads_or_hexes) {
+        fe = std::make_unique<dealii::FE_Q<dim>>(fe_degree);
+        mapping = std::make_unique<dealii::MappingQ1<dim>>();
+    } else {
+        throw std::runtime_error("Could not determine mesh cell type in triangulation");
+    }
+
+    return {std::move(fe), std::move(mapping)};
+}
+
+/**
+ * @brief Create appropriate quadrature for a triangulation based on cell types
+ * @tparam dim Dimension of the mesh
+ * @param triangulation Input triangulation to analyze
+ * @param order Quadrature order (defaults to 2)
+ * @return Unique pointer to appropriate quadrature
+ * @throw std::runtime_error if cell type cannot be determined
+ */
+template <int dim>
+std::unique_ptr<dealii::Quadrature<dim>> create_quadrature_for_mesh(
+    const dealii::Triangulation<dim>& triangulation,
+    const unsigned int order = 2)
+{
+    bool has_quads_or_hexes = false;
+    bool has_triangles_or_tets = false;
+    
+    for (const auto& cell : triangulation.active_cell_iterators()) {
+        if (cell->reference_cell() == dealii::ReferenceCells::get_hypercube<dim>())
+            has_quads_or_hexes = true;
+        if (cell->reference_cell() == dealii::ReferenceCells::get_simplex<dim>())
+            has_triangles_or_tets = true;
+    }
+
+    if (has_triangles_or_tets) {
+        return std::make_unique<dealii::QGaussSimplex<dim>>(order);
+    } else if (has_quads_or_hexes) {
+        return std::make_unique<dealii::QGauss<dim>>(order);
+    } else {
+        throw std::runtime_error("Could not determine mesh cell type for quadrature creation");
     }
 }
 

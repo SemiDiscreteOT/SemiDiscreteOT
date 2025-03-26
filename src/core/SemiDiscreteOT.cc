@@ -19,248 +19,6 @@ namespace fs = std::filesystem;
 
 using namespace dealii;
 
-template <int dim, int spacedim>
-void interpolate_non_conforming_nearest(const DoFHandler<dim, spacedim> &source_dh,
-                                        const Vector<double>            &source_field,
-                                        const DoFHandler<dim, spacedim> &target_dh,
-                             LinearAlgebra::distributed::Vector<double> &target_field)
-
-{
-  Assert(source_field.size() == source_dh.n_dofs(),
-         ExcDimensionMismatch(source_field.size(), source_dh.n_dofs()));
-  Assert(target_field.size() == target_dh.n_dofs(),
-         ExcDimensionMismatch(target_field.size(), target_dh.n_dofs()));
-
-  const auto &source_fe = source_dh.get_fe();
-  const auto &target_fe = target_dh.get_fe();
-
-  std::unique_ptr<Mapping<dim>> source_mapping;
-  if (source_fe.reference_cell() == ReferenceCells::get_hypercube<dim>())
-    source_mapping = std::make_unique<MappingQ1<dim>>();
-  else
-    source_mapping = std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
-
-  std::unique_ptr<Mapping<dim>> target_mapping;
-  if (target_fe.reference_cell() == ReferenceCells::get_hypercube<dim>())
-    target_mapping = std::make_unique<MappingQ1<dim>>();
-  else
-    target_mapping = std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
-
-  const Quadrature<dim> target_quadrature(target_fe.get_generalized_support_points());
-  FEValues<dim> target_fe_values(*target_mapping,
-                                 target_fe,
-                                 target_quadrature,
-                                 update_quadrature_points);
-
-  std::vector<types::global_dof_index> source_dof_indices(source_fe.n_dofs_per_cell());
-  std::vector<types::global_dof_index> target_dof_indices(target_fe.n_dofs_per_cell());
-  Vector<double> source_cell_values(source_fe.n_dofs_per_cell());
-
-  Vector<double> target_values(target_field.size());
-  Vector<double> weights(target_field.size());
-
-  std::vector<std::pair<Point<spacedim>, typename DoFHandler<dim, spacedim>::active_cell_iterator>> cell_centers;
-  for (const auto &cell : source_dh.active_cell_iterators())
-  {
-    if (!cell->is_locally_owned())
-      continue;
-    cell_centers.emplace_back(cell->center(), cell);
-  }
-
-  std::vector<std::pair<Point<spacedim>, unsigned int>> indexed_points;
-  indexed_points.reserve(cell_centers.size());
-  for (unsigned int i = 0; i < cell_centers.size(); ++i)
-    indexed_points.emplace_back(cell_centers[i].first, i);
-
-  using RTreeParams = boost::geometry::index::rstar<8>;
-  boost::geometry::index::rtree<std::pair<Point<spacedim>, unsigned int>, RTreeParams>
-    rtree(indexed_points.begin(), indexed_points.end());
-
-  for (const auto &target_cell : target_dh.active_cell_iterators())
-  {
-    if (!target_cell->is_locally_owned())
-      continue;
-
-    target_fe_values.reinit(target_cell);
-    const std::vector<Point<dim>> &target_points = target_fe_values.get_quadrature_points();
-    target_cell->get_dof_indices(target_dof_indices);
-
-    // For each support point in the target cell:
-    for (unsigned int q = 0; q < target_points.size(); ++q)
-    {
-      const Point<spacedim> &target_point = target_points[q];
-
-      // Query the RTree for the **nearest** source cell center.
-      std::vector<std::pair<Point<spacedim>, unsigned int>> nearest;
-      rtree.query(boost::geometry::index::nearest(target_point, 1), std::back_inserter(nearest));
-
-      if (nearest.empty()) 
-        continue; // If no nearest cell found, skip this point.
-
-      const unsigned int nearest_index = nearest.front().second;
-      auto chosen_source_cell = cell_centers[nearest_index].second;
-
-      Point<dim> p_unit;
-      try
-      {
-        p_unit = source_mapping->transform_real_to_unit_cell(chosen_source_cell, target_point);
-      }
-      catch (...)
-      {
-        continue; // Skip if transformation fails.
-      }
-
-      chosen_source_cell->get_dof_indices(source_dof_indices);
-      for (unsigned int i = 0; i < source_dof_indices.size(); ++i)
-        source_cell_values[i] = source_field[source_dof_indices[i]];
-
-      double source_value = 0.0;
-      for (unsigned int i = 0; i < source_fe.n_dofs_per_cell(); ++i)
-        source_value += source_cell_values[i] * source_fe.shape_value(i, p_unit);
-
-      const unsigned int target_dof = target_dof_indices[q];
-      target_values[target_dof] += source_value;
-      weights[target_dof] += 1.0;
-    }
-  }
-
-  // Compute the weighted average of the contributions.
-  for (types::global_dof_index i = 0; i < target_field.size(); ++i)
-    if (weights[i] > 0)
-      target_field[i] = target_values[i] / weights[i];
-
-  target_field.compress(VectorOperation::insert);
-}
-
-
-
-template <int dim, int spacedim>
-void interpolate_non_conforming(const DoFHandler<dim, spacedim> &source_dh,
-                                const Vector<double>              &source_field,
-                                const DoFHandler<dim, spacedim>   &target_dh,
-                                LinearAlgebra::distributed::Vector<double> &target_field)
-{
-  Assert(source_field.size() == source_dh.n_dofs(),
-         ExcDimensionMismatch(source_field.size(), source_dh.n_dofs()));
-  Assert(target_field.size() == target_dh.n_dofs(),
-         ExcDimensionMismatch(target_field.size(), target_dh.n_dofs()));
-
-  std::cout << "target_field.size(): " << target_field.size() << std::endl;
-  std::cout << "source_field.size(): " << source_field.size() << std::endl;
-
-  const auto &source_fe = source_dh.get_fe();
-  const auto &target_fe = target_dh.get_fe();
-
-  // Create appropriate mappings for source and target
-  std::unique_ptr<Mapping<dim>> source_mapping;
-  if (source_dh.get_fe().reference_cell() == ReferenceCells::get_hypercube<dim>())
-    source_mapping = std::make_unique<MappingQ1<dim>>();
-  else
-    source_mapping = std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
-
-  std::unique_ptr<Mapping<dim>> target_mapping;
-  if (target_dh.get_fe().reference_cell() == ReferenceCells::get_hypercube<dim>())
-    target_mapping = std::make_unique<MappingQ1<dim>>();
-  else
-    target_mapping = std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
-
-  // Store source cells and their centers for RTree
-  std::vector<std::pair<Point<spacedim>, typename DoFHandler<dim, spacedim>::active_cell_iterator>>
-    cell_centers;
-
-  for (const auto &cell : source_dh.active_cell_iterators())
-    {
-      if (!cell->is_locally_owned())
-        continue;
-      cell_centers.emplace_back(cell->center(), cell);
-    }
-
-  // Create RTree for fast cell location
-  std::vector<std::pair<Point<spacedim>, unsigned int>> indexed_points;
-  indexed_points.reserve(cell_centers.size());
-  for (unsigned int i = 0; i < cell_centers.size(); ++i)
-    indexed_points.emplace_back(cell_centers[i].first, i);
-
-  using RTreeParams = boost::geometry::index::rstar<8>;
-  boost::geometry::index::rtree<std::pair<Point<spacedim>, unsigned int>, RTreeParams>
-    rtree(indexed_points.begin(), indexed_points.end());
-
-  // Create FEValues objects with appropriate update flags
-  const Quadrature<dim> quadrature(target_fe.get_unit_support_points());
-
-  FEValues<dim> source_fe_values(*source_mapping,
-                                source_fe,
-                                quadrature,
-                                update_values | update_quadrature_points);
-
-  FEValues<dim> target_fe_values(*target_mapping,
-                                target_fe,
-                                quadrature,
-                                update_quadrature_points);
-
-  std::vector<types::global_dof_index> source_dof_indices(source_fe.n_dofs_per_cell());
-  std::vector<types::global_dof_index> target_dof_indices(target_fe.n_dofs_per_cell());
-  Vector<double> source_cell_values(source_fe.n_dofs_per_cell());
-
-  // Storage for target values and weights for averaging
-  Vector<double> target_values(target_dh.n_dofs());
-  Vector<double> weights(target_dh.n_dofs());
-
-  // Loop over all target cells
-  for (const auto &target_cell : target_dh.active_cell_iterators())
-    {
-      if (!target_cell->is_locally_owned())
-        continue;
-
-      target_fe_values.reinit(target_cell);
-      const std::vector<Point<dim>> &target_points =
-        target_fe_values.get_quadrature_points();
-
-      target_cell->get_dof_indices(target_dof_indices);
-
-      // For each support point in target cell
-      for (unsigned int q = 0; q < target_points.size(); ++q)
-        {
-          const Point<dim> &target_point = target_points[q];
-
-          // Find nearest source cell using RTree
-          std::vector<std::pair<Point<spacedim>, unsigned int>> nearest;
-          rtree.query(boost::geometry::index::nearest(target_point, 1),
-                     std::back_inserter(nearest));
-
-          Assert(!nearest.empty(), ExcInternalError("RTree nearest neighbor search failed"));
-
-          // Get the source cell
-          const auto &source_cell = cell_centers[nearest[0].second].second;
-
-          // Get source cell values
-          source_fe_values.reinit(source_cell);
-          source_cell->get_dof_indices(source_dof_indices);
-
-          for (unsigned int i = 0; i < source_dof_indices.size(); ++i)
-            source_cell_values[i] = source_field[source_dof_indices[i]];
-
-          // Evaluate source field at target point
-          double source_value = 0;
-          for (unsigned int i = 0; i < source_fe.n_dofs_per_cell(); ++i)
-            source_value += source_cell_values[i] * source_fe_values.shape_value(i, q);
-
-          // Add contribution to target DoF
-          const unsigned int target_dof = target_dof_indices[q];
-          target_values[target_dof] += source_value;
-          weights[target_dof] += 1.0;
-        }
-    }
-
-  // Average values where we have multiple contributions
-  for (types::global_dof_index i = 0; i < target_dh.n_dofs(); ++i)
-    if (weights[i] > 0)
-      target_field[i] = target_values[i] / weights[i];
-
-  // Synchronize parallel vectors
-  target_field.compress(VectorOperation::insert);
-}
-
 template <int dim>
 SemiDiscreteOT<dim>::SemiDiscreteOT(const MPI_Comm &comm)
     : mpi_communicator(comm)
@@ -401,26 +159,10 @@ void SemiDiscreteOT<dim>::load_hierarchy_data(const std::string& hierarchy_dir, 
 template <int dim>
 void SemiDiscreteOT<dim>::setup_source_finite_elements()
 {
-    // Check cell types in source mesh
-    bool has_quads_or_hexes = false;
-    bool has_triangles_or_tets = false;
-    for (const auto& cell : source_mesh.active_cell_iterators()) {
-        if (cell->reference_cell() == ReferenceCells::get_hypercube<dim>())
-            has_quads_or_hexes = true;
-        if (cell->reference_cell() == ReferenceCells::get_simplex<dim>())
-            has_triangles_or_tets = true;
-    }
-
     // Create appropriate finite element and mapping based on cell types
-    if (has_triangles_or_tets) {
-        fe_system = std::make_unique<FE_SimplexP<dim>>(1);
-        mapping = std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
-    } else if (has_quads_or_hexes) {
-        fe_system = std::make_unique<FE_Q<dim>>(1);
-        mapping = std::make_unique<MappingQ1<dim>>();
-    } else {
-        throw std::runtime_error("Could not determine mesh cell type in source mesh");
-    }
+    auto [fe, map] = Utils::create_fe_and_mapping_for_mesh<dim>(source_mesh);
+    fe_system = std::move(fe);
+    mapping = std::move(map);
 
     dof_handler_source.distribute_dofs(*fe_system);
 
@@ -450,25 +192,8 @@ void SemiDiscreteOT<dim>::setup_source_finite_elements()
                     grid_in.read_vtk(vtk_file);
                     pcout << "VTK mesh: " << vtk_tria_source.n_active_cells() << " cells" << std::endl;
 
-                    // Check cell types in VTK mesh
-                    bool vtk_has_quads_or_hexes = false;
-                    bool vtk_has_triangles_or_tets = false;
-                    for (const auto& cell : vtk_tria_source.active_cell_iterators()) {
-                        if (cell->reference_cell() == ReferenceCells::get_hypercube<dim>())
-                            vtk_has_quads_or_hexes = true;
-                        if (cell->reference_cell() == ReferenceCells::get_simplex<dim>())
-                            vtk_has_triangles_or_tets = true;
-                    }
-
                     // Setup finite element space for VTK mesh
-                    std::unique_ptr<FiniteElement<dim>> vtk_fe;
-                    if (vtk_has_triangles_or_tets) {
-                        vtk_fe = std::make_unique<FE_SimplexP<dim>>(1);
-                    } else if (vtk_has_quads_or_hexes) {
-                        vtk_fe = std::make_unique<FE_Q<dim>>(1);
-                    } else {
-                        throw std::runtime_error("Could not determine mesh cell type in VTK mesh");
-                    }
+                    auto vtk_fe = Utils::create_fe_for_mesh<dim>(vtk_tria_source);
 
                     vtk_dof_handler_source.reinit(vtk_tria_source);
                     vtk_dof_handler_source.distribute_dofs(*vtk_fe);
@@ -547,12 +272,7 @@ void SemiDiscreteOT<dim>::setup_source_finite_elements()
     source_density.update_ghost_values();  // Ensure ghost values are updated
 
     // Create appropriate quadrature
-    std::unique_ptr<Quadrature<dim>> quadrature;
-    if (has_triangles_or_tets) {
-        quadrature = std::make_unique<QGaussSimplex<dim>>(solver_params.quadrature_order);
-    } else {
-        quadrature = std::make_unique<QGauss<dim>>(solver_params.quadrature_order);
-    }
+    auto quadrature = Utils::create_quadrature_for_mesh<dim>(source_mesh, solver_params.quadrature_order);
 
     // Debug info about parallel distribution
     unsigned int n_locally_owned = 0;
@@ -604,26 +324,11 @@ void SemiDiscreteOT<dim>::setup_source_finite_elements()
 template <int dim>
 void SemiDiscreteOT<dim>::setup_target_finite_elements()
 {
-    // Check cell types in target mesh
-    bool has_quads_or_hexes = false;
-    bool has_triangles_or_tets = false;
-    for (const auto& cell : target_mesh.active_cell_iterators()) {
-        if (cell->reference_cell() == ReferenceCells::get_hypercube<dim>())
-            has_quads_or_hexes = true;
-        if (cell->reference_cell() == ReferenceCells::get_simplex<dim>())
-            has_triangles_or_tets = true;
-    }
-
     // Create appropriate finite element and mapping based on cell types
-    if (has_triangles_or_tets) {
-        fe_system_target = std::make_unique<FE_SimplexP<dim>>(1);
-        mapping_target = std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
-    } else if (has_quads_or_hexes) {
-        fe_system_target = std::make_unique<FE_Q<dim>>(1);
-        mapping_target = std::make_unique<MappingQ1<dim>>();
-    } else {
-        throw std::runtime_error("Could not determine mesh cell type in target mesh");
-    }
+    auto [fe, map] = Utils::create_fe_and_mapping_for_mesh<dim>(target_mesh);
+    fe_system_target = std::move(fe);
+    mapping_target = std::move(map);
+
     dof_handler_target.distribute_dofs(*fe_system_target);
 
     // Load or compute target points (shared across all processes)
@@ -697,25 +402,8 @@ void SemiDiscreteOT<dim>::setup_target_finite_elements()
                         grid_in.read_vtk(vtk_file);
                         pcout << "VTK mesh: " << vtk_tria_target.n_active_cells() << " cells" << std::endl;
 
-                        // Check cell types in VTK mesh
-                        bool vtk_has_quads_or_hexes = false;
-                        bool vtk_has_triangles_or_tets = false;
-                        for (const auto& cell : vtk_tria_target.active_cell_iterators()) {
-                            if (cell->reference_cell() == ReferenceCells::get_hypercube<dim>())
-                                vtk_has_quads_or_hexes = true;
-                            if (cell->reference_cell() == ReferenceCells::get_simplex<dim>())
-                                vtk_has_triangles_or_tets = true;
-                        }
-
                         // Setup finite element space for VTK mesh
-                        std::unique_ptr<FiniteElement<dim>> vtk_fe;
-                        if (vtk_has_triangles_or_tets) {
-                            vtk_fe = std::make_unique<FE_SimplexP<dim>>(1);
-                        } else if (vtk_has_quads_or_hexes) {
-                            vtk_fe = std::make_unique<FE_Q<dim>>(1);
-                        } else {
-                            throw std::runtime_error("Could not determine mesh cell type in VTK mesh");
-                        }
+                        auto vtk_fe = Utils::create_fe_for_mesh<dim>(vtk_tria_target);
 
                         DoFHandler<dim> vtk_dof_handler_target(vtk_tria_target);
                         vtk_dof_handler_target.distribute_dofs(*vtk_fe);
@@ -843,26 +531,9 @@ void SemiDiscreteOT<dim>::setup_finite_elements()
 template <int dim>
 void SemiDiscreteOT<dim>::setup_multilevel_finite_elements()
 {
-    // Check cell types in source mesh
-    bool has_quads_or_hexes = false;
-    bool has_triangles_or_tets = false;
-    for (const auto& cell : source_mesh.active_cell_iterators()) {
-        if (cell->reference_cell() == ReferenceCells::get_hypercube<dim>())
-            has_quads_or_hexes = true;
-        if (cell->reference_cell() == ReferenceCells::get_simplex<dim>())
-            has_triangles_or_tets = true;
-    }
-
-    // Create appropriate finite element and mapping based on cell types
-    if (has_triangles_or_tets) {
-        fe_system = std::make_unique<FE_SimplexP<dim>>(1);
-        mapping = std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
-    } else if (has_quads_or_hexes) {
-        fe_system = std::make_unique<FE_Q<dim>>(1);
-        mapping = std::make_unique<MappingQ1<dim>>();
-    } else {
-        throw std::runtime_error("Could not determine mesh cell type in source mesh");
-    }
+    auto [fe, map] = Utils::create_fe_and_mapping_for_mesh<dim>(source_mesh);
+    fe_system = std::move(fe);
+    mapping = std::move(map);
 
     // Only distribute DoFs for source mesh
     dof_handler_source.distribute_dofs(*fe_system);
@@ -875,11 +546,9 @@ void SemiDiscreteOT<dim>::setup_multilevel_finite_elements()
     source_density.reinit(locally_owned_dofs, locally_relevant_dofs, mpi_communicator);
 
     if (source_params.use_custom_density && source_params.density_file_format == "vtk") {
-        // print in green
         pcout << Color::green << "Interpolating source density from VTK to source mesh" << Color::reset << std::endl;
-        Functions::FEFieldFunction<dim> field_function(vtk_dof_handler_source, vtk_field_source);
-        interpolate_non_conforming_nearest(vtk_dof_handler_source, vtk_field_source, dof_handler_source, source_density);
         // TODO: interpolate source density, we can't do this with vectortools::interpolate because the VTK mesh is not aligned with the source mesh (coarse mesh)
+        Utils::interpolate_non_conforming_nearest(vtk_dof_handler_source, vtk_field_source, dof_handler_source, source_density);
     }
     else {
         pcout << Color::green << "Using uniform source density" << Color::reset << std::endl;
@@ -890,12 +559,7 @@ void SemiDiscreteOT<dim>::setup_multilevel_finite_elements()
 
     // Normalize source density
     double local_l1_norm = 0.0;
-    std::unique_ptr<Quadrature<dim>> quadrature;
-    if (has_triangles_or_tets) {
-        quadrature = std::make_unique<QGaussSimplex<dim>>(solver_params.quadrature_order);
-    } else {
-        quadrature = std::make_unique<QGauss<dim>>(solver_params.quadrature_order);
-    }
+    auto quadrature = Utils::create_quadrature_for_mesh<dim>(source_mesh, solver_params.quadrature_order);
 
     FEValues<dim> fe_values(*mapping, *fe_system, *quadrature,
                            update_values | update_JxW_values);
@@ -2040,12 +1704,7 @@ void SemiDiscreteOT<dim>::save_discrete_measures()
     fs::create_directories(directory);
 
     // Get quadrature points and weights
-    std::unique_ptr<Quadrature<dim>> quadrature;
-    if (source_params.use_tetrahedral_mesh) {
-        quadrature = std::make_unique<QGaussSimplex<dim>>(solver_params.quadrature_order);
-    } else {
-        quadrature = std::make_unique<QGauss<dim>>(solver_params.quadrature_order);
-    }
+    auto quadrature = Utils::create_quadrature_for_mesh<dim>(source_mesh, solver_params.quadrature_order);
 
     FEValues<dim> fe_values(*mapping, *fe_system, *quadrature,
                            update_values | update_quadrature_points | update_JxW_values);
