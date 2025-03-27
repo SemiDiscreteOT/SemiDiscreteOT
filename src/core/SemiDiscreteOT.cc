@@ -287,6 +287,21 @@ void SemiDiscreteOT<dim>::setup_target_finite_elements()
         mapping_target = std::move(map);
         dof_handler_target.distribute_dofs(*fe_system_target);
 
+        // Load or compute target points
+        if (Utils::read_vector(target_points, directory + "/target_points", io_coding)) {
+            points_loaded = true;
+            pcout << "Target points loaded from file" << std::endl;
+        } else {
+            std::map<types::global_dof_index, Point<dim>> support_points_target;
+            DoFTools::map_dofs_to_support_points(*mapping_target, dof_handler_target, support_points_target);
+            for (const auto &point_pair : support_points_target) {
+                target_points.push_back(point_pair.second);
+            }
+            Utils::write_vector(target_points, directory + "/target_points", io_coding);
+            points_loaded = true;
+            pcout << "Target points computed and saved to file" << std::endl;
+        }
+
         if (target_params.use_custom_density) {
             pcout << "Using custom target density from file: " << target_params.density_file_path << std::endl;
             bool density_loaded = false;
@@ -328,26 +343,13 @@ void SemiDiscreteOT<dim>::setup_target_finite_elements()
             }
             if (!density_loaded) {
                 pcout << Color::red << "Failed to load custom density, using uniform density" << Color::reset << std::endl;
+                target_density.reinit(target_points.size());
                 target_density = 1.0/target_points.size();
             }
         } else {
             pcout << Color::green << "Using uniform target density" << Color::reset << std::endl;
+            target_density.reinit(target_points.size());
             target_density = 1.0/target_points.size();
-        }
-
-        // Load or compute target points
-        if (Utils::read_vector(target_points, directory + "/target_points", io_coding)) {
-            points_loaded = true;
-            pcout << "Target points loaded from file" << std::endl;
-        } else {
-            std::map<types::global_dof_index, Point<dim>> support_points_target;
-            DoFTools::map_dofs_to_support_points(*mapping_target, dof_handler_target, support_points_target);
-            for (const auto &point_pair : support_points_target) {
-                target_points.push_back(point_pair.second);
-            }
-            Utils::write_vector(target_points, directory + "/target_points", io_coding);
-            points_loaded = true;
-            pcout << "Target points computed and saved to file" << std::endl;
         }
     }
 
@@ -1147,15 +1149,6 @@ void SemiDiscreteOT<dim>::prepare_target_multilevel()
             return;
         }
 
-        // Save target density if not already present
-        std::string output_dir = "output/data_density";
-        std::string density_file = output_dir + "/target_density";
-        if (!fs::exists(output_dir)) {
-            fs::create_directories(output_dir);
-        }
-        if (!fs::exists(density_file)) {
-            Utils::write_vector(target_density, density_file, "txt");
-        }
         // Create output directory
         fs::create_directories(multilevel_params.target_hierarchy_dir);
         if (multilevel_params.use_python_clustering) {
@@ -1545,7 +1538,7 @@ void SemiDiscreteOT<dim>::run()
     }
     else if (selected_task == "prepare_target_multilevel")
     {
-        load_meshes();
+        mesh_manager->load_target_mesh(target_mesh);
         prepare_target_multilevel();
     }
     else if (selected_task == "prepare_multilevel")
@@ -1554,7 +1547,7 @@ void SemiDiscreteOT<dim>::run()
             prepare_source_multilevel();
         if (multilevel_params.target_enabled)
         {
-            load_meshes();
+            mesh_manager->load_target_mesh(target_mesh);
             prepare_target_multilevel();
         }
     }
