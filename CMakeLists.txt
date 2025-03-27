@@ -4,9 +4,6 @@ CMAKE_MINIMUM_REQUIRED(VERSION 3.13.0)
 # Check Deal.II
 MESSAGE("Deal.II installation path: $ENV{DEAL_II_DIR}")
 
-# Check Geogram
-MESSAGE("Geogram installation path: $ENV{GEOGRAM_DIR}")
-
 # Set default build type to Release if not specified
 IF(NOT CMAKE_BUILD_TYPE OR CMAKE_BUILD_TYPE STREQUAL "")
     SET(CMAKE_BUILD_TYPE "Release" CACHE STRING
@@ -47,25 +44,12 @@ SET(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Set output directory
 SET(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/run)
 
-# Geogram setup
-INCLUDE_DIRECTORIES($ENV{GEOGRAM_DIR}/src/lib)
-SET(CMAKE_MODULE_PATH $ENV{GEOGRAM_DIR}/cmake)
-SET(GEOGRAM_LIBS
-    $ENV{GEOGRAM_DIR}/build/Linux64-gcc-dynamic-Release/lib/libgeogram.so
-    $ENV{GEOGRAM_DIR}/build/Linux64-gcc-dynamic-Release/lib/libexploragram.so
-)
 
 # Library source files
 SET(LIB_SRC
   src/core/SemiDiscreteOT.cc
-  src/core/PowerDiagramDealII.cc
-  src/core/PowerDiagramGeogram.cc
-  src/core/MeshHierarchy.cc
-  src/core/OptimalTransportPlan.cc
-  src/core/PointCloudHierarchy.cc
   src/solvers/SotSolver.cc
   src/solvers/EpsilonScalingHandler.cc
-  src/solvers/ExactSot.cc
   src/solvers/SoftmaxRefinement.cc
   src/utils/ParameterManager.cc
 )
@@ -78,7 +62,6 @@ TARGET_INCLUDE_DIRECTORIES(SemiDiscreteOT
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
-        $ENV{GEOGRAM_DIR}/src/lib
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
@@ -86,15 +69,7 @@ TARGET_INCLUDE_DIRECTORIES(SemiDiscreteOT
 # Setup Deal.II for the library
 DEAL_II_SETUP_TARGET(SemiDiscreteOT)
 
-# Add Geogram libraries
-TARGET_LINK_LIBRARIES(SemiDiscreteOT ${GEOGRAM_LIBS})
 
-# Add compile definitions for both implementations
-TARGET_COMPILE_DEFINITIONS(SemiDiscreteOT
-    PRIVATE
-        POWER_DIAGRAM_WITH_DEALII
-        POWER_DIAGRAM_WITH_GEOGRAM
-)
 
 # Create the executable
 ADD_EXECUTABLE(sot src/ComputeSot.cc)

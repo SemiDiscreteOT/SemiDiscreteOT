@@ -29,7 +29,6 @@
 #include <deal.II/base/utilities.h>
 #include <deal.II/base/conditional_ostream.h>
 #include <deal.II/numerics/rtree.h>
-#include "SemiDiscreteOT/core/MeshHierarchy.h"
 #include "SemiDiscreteOT/core/MeshManager.h"
 
 #include <filesystem>
@@ -49,7 +48,6 @@ class SemiDiscreteOT {
 public:
     SemiDiscreteOT(const MPI_Comm &mpi_communicator);
     void run();
-    void save_discrete_measures();
 
 private:
     // MPI-related members
@@ -90,15 +88,11 @@ private:
     void print_parameters();
     void load_meshes();
     void run_sot();
-    void compute_power_diagram();
-    void compute_transport_map();
 
     // Density normalization helper
     void normalize_density(LinearAlgebra::distributed::Vector<double>& density);
 
     // Multilevel methods
-    void prepare_source_multilevel();
-    void prepare_target_multilevel();
     void run_multilevel_sot();
     void run_target_multilevel(const std::string& source_mesh_file = "",
                              Vector<double>* output_potentials = nullptr,
@@ -113,10 +107,6 @@ private:
     void setup_target_points();
     void setup_multilevel_finite_elements();
     void save_results(const Vector<double>& potentials, const std::string& filename);
-
-    // Exact SOT method (3D only)
-    template <int d = dim>
-    typename std::enable_if<d == 3>::type run_exact_sot();
 
     // Finite element and mapping members
     std::unique_ptr<FiniteElement<dim>> fe_system;
