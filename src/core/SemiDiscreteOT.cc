@@ -548,7 +548,7 @@ void SemiDiscreteOT<dim>::run_sot()
     }
 
     // Save final results
-    save_results(potential, "potential");
+    save_results(potential, "potentials");
 
     timer.stop();
     pcout << "\n" << Color::green << Color::bold << "SOT optimization completed in " << timer.wall_time() << " seconds" << Color::reset << std::endl;

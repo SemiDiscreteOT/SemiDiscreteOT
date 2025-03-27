@@ -1,16 +1,18 @@
 subsection ParameterManager
 
-  set selected_task = sot
+  set selected_task = prepare_multilevel
   set io_coding = txt
 
   subsection mesh_generation
     subsection source
+      set use tethrahedra = false
       set use custom density = true
       set density file path  = output/density_field/source_density.vtk
       set density file format = vtk
     end
 
     subsection target
+      set use tethrahedra = false
       set use custom density = true
       set density file path  = output/density_field/target_density.vtk
       set density file format = vtk
