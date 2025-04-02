@@ -1,12 +1,12 @@
 #include "SemiDiscreteOT/solvers/SoftmaxRefinement.h"
 #include <deal.II/base/quadrature_lib.h>
 
-template <int dim>
-SoftmaxRefinement<dim>::SoftmaxRefinement(
+template <int dim, int spacedim>
+SoftmaxRefinement<dim, spacedim>::SoftmaxRefinement(
     MPI_Comm mpi_comm,
-    const DoFHandler<dim>& dof_handler,
-    const Mapping<dim>& mapping,
-    const FiniteElement<dim>& fe,
+    const DoFHandler<dim, spacedim>& dof_handler,
+    const Mapping<dim, spacedim>& mapping,
+    const FiniteElement<dim, spacedim>& fe,
     const LinearAlgebra::distributed::Vector<double>& source_density,
     unsigned int quadrature_order,
     double distance_threshold)
@@ -20,10 +20,12 @@ SoftmaxRefinement<dim>::SoftmaxRefinement(
     , source_density(source_density)
     , quadrature_order(quadrature_order)
     , current_distance_threshold(distance_threshold)
-{}
+{
+    distance_function = [](const Point<spacedim> x, const Point<spacedim> y) { return euclidean_distance<spacedim>(x, y); };
+}
 
-template <int dim>
-void SoftmaxRefinement<dim>::setup_rtree()
+template <int dim, int spacedim>
+void SoftmaxRefinement<dim, spacedim>::setup_rtree()
 {
     namespace bgi = boost::geometry::index;
     std::vector<IndexedPoint> indexed_points;
@@ -36,16 +38,16 @@ void SoftmaxRefinement<dim>::setup_rtree()
     target_points_rtree = RTree(indexed_points.begin(), indexed_points.end());
 }
 
-template <int dim>
-std::vector<std::size_t> SoftmaxRefinement<dim>::find_nearest_target_points(
-    const Point<dim>& query_point) const
+template <int dim, int spacedim>
+std::vector<std::size_t> SoftmaxRefinement<dim, spacedim>::find_nearest_target_points(
+    const Point<spacedim>& query_point) const
 {
     namespace bgi = boost::geometry::index;
     std::vector<std::size_t> indices;
 
     for (const auto& indexed_point : target_points_rtree |
          bgi::adaptors::queried(bgi::satisfies([&](const IndexedPoint& p) {
-             return (p.first - query_point).norm() <= current_distance_threshold;
+             return distance_function(p.first, query_point) <= current_distance_threshold;
          })))
     {
         indices.push_back(indexed_point.second);
@@ -54,9 +56,9 @@ std::vector<std::size_t> SoftmaxRefinement<dim>::find_nearest_target_points(
     return indices;
 }
 
-template <int dim>
-void SoftmaxRefinement<dim>::local_assemble(
-    const typename DoFHandler<dim>::active_cell_iterator &cell,
+template <int dim, int spacedim>
+void SoftmaxRefinement<dim, spacedim>::local_assemble(
+    const typename DoFHandler<dim, spacedim>::active_cell_iterator &cell,
     ScratchData &scratch_data,
     CopyData &copy_data)
 {
@@ -64,7 +66,7 @@ void SoftmaxRefinement<dim>::local_assemble(
         return;
 
     scratch_data.fe_values.reinit(cell);
-    const std::vector<Point<dim>> &q_points = scratch_data.fe_values.get_quadrature_points();
+    const std::vector<Point<spacedim>> &q_points = scratch_data.fe_values.get_quadrature_points();
     scratch_data.fe_values.get_function_values(source_density, scratch_data.density_values);
 
     copy_data.potential_values = 0;
@@ -79,7 +81,7 @@ void SoftmaxRefinement<dim>::local_assemble(
     if (cell_target_indices_coarse.empty()) return;
 
     const unsigned int n_target_points_coarse = cell_target_indices_coarse.size();
-    std::vector<Point<dim>> target_positions_coarse(n_target_points_coarse);
+    std::vector<Point<spacedim>> target_positions_coarse(n_target_points_coarse);
     std::vector<double> target_densities_coarse(n_target_points_coarse);
     std::vector<double> potential_values_coarse(n_target_points_coarse);
     
@@ -93,7 +95,7 @@ void SoftmaxRefinement<dim>::local_assemble(
 
     // Get fine points that are children of the coarse points
     std::vector<std::size_t> cell_target_indices_fine;
-    std::vector<Point<dim>> target_positions_fine;
+    std::vector<Point<spacedim>> target_positions_fine;
 
     // Add bounds checking for child_indices_ access
     if (current_level < 0 || current_level >= static_cast<int>(current_child_indices->size())) {
@@ -131,7 +133,7 @@ void SoftmaxRefinement<dim>::local_assemble(
 
     // For each quadrature point
     for (unsigned int q = 0; q < n_q_points; ++q) {
-        const Point<dim> &x = q_points[q];
+        const Point<spacedim> &x = q_points[q];
         const double density_value = scratch_data.density_values[q];
         const double JxW = scratch_data.fe_values.JxW(q);
         
@@ -141,7 +143,7 @@ void SoftmaxRefinement<dim>::local_assemble(
 
         #pragma omp simd reduction(+:total_sum_exp)
         for (size_t i = 0; i < n_target_points_coarse; ++i) {
-            const double local_dist2 = (x - target_positions_coarse[i]).norm_square();
+            const double local_dist2 = std::pow(distance_function(x,  target_positions_coarse[i]), 2);
             if (local_dist2 <= threshold_sq) {
                 exp_terms_coarse[i] = target_densities_coarse[i] * 
                     std::exp((potential_values_coarse[i] - 0.5 * local_dist2) * lambda_inv);
@@ -156,7 +158,7 @@ void SoftmaxRefinement<dim>::local_assemble(
         
         #pragma omp simd
         for (size_t i = 0; i < n_target_points_fine; ++i) {
-            const double local_dist2_fine = (x - target_positions_fine[i]).norm_square();
+            const double local_dist2_fine = std::pow(distance_function(x,  target_positions_fine[i]), 2);
             if (local_dist2_fine <= threshold_sq) {
                 const double exp_term_fine = std::exp((- 0.5 * local_dist2_fine) * lambda_inv);
                 copy_data.potential_values[cell_target_indices_fine[i]] += scale * exp_term_fine;
@@ -165,11 +167,11 @@ void SoftmaxRefinement<dim>::local_assemble(
     }
 }
 
-template <int dim>
-Vector<double> SoftmaxRefinement<dim>::compute_refinement(
-    const std::vector<Point<dim>>& target_points_fine,
+template <int dim, int spacedim>
+Vector<double> SoftmaxRefinement<dim, spacedim>::compute_refinement(
+    const std::vector<Point<spacedim>>& target_points_fine,
     const Vector<double>& target_density_fine,
-    const std::vector<Point<dim>>& target_points_coarse,
+    const std::vector<Point<spacedim>>& target_points_coarse,
     const Vector<double>& target_density_coarse,
     const Vector<double>& potential_coarse,
     double regularization_param,
@@ -195,7 +197,7 @@ Vector<double> SoftmaxRefinement<dim>::compute_refinement(
 
     // Create appropriate quadrature
     std::unique_ptr<Quadrature<dim>> quadrature;
-    const bool use_simplex = (dynamic_cast<const FE_SimplexP<dim>*>(&fe) != nullptr);
+    const bool use_simplex = (dynamic_cast<const FE_SimplexP<dim, spacedim>*>(&fe) != nullptr);
     if (use_simplex) {
         quadrature = std::make_unique<QGaussSimplex<dim>>(quadrature_order);
     } else {
@@ -207,7 +209,7 @@ Vector<double> SoftmaxRefinement<dim>::compute_refinement(
     CopyData copy_data(target_points_fine.size());
 
     // Create filtered iterator for locally owned cells
-    FilteredIterator<typename DoFHandler<dim>::active_cell_iterator>
+    FilteredIterator<typename DoFHandler<dim, spacedim>::active_cell_iterator>
         begin_filtered(IteratorFilters::LocallyOwnedCell(),
                       dof_handler.begin_active()),
         end_filtered(IteratorFilters::LocallyOwnedCell(),
@@ -217,7 +219,7 @@ Vector<double> SoftmaxRefinement<dim>::compute_refinement(
     WorkStream::run(
         begin_filtered,
         end_filtered,
-        [this](const typename DoFHandler<dim>::active_cell_iterator &cell,
+        [this](const typename DoFHandler<dim, spacedim>::active_cell_iterator &cell,
                ScratchData &scratch_data,
                CopyData &copy_data) {
             this->local_assemble(cell, scratch_data, copy_data);
@@ -250,3 +252,4 @@ Vector<double> SoftmaxRefinement<dim>::compute_refinement(
 // Explicit instantiation
 template class SoftmaxRefinement<2>;
 template class SoftmaxRefinement<3>; 
+template class SoftmaxRefinement<2, 3>; 

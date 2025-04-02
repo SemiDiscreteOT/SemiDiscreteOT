@@ -8,5 +8,8 @@ DEAL_II_INITIALIZE_CACHED_VARIABLES()
 # Add all example subdirectories
 ADD_SUBDIRECTORY(tutorial_1)
 
+# Add all example subdirectories
+ADD_SUBDIRECTORY(tutorial_3)
+
 # Common settings for all examples
 SET(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin) 

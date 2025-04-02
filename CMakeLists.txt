@@ -68,6 +68,7 @@ SET(LIB_SRC
   src/solvers/SoftmaxRefinement.cc
   src/utils/ParameterManager.cc
   src/utils/VtkHandler.cc
+  src/core/Lloyd.cc
 )
 
 # Create the library

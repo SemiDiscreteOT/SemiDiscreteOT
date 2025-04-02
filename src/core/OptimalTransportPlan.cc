@@ -1,34 +1,20 @@
 #include "SemiDiscreteOT/core/OptimalTransportPlan.h"
-#include "SemiDiscreteOT/utils/utils.h"
-
-#include <deal.II/base/quadrature_lib.h>
-#include <deal.II/numerics/rtree.h>
-#include <deal.II/base/utilities.h>
-#include <deal.II/base/function.h>
-#include <deal.II/numerics/vector_tools.h>
-#include <deal.II/numerics/data_out.h>
-
-#include <filesystem>
-#include <fstream>
-#include <algorithm>
-#include <cmath>
-#include <stdexcept>
-#include <limits>
 
 namespace fs = std::filesystem;
 
 namespace OptimalTransportPlanSpace {
 
-template <int dim>
-OptimalTransportPlan<dim>::OptimalTransportPlan(const std::string& strategy_name)
-    : ParameterAcceptor("OptimalTransportPlan")
+template <int spacedim>
+OptimalTransportPlan<spacedim>::OptimalTransportPlan(const std::string& strategy_name)
+    : ParameterAcceptor("OptimalTransportPlan"),
+    distance_function(euclidean_distance<spacedim>)
 {
     strategy = create_strategy(strategy_name);
 }
 
-template <int dim>
-void OptimalTransportPlan<dim>::set_source_measure(
-    const std::vector<Point<dim>>& points,
+template <int spacedim>
+void OptimalTransportPlan<spacedim>::set_source_measure(
+    const std::vector<Point<spacedim>>& points,
     const std::vector<double>& density)
 {
     AssertDimension(points.size(), density.size());
@@ -36,9 +22,9 @@ void OptimalTransportPlan<dim>::set_source_measure(
     source_density = density;
 }
 
-template <int dim>
-void OptimalTransportPlan<dim>::set_target_measure(
-    const std::vector<Point<dim>>& points,
+template <int spacedim>
+void OptimalTransportPlan<spacedim>::set_target_measure(
+    const std::vector<Point<spacedim>>& points,
     const std::vector<double>& density)
 {
     AssertDimension(points.size(), density.size());
@@ -46,8 +32,8 @@ void OptimalTransportPlan<dim>::set_target_measure(
     target_density = density;
 }
 
-template <int dim>
-void OptimalTransportPlan<dim>::set_potential(
+template <int spacedim>
+void OptimalTransportPlan<spacedim>::set_potential(
     const Vector<double>& potential,
     const double regularization_param)
 {
@@ -56,70 +42,71 @@ void OptimalTransportPlan<dim>::set_potential(
     regularization_parameter = regularization_param;
 }
 
-template <int dim>
-void OptimalTransportPlan<dim>::set_truncation_radius(double radius)
+template <int spacedim>
+void OptimalTransportPlan<spacedim>::set_truncation_radius(double radius)
 {
     truncation_radius = radius;
 }
 
-template <int dim>
-void OptimalTransportPlan<dim>::compute_map()
+template <int spacedim>
+void OptimalTransportPlan<spacedim>::compute_map()
 {
     Assert(strategy, ExcMessage("No strategy selected"));
     Assert(!source_points.empty(), ExcMessage("Source measure not set"));
     Assert(!target_points.empty(), ExcMessage("Target measure not set"));
     Assert(transport_potential.size() > 0, ExcMessage("Transport potential not set"));
 
-    strategy->compute_map(source_points, source_density,
+    strategy->compute_map(distance_function, source_points, source_density,
                          target_points, target_density,
                          transport_potential, regularization_parameter,
                          truncation_radius);
 }
 
-template <int dim>
-void OptimalTransportPlan<dim>::save_map(const std::string& output_dir) const
+template <int spacedim>
+void OptimalTransportPlan<spacedim>::save_map(const std::string& output_dir) const
 {
     Assert(strategy, ExcMessage("No strategy selected"));
     fs::create_directories(output_dir);
     strategy->save_results(output_dir);
 }
 
-template <int dim>
-void OptimalTransportPlan<dim>::set_strategy(const std::string& strategy_name)
+template <int spacedim>
+void OptimalTransportPlan<spacedim>::set_strategy(const std::string& strategy_name)
 {
     strategy = create_strategy(strategy_name);
 }
 
-template <int dim>
-std::vector<std::string> OptimalTransportPlan<dim>::get_available_strategies()
+template <int spacedim>
+std::vector<std::string> OptimalTransportPlan<spacedim>::get_available_strategies()
 {
     return {"modal", "barycentric"};
 }
 
-template <int dim>
-std::unique_ptr<MapApproximationStrategy<dim>>
-OptimalTransportPlan<dim>::create_strategy(const std::string& name)
+template <int spacedim>
+std::unique_ptr<MapApproximationStrategy<spacedim>>
+OptimalTransportPlan<spacedim>::create_strategy(const std::string& name)
 {
     if (name == "modal")
-        return std::make_unique<ModalStrategy<dim>>();
+        return std::make_unique<ModalStrategy<spacedim>>();
     else if (name == "barycentric")
-        return std::make_unique<BarycentricStrategy<dim>>();
+        return std::make_unique<BarycentricStrategy<spacedim>>();
     else
         throw std::runtime_error("Unknown strategy: " + name);
 }
 
-// Implementation of ModalStrategy
-template <int dim>
-void ModalStrategy<dim>::compute_map(
-    const std::vector<Point<dim>>& source_points,
+// Implementation of NearestNeighborStrategy
+template <int spacedim>
+void NearestNeighborStrategy<spacedim>::compute_map(
+    const std::function<double(const Point<spacedim>&, const Point<spacedim>&)> distance_function,
+    const std::vector<Point<spacedim>>& source_points,
     const std::vector<double>& source_density,
-    const std::vector<Point<dim>>& target_points,
+    const std::vector<Point<spacedim>>& target_points,
     const std::vector<double>& target_density,
     const Vector<double>& potential,
     const double regularization_param,
     const double truncation_radius)
 {
-    using IndexedPoint = std::pair<Point<dim>, std::size_t>;
+    using IndexedPoint = std::pair<Point<spacedim>, std::size_t>;
     using RTreeParams = boost::geometry::index::rstar<8>;
     using RTree = boost::geometry::index::rtree<IndexedPoint, RTreeParams>;
 
@@ -150,7 +137,7 @@ void ModalStrategy<dim>::compute_map(
             // Use truncation radius to limit points to consider
             target_rtree.query(
                 boost::geometry::index::satisfies([&x, truncation_radius](const IndexedPoint& p) {
-                    return (x - p.first).norm() < truncation_radius;
+                    return distance_function(x, p.first) < truncation_radius;
                 }),
                 std::back_inserter(candidates)
             );
@@ -175,8 +162,7 @@ void ModalStrategy<dim>::compute_map(
             // Compute squared distance
             double squared_dist = 0.0;
             for (unsigned int d = 0; d < dim; ++d) {
-                double diff = x[d] - y[d];
-                squared_dist += diff * diff;
+                double squared_dist = std::pow(distance_function(x, y), 2);
             }
 
             // Compute score: potential - c(x,y) + regularization_param * log(target_density)
@@ -201,8 +187,8 @@ void ModalStrategy<dim>::compute_map(
     }
 }
 
-template <int dim>
-void ModalStrategy<dim>::save_results(const std::string& output_dir) const
+template <int spacedim>
+void NearestNeighborStrategy<spacedim>::save_results(const std::string& output_dir) const
 {
     // Save mapped points
     Utils::write_vector(this->mapped_points, output_dir + "/mapped_points", "txt");
@@ -224,18 +210,19 @@ void ModalStrategy<dim>::save_results(const std::string& output_dir) const
 }
 
 // Implementation of BarycentricStrategy
-template <int dim>
-void BarycentricStrategy<dim>::compute_map(
-    const std::vector<Point<dim>>& source_points,
+template <int spacedim>
+void BarycentricStrategy<spacedim>::compute_map(
+    const std::function<double(const Point<spacedim>&, const Point<spacedim>&)> distance_function,
+    const std::vector<Point<spacedim>>& source_points,
     const std::vector<double>& source_density,
-    const std::vector<Point<dim>>& target_points,
+    const std::vector<Point<spacedim>>& target_points,
     const std::vector<double>& target_density,
     const Vector<double>& potential,
     const double regularization_param,
     const double truncation_radius)
 {
-    using IndexedPoint = std::pair<Point<dim>, std::size_t>;
-    using RTreeParams = boost::geometry::index::rstar<8>;
+    using IndexedPoint = std::pair<Point<spacedim>, std::size_t>;
+    using RTreeParams = boost::geometry::index::rstar<8>; // TODO: set as hyperparameter ?
     using RTree = boost::geometry::index::rtree<IndexedPoint, RTreeParams>;
 
     // Build RTree for target points
@@ -265,7 +252,7 @@ void BarycentricStrategy<dim>::compute_map(
             // Use truncation radius to limit points to consider
             target_rtree.query(
                 boost::geometry::index::satisfies([&x, truncation_radius](const IndexedPoint& p) {
-                    return (x - p.first).norm() < truncation_radius;
+                    return distance_function(x, p.first) < truncation_radius;
                 }),
                 std::back_inserter(candidates)
             );
@@ -291,11 +278,7 @@ void BarycentricStrategy<dim>::compute_map(
             const Point<dim>& y = candidate.first;
             const std::size_t j = candidate.second;
             
-            double squared_dist = 0.0;
-            for (unsigned int d = 0; d < dim; ++d) {
-                double diff = x[d] - y[d];
-                squared_dist += diff * diff;
-            }
+            double squared_dist = std::pow(distance_function(x, y), 2);
 
             // Weight formula: target_density * exp((potential - 0.5*squared_dist) / regularization_param)
             double weight = target_density[j] * 
@@ -320,8 +303,8 @@ void BarycentricStrategy<dim>::compute_map(
     }
 }
 
-template <int dim>
-void BarycentricStrategy<dim>::save_results(const std::string& output_dir) const
+template <int spacedim>
+void BarycentricStrategy<spacedim>::save_results(const std::string& output_dir) const
 {
     // Save mapped points and density
     Utils::write_vector(this->mapped_points, output_dir + "/mapped_points", "txt");

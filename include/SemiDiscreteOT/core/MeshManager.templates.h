@@ -1,25 +1,25 @@
 #ifndef MESH_MANAGER_TEMPLATES_H
 #define MESH_MANAGER_TEMPLATES_H
 
-template <int dim>
-MeshManager<dim>::MeshManager(const MPI_Comm& comm)
+template <int dim, int spacedim>
+MeshManager<dim, spacedim>::MeshManager(const MPI_Comm& comm)
     : mpi_communicator(comm)
     , n_mpi_processes(Utilities::MPI::n_mpi_processes(comm))
     , this_mpi_process(Utilities::MPI::this_mpi_process(comm))
     , pcout(std::cout, this_mpi_process == 0)
 {}
 
-template <int dim>
+template <int dim, int spacedim>
 template <typename TriangulationType>
-void MeshManager<dim>::generate_mesh(TriangulationType& tria,
+void MeshManager<dim, spacedim>::generate_mesh(TriangulationType& tria,
                                    const std::string& grid_generator_function,
                                    const std::string& grid_generator_arguments,
                                    const unsigned int n_refinements,
                                    const bool use_tetrahedral_mesh)
 {
-    if constexpr (std::is_same_v<TriangulationType, parallel::fullydistributed::Triangulation<dim>>) {
+    if constexpr (std::is_same_v<TriangulationType, parallel::fullydistributed::Triangulation<dim, spacedim>>) {
         // For fullydistributed triangulation, first create a serial triangulation
-        Triangulation<dim> serial_tria;
+        Triangulation<dim, spacedim> serial_tria;
         GridGenerator::generate_from_name_and_arguments(
             serial_tria,
             grid_generator_function,
@@ -31,6 +31,9 @@ void MeshManager<dim>::generate_mesh(TriangulationType& tria,
             for (const auto &cell : serial_tria.active_cell_iterators())
                 if (center.distance(cell->center()) > cell->diameter() / 10)
                     cell->set_all_manifold_ids(0);
+                
+        if (use_tetrahedral_mesh && dim == 3 && spacedim == 3) {
+            GridGenerator::convert_hypercube_to_simplex_mesh(serial_tria, serial_tria);
         }
 
         serial_tria.refine_global(n_refinements);
@@ -40,7 +43,7 @@ void MeshManager<dim>::generate_mesh(TriangulationType& tria,
         }
 
         // Set up the partitioner to use z-order curve
-        tria.set_partitioner([](Triangulation<dim>& tria_to_partition, const unsigned int n_partitions) {
+        tria.set_partitioner([](Triangulation<dim, spacedim>& tria_to_partition, const unsigned int n_partitions) {
             GridTools::partition_triangulation_zorder(n_partitions, tria_to_partition);
         }, TriangulationDescription::Settings::construct_multigrid_hierarchy);
 
@@ -64,6 +67,9 @@ void MeshManager<dim>::generate_mesh(TriangulationType& tria,
             for (const auto &cell : tria.active_cell_iterators())
                 if (center.distance(cell->center()) > cell->diameter() / 10)
                     cell->set_all_manifold_ids(0);
+                
+        if (use_tetrahedral_mesh && dim == 3 && spacedim == 3) {
+            GridGenerator::convert_hypercube_to_simplex_mesh(tria, tria);
         }
 
         tria.refine_global(n_refinements);
@@ -74,12 +80,12 @@ void MeshManager<dim>::generate_mesh(TriangulationType& tria,
     }
 }
 
-template <int dim>
-void MeshManager<dim>::load_source_mesh(parallel::fullydistributed::Triangulation<dim>& source_mesh)
+template <int dim, int spacedim>
+void MeshManager<dim, spacedim>::load_source_mesh(parallel::fullydistributed::Triangulation<dim, spacedim>& source_mesh)
 {
     // First load source mesh into a serial triangulation
-    Triangulation<dim> serial_source;
-    GridIn<dim> grid_in_source;
+    Triangulation<dim, spacedim> serial_source;
+    GridIn<dim, spacedim> grid_in_source;
     grid_in_source.attach_triangulation(serial_source);
     bool source_loaded = false;
 
@@ -123,8 +129,8 @@ void MeshManager<dim>::load_source_mesh(parallel::fullydistributed::Triangulatio
     source_mesh.create_triangulation(construction_data);
 }
 
-template <int dim>
-void MeshManager<dim>::load_target_mesh(Triangulation<dim>& target_mesh)
+template <int dim, int spacedim>
+void MeshManager<dim, spacedim>::load_target_mesh(Triangulation<dim, spacedim>& target_mesh)
 {
     // Only rank 0 loads the target mesh
     if (this_mpi_process != 0) {
@@ -132,7 +138,7 @@ void MeshManager<dim>::load_target_mesh(Triangulation<dim>& target_mesh)
     }
 
     // Load target mesh (stays serial)
-    GridIn<dim> grid_in_target;
+    GridIn<dim, spacedim> grid_in_target;
     grid_in_target.attach_triangulation(target_mesh);
     bool target_loaded = false;
 
@@ -167,9 +173,9 @@ void MeshManager<dim>::load_target_mesh(Triangulation<dim>& target_mesh)
     }
 }
 
-template <int dim>
-void MeshManager<dim>::load_mesh_at_level(parallel::fullydistributed::Triangulation<dim>& source_mesh,
-                                        DoFHandler<dim>& dof_handler_source,
+template <int dim, int spacedim>
+void MeshManager<dim, spacedim>::load_mesh_at_level(parallel::fullydistributed::Triangulation<dim, spacedim>& source_mesh,
+                                        DoFHandler<dim, spacedim>& dof_handler_source,
                                         const std::string& mesh_file)
 {
     pcout << "Attempting to load mesh from: " << mesh_file << std::endl;
@@ -193,8 +199,8 @@ void MeshManager<dim>::load_mesh_at_level(parallel::fullydistributed::Triangulat
 
     try {
         // First load into a serial triangulation
-        Triangulation<dim> serial_source;
-        GridIn<dim> grid_in;
+        Triangulation<dim, spacedim> serial_source;
+        GridIn<dim, spacedim> grid_in;
         grid_in.attach_triangulation(serial_source);
         
         grid_in.read_msh(input);
@@ -240,9 +246,9 @@ void MeshManager<dim>::load_mesh_at_level(parallel::fullydistributed::Triangulat
     }
 }
 
-template <int dim>
-void MeshManager<dim>::save_meshes(const parallel::fullydistributed::Triangulation<dim>& source_mesh,
-                                 const Triangulation<dim>& target_mesh)
+template <int dim, int spacedim>
+void MeshManager<dim, spacedim>::save_meshes(const parallel::fullydistributed::Triangulation<dim, spacedim>& source_mesh,
+                                 const Triangulation<dim, spacedim>& target_mesh)
 {
     write_mesh(source_mesh,
               mesh_directory + "/source",
@@ -255,9 +261,9 @@ void MeshManager<dim>::save_meshes(const parallel::fullydistributed::Triangulati
     pcout << "Meshes saved in VTK and MSH formats" << std::endl;
 }
 
-template <int dim>
+template <int dim, int spacedim>
 template <typename TriangulationType>
-bool MeshManager<dim>::write_mesh(const TriangulationType& mesh,
+bool MeshManager<dim, spacedim>::write_mesh(const TriangulationType& mesh,
                                 const std::string& filepath,
                                 const std::vector<std::string>& formats,
                                 const std::vector<double>* cell_data,
@@ -303,7 +309,7 @@ bool MeshManager<dim>::write_mesh(const TriangulationType& mesh,
                 pcout << "Mesh saved and converted to MSH2 format: " << filepath + ".msh" << std::endl;
             }
             else if (format == "vtu") {
-                DataOut<dim> data_out;
+                DataOut<dim, spacedim> data_out;
                 data_out.attach_triangulation(mesh);
                 
                 // Add cell data if provided
@@ -341,8 +347,8 @@ bool MeshManager<dim>::write_mesh(const TriangulationType& mesh,
     }
 }
 
-template <int dim>
-std::vector<std::string> MeshManager<dim>::get_mesh_hierarchy_files(const std::string& dir)
+template <int dim, int spacedim>
+std::vector<std::string> MeshManager<dim, spacedim>::get_mesh_hierarchy_files(const std::string& dir)
 {
     std::vector<std::string> mesh_files;
     

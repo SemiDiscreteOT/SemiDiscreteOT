@@ -1,30 +1,45 @@
 #ifndef OPTIMAL_TRANSPORT_PLAN_H
 #define OPTIMAL_TRANSPORT_PLAN_H
 
-#include <deal.II/base/point.h>
-#include <deal.II/lac/vector.h>
-#include <deal.II/grid/tria.h>
-#include <deal.II/fe/fe_values.h>
-#include <deal.II/base/parameter_acceptor.h>
-
 #include <memory>
 #include <string>
 #include <vector>
 #include <map>
+#include <filesystem>
+#include <fstream>
+#include <algorithm>
+#include <cmath>
+#include <stdexcept>
+
+#include <deal.II/base/point.h>
+#include <deal.II/base/quadrature_lib.h>
+#include <deal.II/base/utilities.h>
+#include <deal.II/base/function.h>
+#include <deal.II/base/parameter_acceptor.h>
+#include <deal.II/lac/vector.h>
+#include <deal.II/grid/tria.h>
+#include <deal.II/fe/fe_values.h>
+#include <deal.II/numerics/rtree.h>
+#include <deal.II/numerics/vector_tools.h>
+#include <deal.II/numerics/data_out.h>
+
+#include "SemiDiscreteOT/solvers/Distance.h"
+#include "SemiDiscreteOT/utils/utils.h"
+
 
 using namespace dealii;
 
 namespace OptimalTransportPlanSpace {
 
 // Forward declarations
-template <int dim> class MapApproximationStrategy;
+template <int spacedim> class MapApproximationStrategy;
 
 /**
  * Class for computing and managing optimal transport map approximations.
  * This class provides various strategies for approximating the optimal transport
  * map given source/target measures and optimal transport potentials.
  */
-template <int dim>
+template <int spacedim>
 class OptimalTransportPlan : public ParameterAcceptor {
 public:
     /**
@@ -33,11 +48,23 @@ public:
     OptimalTransportPlan(const std::string& strategy_name = "modal");
 
     /**
+     * Set the distance function used to compute distances between points.
+     * This function accepts a callable object (e.g., lambda) that takes two points
+     * as input and returns a double representing their distance.
+     *
+     * @param distance_function Function to compute distance between two points.
+     */
+    void set_distance_function(const std::function<double(const Point<spacedim>&, const Point<spacedim>&)>& dist)
+    {
+        distance_function = dist;
+    }
+
+    /**
      * Set the source measure data.
      * @param points Vector of source points
      * @param density Vector of density values at source points
      */
-    void set_source_measure(const std::vector<Point<dim>>& points,
+    void set_source_measure(const std::vector<Point<spacedim>>& points,
                           const std::vector<double>& density);
 
     /**
@@ -45,7 +72,7 @@ public:
      * @param points Vector of target points
      * @param density Vector of density values at target points
      */
-    void set_target_measure(const std::vector<Point<dim>>& points,
+    void set_target_measure(const std::vector<Point<spacedim>>& points,
                           const std::vector<double>& density);
 
     /**
@@ -88,42 +115,47 @@ public:
 
 private:
     // Data members
-    std::vector<Point<dim>> source_points;
+    std::vector<Point<spacedim>> source_points;
     std::vector<double> source_density;
-    std::vector<Point<dim>> target_points;
+    std::vector<Point<spacedim>> target_points;
     std::vector<double> target_density;
     Vector<double> transport_potential;
     double regularization_parameter;
     double truncation_radius = -1.0;  // Negative means no truncation
 
+    // Distance function
+    std::function<double(const Point<spacedim>&, const Point<spacedim>&)> distance_function;
+
     // Strategy pattern implementation
-    std::unique_ptr<MapApproximationStrategy<dim>> strategy;
+    std::unique_ptr<MapApproximationStrategy<spacedim>> strategy;
 
     // Factory method to create strategies
-    static std::unique_ptr<MapApproximationStrategy<dim>> 
+    static std::unique_ptr<MapApproximationStrategy<spacedim>> 
     create_strategy(const std::string& name);
 };
 
 /**
  * Abstract base class for map approximation strategies.
  */
-template <int dim>
+template <int spacedim>
 class MapApproximationStrategy {
 public:
     virtual ~MapApproximationStrategy() = default;
 
-    virtual void compute_map(const std::vector<Point<dim>>& source_points,
-                           const std::vector<double>& source_density,
-                           const std::vector<Point<dim>>& target_points,
-                           const std::vector<double>& target_density,
-                           const Vector<double>& potential,
-                           const double regularization_param,
-                           const double truncation_radius) = 0;
+    virtual void compute_map(
+        const std::function<double(const Point<spacedim>&, const Point<spacedim>&)> distance_function,
+        const std::vector<Point<spacedim>>& source_points,
+        const std::vector<double>& source_density,
+        const std::vector<Point<spacedim>>& target_points,
+        const std::vector<double>& target_density,
+        const Vector<double>& potential,
+        const double regularization_param,
+        const double truncation_radius) = 0;
 
     virtual void save_results(const std::string& output_dir) const = 0;
 
 protected:
-    std::vector<Point<dim>> mapped_points;
+    std::vector<Point<spacedim>> mapped_points;
     std::vector<double> transport_density;
 };
 
@@ -132,16 +164,18 @@ protected:
  * Maps each source point to the target point that maximizes:
  * score = potential[j] - 0.5*||x-y||^2 + regularization_param * log(target_density[j])
  */
-template <int dim>
-class ModalStrategy : public MapApproximationStrategy<dim> {
+template <int spacedim>
+class NearestNeighborStrategy : public MapApproximationStrategy<spacedim> {
 public:
-    void compute_map(const std::vector<Point<dim>>& source_points,
-                    const std::vector<double>& source_density,
-                    const std::vector<Point<dim>>& target_points,
-                    const std::vector<double>& target_density,
-                    const Vector<double>& potential,
-                    const double regularization_param,
-                    const double truncation_radius) override;
+    void compute_map(
+        const std::function<double(const Point<spacedim>&, const Point<spacedim>&)> distance_function,
+        const std::vector<Point<spacedim>>& source_points,
+        const std::vector<double>& source_density,
+        const std::vector<Point<spacedim>>& target_points,
+        const std::vector<double>& target_density,
+        const Vector<double>& potential,
+        const double regularization_param,
+        const double truncation_radius) override;
 
     void save_results(const std::string& output_dir) const override;
 };
@@ -151,16 +185,18 @@ public:
  * Computes a weighted average of target points where weights are:
  * w_j = target_density[j] * exp((potential[j] - 0.5*||x-y||^2) / regularization_param)
  */
-template <int dim>
-class BarycentricStrategy : public MapApproximationStrategy<dim> {
+template <int spacedim>
+class BarycentricStrategy : public MapApproximationStrategy<spacedim> {
 public:
-    void compute_map(const std::vector<Point<dim>>& source_points,
-                    const std::vector<double>& source_density,
-                    const std::vector<Point<dim>>& target_points,
-                    const std::vector<double>& target_density,
-                    const Vector<double>& potential,
-                    const double regularization_param,
-                    const double truncation_radius) override;
+    void compute_map(
+        const std::function<double(const Point<spacedim>&, const Point<spacedim>&)> distance_function,
+        const std::vector<Point<spacedim>>& source_points,
+        const std::vector<double>& source_density,
+        const std::vector<Point<spacedim>>& target_points,
+        const std::vector<double>& target_density,
+        const Vector<double>& potential,
+        const double regularization_param,
+        const double truncation_radius) override;
 
     void save_results(const std::string& output_dir) const override;
 };

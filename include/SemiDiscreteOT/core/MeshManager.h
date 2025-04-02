@@ -20,7 +20,7 @@
 
 using namespace dealii;
 
-template <int dim>
+template <int dim, int spacedim = dim>
 class MeshManager {
 public:
     /**
@@ -48,13 +48,13 @@ public:
      * @brief Load source mesh from file into distributed triangulation
      * @param source_mesh Distributed triangulation to load into
      */
-    void load_source_mesh(parallel::fullydistributed::Triangulation<dim>& source_mesh);
+    void load_source_mesh(parallel::fullydistributed::Triangulation<dim, spacedim>& source_mesh);
 
     /**
      * @brief Load target mesh from file into serial triangulation
      * @param target_mesh Serial triangulation to load into
      */
-    void load_target_mesh(Triangulation<dim>& target_mesh);
+    void load_target_mesh(Triangulation<dim, spacedim>& target_mesh);
 
     /**
      * @brief Load mesh at specific refinement level
@@ -62,8 +62,8 @@ public:
      * @param dof_handler_source DoF handler for the mesh
      * @param mesh_file Path to mesh file
      */
-    void load_mesh_at_level(parallel::fullydistributed::Triangulation<dim>& source_mesh,
-                           DoFHandler<dim>& dof_handler_source,
+    void load_mesh_at_level(parallel::fullydistributed::Triangulation<dim, spacedim>& source_mesh,
+                           DoFHandler<dim, spacedim>& dof_handler_source,
                            const std::string& mesh_file);
 
     /**
@@ -71,8 +71,8 @@ public:
      * @param source_mesh Distributed source triangulation
      * @param target_mesh Serial target triangulation
      */
-    void save_meshes(const parallel::fullydistributed::Triangulation<dim>& source_mesh,
-                    const Triangulation<dim>& target_mesh);
+    void save_meshes(const parallel::fullydistributed::Triangulation<dim, spacedim>& source_mesh,
+                    const Triangulation<dim, spacedim>& target_mesh);
 
     /**
      * @brief Write mesh to file in specified formats with optional cell data

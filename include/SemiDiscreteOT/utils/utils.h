@@ -275,7 +275,6 @@ inline std::vector<std::pair<std::string, std::string>> get_target_hierarchy_fil
 
 /**
  * @brief Load hierarchy data from files
- * @tparam dim Dimension of the mesh
  * @param hierarchy_dir Directory containing hierarchy files
  * @param child_indices Vector to store parent-child relationships
  * @param specific_level Level to load (-1 for all levels)
@@ -283,7 +282,7 @@ inline std::vector<std::pair<std::string, std::string>> get_target_hierarchy_fil
  * @param pcout Parallel console output
  * @return true if load successful, false otherwise
  */
-template <int dim>
+template <int dim, int spacedim>
 bool load_hierarchy_data(const std::string& hierarchy_dir,
                         std::vector<std::vector<std::vector<size_t>>>& child_indices,
                         int specific_level,
@@ -398,6 +397,7 @@ bool load_hierarchy_data(const std::string& hierarchy_dir,
 /**
  * @brief Write mesh to file in specified formats with optional cell data
  * @tparam dim Dimension of the mesh
+ * @tparam spacedim Ambient space dimension
  * @param mesh Triangulation to write
  * @param filepath Base path for output files (without extension)
  * @param formats Vector of output formats ("vtk", "msh", "vtu")
@@ -405,8 +405,8 @@ bool load_hierarchy_data(const std::string& hierarchy_dir,
  * @param data_name Name for the cell data field
  * @return true if write successful, false otherwise
  */
-template<int dim>
-bool write_mesh(const dealii::Triangulation<dim>& mesh,
+template<int dim, int spacedim = dim>
+bool write_mesh(const dealii::Triangulation<dim, spacedim>& mesh,
                const std::string& filepath,
                const std::vector<std::string>& formats,
                const std::vector<double>* cell_data = nullptr,
@@ -452,7 +452,7 @@ bool write_mesh(const dealii::Triangulation<dim>& mesh,
                 std::cout << "Mesh saved and converted to MSH2 format: " << filepath + ".msh" << std::endl;
             }
             else if (format == "vtu") {
-                dealii::DataOut<dim> data_out;
+                dealii::DataOut<dim, spacedim> data_out;
                 data_out.attach_triangulation(mesh);
                 
                 // Add cell data if provided
@@ -500,10 +500,11 @@ bool write_mesh(const dealii::Triangulation<dim>& mesh,
  * @param target_field Target field values (output)
  */
 template <int dim, int spacedim>
-void interpolate_non_conforming_nearest(const dealii::DoFHandler<dim, spacedim> &source_dh,
-                                      const dealii::Vector<double>            &source_field,
-                                      const dealii::DoFHandler<dim, spacedim> &target_dh,
-                                      dealii::LinearAlgebra::distributed::Vector<double> &target_field)
+void interpolate_non_conforming_nearest(
+    const dealii::DoFHandler<dim, spacedim> &source_dh,
+    const dealii::Vector<double>            &source_field,
+    const dealii::DoFHandler<dim, spacedim> &target_dh,
+    dealii::LinearAlgebra::distributed::Vector<double> &target_field)
 {
   using namespace dealii;
   
@@ -515,20 +516,20 @@ void interpolate_non_conforming_nearest(const dealii::DoFHandler<dim, spacedim> 
   const auto &source_fe = source_dh.get_fe();
   const auto &target_fe = target_dh.get_fe();
 
-  std::unique_ptr<Mapping<dim>> source_mapping;
+  std::unique_ptr<Mapping<dim, spacedim>> source_mapping;
   if (source_fe.reference_cell() == ReferenceCells::get_hypercube<dim>())
-    source_mapping = std::make_unique<MappingQ1<dim>>();
+    source_mapping = std::make_unique<MappingQ1<dim, spacedim>>();
   else
-    source_mapping = std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
+    source_mapping = std::make_unique<MappingFE<dim, spacedim>>(FE_SimplexP<dim, spacedim>(1));
 
-  std::unique_ptr<Mapping<dim>> target_mapping;
+  std::unique_ptr<Mapping<dim, spacedim>> target_mapping;
   if (target_fe.reference_cell() == ReferenceCells::get_hypercube<dim>())
-    target_mapping = std::make_unique<MappingQ1<dim>>();
+    target_mapping = std::make_unique<MappingQ1<dim, spacedim>>();
   else
-    target_mapping = std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
+    target_mapping = std::make_unique<MappingFE<dim, spacedim>>(FE_SimplexP<dim, spacedim>(1));
 
   const Quadrature<dim> target_quadrature(target_fe.get_generalized_support_points());
-  FEValues<dim> target_fe_values(*target_mapping,
+  FEValues<dim, spacedim> target_fe_values(*target_mapping,
                                 target_fe,
                                 target_quadrature,
                                 update_quadrature_points);
@@ -563,7 +564,7 @@ void interpolate_non_conforming_nearest(const dealii::DoFHandler<dim, spacedim> 
       continue;
 
     target_fe_values.reinit(target_cell);
-    const std::vector<Point<dim>> &target_points = target_fe_values.get_quadrature_points();
+    const std::vector<Point<spacedim>> &target_points = target_fe_values.get_quadrature_points();
     target_cell->get_dof_indices(target_dof_indices);
 
     for (unsigned int q = 0; q < target_points.size(); ++q)
@@ -579,7 +580,7 @@ void interpolate_non_conforming_nearest(const dealii::DoFHandler<dim, spacedim> 
       const unsigned int nearest_index = nearest.front().second;
       auto chosen_source_cell = cell_centers[nearest_index].second;
 
-      Point<dim> p_unit;
+      Point<spacedim> p_unit;
       try
       {
         p_unit = source_mapping->transform_real_to_unit_cell(chosen_source_cell, target_point);
@@ -635,17 +636,17 @@ void interpolate_non_conforming(const dealii::DoFHandler<dim, spacedim> &source_
   const auto &source_fe = source_dh.get_fe();
   const auto &target_fe = target_dh.get_fe();
 
-  std::unique_ptr<Mapping<dim>> source_mapping;
+  std::unique_ptr<Mapping<dim, spacedim>> source_mapping;
   if (source_dh.get_fe().reference_cell() == ReferenceCells::get_hypercube<dim>())
-    source_mapping = std::make_unique<MappingQ1<dim>>();
+    source_mapping = std::make_unique<MappingQ1<dim, spacedim>>();
   else
-    source_mapping = std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
+    source_mapping = std::make_unique<MappingFE<dim, spacedim>>(FE_SimplexP<dim, spacedim>(1));
 
-  std::unique_ptr<Mapping<dim>> target_mapping;
+  std::unique_ptr<Mapping<dim, spacedim>> target_mapping;
   if (target_dh.get_fe().reference_cell() == ReferenceCells::get_hypercube<dim>())
-    target_mapping = std::make_unique<MappingQ1<dim>>();
+    target_mapping = std::make_unique<MappingQ1<dim, spacedim>>();
   else
-    target_mapping = std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
+    target_mapping = std::make_unique<MappingFE<dim, spacedim>>(FE_SimplexP<dim, spacedim>(1));
 
   std::vector<std::pair<Point<spacedim>, typename DoFHandler<dim, spacedim>::active_cell_iterator>>
     cell_centers;
@@ -691,12 +692,12 @@ void interpolate_non_conforming(const dealii::DoFHandler<dim, spacedim> &source_
       continue;
 
     target_fe_values.reinit(target_cell);
-    const std::vector<Point<dim>> &target_points = target_fe_values.get_quadrature_points();
+    const std::vector<Point<spacedim>> &target_points = target_fe_values.get_quadrature_points();
     target_cell->get_dof_indices(target_dof_indices);
 
     for (unsigned int q = 0; q < target_points.size(); ++q)
     {
-      const Point<dim> &target_point = target_points[q];
+      const Point<spacedim> &target_point = target_points[q];
 
       std::vector<std::pair<Point<spacedim>, unsigned int>> nearest;
       rtree.query(boost::geometry::index::nearest(target_point, 1),
@@ -737,9 +738,9 @@ void interpolate_non_conforming(const dealii::DoFHandler<dim, spacedim> &source_
  * @return Unique pointer to appropriate finite element
  * @throw std::runtime_error if cell type cannot be determined
  */
-template <int dim>
-std::unique_ptr<dealii::FiniteElement<dim>> create_fe_for_mesh(
-    const dealii::Triangulation<dim>& triangulation,
+template <int dim, int spacedim = dim>
+std::unique_ptr<dealii::FiniteElement<dim, spacedim>> create_fe_for_mesh(
+    const dealii::Triangulation<dim, spacedim>& triangulation,
     const unsigned int degree = 1)
 {
     bool has_quads_or_hexes = false;
@@ -753,9 +754,9 @@ std::unique_ptr<dealii::FiniteElement<dim>> create_fe_for_mesh(
     }
 
     if (has_triangles_or_tets && !has_quads_or_hexes) {
-        return std::make_unique<dealii::FE_SimplexP<dim>>(degree);
+        return std::make_unique<dealii::FE_SimplexP<dim, spacedim>>(degree);
     } else if (has_quads_or_hexes && !has_triangles_or_tets) {
-        return std::make_unique<dealii::FE_Q<dim>>(degree);
+        return std::make_unique<dealii::FE_Q<dim, spacedim>>(degree);
     } else {
         throw std::runtime_error("Mixed cell types or no cells found in triangulation");
     }
@@ -770,11 +771,11 @@ std::unique_ptr<dealii::FiniteElement<dim>> create_fe_for_mesh(
  * @return Pair of unique pointers to appropriate finite element and mapping
  * @throw std::runtime_error if cell type cannot be determined
  */
-template <int dim>
-std::pair<std::unique_ptr<dealii::FiniteElement<dim>>, 
-          std::unique_ptr<dealii::Mapping<dim>>> 
+template<int dim, int spacedim>
+std::pair<std::unique_ptr<dealii::FiniteElement<dim, spacedim>>, 
+          std::unique_ptr<dealii::Mapping<dim, spacedim>>> 
 create_fe_and_mapping_for_mesh(
-    const dealii::Triangulation<dim>& triangulation,
+    const dealii::Triangulation<dim, spacedim>& triangulation,
     const unsigned int fe_degree = 1,
     const unsigned int mapping_degree = 1)
 {
@@ -788,15 +789,15 @@ create_fe_and_mapping_for_mesh(
             has_triangles_or_tets = true;
     }
 
-    std::unique_ptr<dealii::FiniteElement<dim>> fe;
-    std::unique_ptr<dealii::Mapping<dim>> mapping;
+    std::unique_ptr<dealii::FiniteElement<dim, spacedim>> fe;
+    std::unique_ptr<dealii::Mapping<dim, spacedim>> mapping;
 
     if (has_triangles_or_tets) {
-        fe = std::make_unique<dealii::FE_SimplexP<dim>>(fe_degree);
-        mapping = std::make_unique<dealii::MappingFE<dim>>(dealii::FE_SimplexP<dim>(mapping_degree));
+        fe = std::make_unique<dealii::FE_SimplexP<dim, spacedim>>(fe_degree);
+        mapping = std::make_unique<dealii::MappingFE<dim, spacedim>>(dealii::FE_SimplexP<dim, spacedim>(mapping_degree));
     } else if (has_quads_or_hexes) {
-        fe = std::make_unique<dealii::FE_Q<dim>>(fe_degree);
-        mapping = std::make_unique<dealii::MappingQ1<dim>>();
+        fe = std::make_unique<dealii::FE_Q<dim, spacedim>>(fe_degree);
+        mapping = std::make_unique<dealii::MappingQ1<dim, spacedim>>();
     } else {
         throw std::runtime_error("Could not determine mesh cell type in triangulation");
     }
@@ -812,9 +813,9 @@ create_fe_and_mapping_for_mesh(
  * @return Unique pointer to appropriate quadrature
  * @throw std::runtime_error if cell type cannot be determined
  */
-template <int dim>
+template <int dim, int spacedim = dim>
 std::unique_ptr<dealii::Quadrature<dim>> create_quadrature_for_mesh(
-    const dealii::Triangulation<dim>& triangulation,
+    const dealii::Triangulation<dim, spacedim>& triangulation,
     const unsigned int order = 2)
 {
     bool has_quads_or_hexes = false;
@@ -849,12 +850,12 @@ std::unique_ptr<dealii::Quadrature<dim>> create_quadrature_for_mesh(
  * @param field_name Name of the field to read from the VTK file
  * @return bool Success status
  */
-template <int dim>
+template <int dim, int spacedim = dim>
 bool read_vtk_field(
     const std::string& filename,
-    dealii::DoFHandler<dim>& vtk_dof_handler,
+    dealii::DoFHandler<dim, spacedim>& vtk_dof_handler,
     dealii::Vector<double>& vtk_field,
-    dealii::Triangulation<dim>& vtk_tria,
+    dealii::Triangulation<dim, spacedim>& vtk_tria,
     const MPI_Comm& mpi_communicator,
     dealii::ConditionalOStream& pcout,
     bool broadcast_field = false,
@@ -865,7 +866,7 @@ bool read_vtk_field(
     vtk_tria.clear();
 
     // Read mesh from VTK file
-    dealii::GridIn<dim> grid_in;
+    dealii::GridIn<dim, spacedim> grid_in;
     grid_in.attach_triangulation(vtk_tria);
 
     std::ifstream vtk_file(filename);
