@@ -12,8 +12,8 @@
 
 namespace PowerDiagramSpace {
 
-template <int dim>
-GeogramPowerDiagram<dim>::GeogramPowerDiagram(const std::string& source_mesh_file)
+template <int dim, int spacedim>
+GeogramPowerDiagram<dim, spacedim>::GeogramPowerDiagram(const std::string& source_mesh_file)
     : source_mesh(std::make_unique<GEO::Mesh>()),
       dimension_voronoi(dim + 1),
       RVD_mesh(std::make_unique<GEO::Mesh>())
@@ -63,13 +63,12 @@ GeogramPowerDiagram<dim>::GeogramPowerDiagram(const std::string& source_mesh_fil
     
     source_mesh->vertices.set_dimension(dimension_voronoi);
 }
+template <int dim, int spacedim>
+GeogramPowerDiagram<dim, spacedim>::~GeogramPowerDiagram() = default;
 
-template <int dim>
-GeogramPowerDiagram<dim>::~GeogramPowerDiagram() = default;
-
-template <int dim>
-void GeogramPowerDiagram<dim>::set_generators(
-    const std::vector<Point<dim>> &points,
+template <int dim, int spacedim>
+void GeogramPowerDiagram<dim, spacedim>::set_generators(
+    const std::vector<Point<spacedim>> &points,
     const Vector<double> &potentials)
 {
     this->generator_points = points;
@@ -90,8 +89,8 @@ void GeogramPowerDiagram<dim>::set_generators(
     init_power_diagram();
 }
 
-template <int dim>
-void GeogramPowerDiagram<dim>::init_power_diagram()
+template <int dim, int spacedim>
+void GeogramPowerDiagram<dim, spacedim>::init_power_diagram()
 {
     const size_t nb_points = this->generator_points.size();
     
@@ -128,8 +127,8 @@ void GeogramPowerDiagram<dim>::init_power_diagram()
     RVD->create_threads();
 }
 
-template <int dim>
-void GeogramPowerDiagram<dim>::compute_power_diagram()
+template <int dim, int spacedim>
+void GeogramPowerDiagram<dim, spacedim>::compute_power_diagram()
 {
     if (!delaunay || !RVD) {
         throw std::runtime_error("Power diagram not initialized. Call set_generators first.");
@@ -152,8 +151,8 @@ void GeogramPowerDiagram<dim>::compute_power_diagram()
     }
 }
 
-template <int dim>
-void GeogramPowerDiagram<dim>::compute_cell_centroids()
+template <int dim, int spacedim>
+void GeogramPowerDiagram<dim, spacedim>::compute_cell_centroids()
 {
     if (!RVD_mesh) {
         throw std::runtime_error("Power diagram not computed. Call compute_power_diagram first.");
@@ -190,32 +189,32 @@ void GeogramPowerDiagram<dim>::compute_cell_centroids()
         if (volumes[v] != 0.0) {
             const double s = 1.0 / ::fabs(volumes[v]);
             const GEO::vec3& c = centroids[v] * s;
-            this->cell_centroids.push_back(Point<dim>(c.x, c.y, c.z));
+            this->cell_centroids.push_back(Point<spacedim>(c.x, c.y, c.z));
         }
     }
 }
 
-template <int dim>
-void GeogramPowerDiagram<dim>::output_vtu(const std::string& /*filename*/) const
+template <int dim, int spacedim>
+void GeogramPowerDiagram<dim, spacedim>::output_vtu(const std::string& /*filename*/) const
 {
     // For now, we'll just save the RVD mesh if save_RVD is true
     // TODO: Implement proper VTU output if needed
 }
 
-template <int dim>
-void GeogramPowerDiagram<dim>::save_centroids_to_file(const std::string& filename) const
+template <int dim, int spacedim>
+void GeogramPowerDiagram<dim, spacedim>::save_centroids_to_file(const std::string& filename) const
 {
     Utils::write_vector(this->cell_centroids, filename, "txt");
 }
 
-template <int dim>
-const std::vector<Point<dim>>& GeogramPowerDiagram<dim>::get_cell_centroids() const
+template <int dim, int spacedim>
+const std::vector<Point<spacedim>>& GeogramPowerDiagram<dim, spacedim>::get_cell_centroids() const
 {
     return this->cell_centroids;
 }
 
-template <int dim>
-bool GeogramPowerDiagram<dim>::load_volume_mesh(const std::string& filename, GEO::Mesh& mesh)
+template <int dim, int spacedim>
+bool GeogramPowerDiagram<dim, spacedim>::load_volume_mesh(const std::string& filename, GEO::Mesh& mesh)
 {
     GEO::MeshIOFlags flags;
     flags.set_element(GEO::MESH_CELLS);
@@ -242,8 +241,5 @@ bool GeogramPowerDiagram<dim>::load_volume_mesh(const std::string& filename, GEO
     return true;
 }
 
-// Explicit instantiation
-template class GeogramPowerDiagram<2>;
-template class GeogramPowerDiagram<3>;
-
+template class GeogramPowerDiagram<3, 3>;
 } 

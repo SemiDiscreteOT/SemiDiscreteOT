@@ -1,0 +1,50 @@
+subsection Tutorial 3
+  subsection SphereData
+    set number of refinements = 6
+  end
+
+  subsection SotParameterManager
+    set selected_task = lloyd
+    set io_coding = txt
+
+    subsection lloyd parameters
+      set max iterations = 100
+      set relative tolerance = 0
+    end
+
+    subsection mesh_generation
+      subsection source
+        set number of refinements = 6
+        set use custom density = true
+        set density file path  = output/density_field/source_density.vtk
+        set density file format = vtk
+      end
+
+      subsection target
+        set number of refinements = 2
+        set use custom density = true
+        set density file path  = output/density_field/target_density.vtk
+        set density file format = vtk
+      end
+
+    end
+
+    subsection rsot_solver
+      set max_iterations = 10000
+      set tolerance = 1e-3
+      set regularization_parameter = 1e-2
+      set epsilon = 1e-20
+      set tau = 1e-4  # Truncation error tolerance for integral radius bound
+      set verbose_output = false
+      set solver_type = BFGS
+      set quadrature_order = 3
+      set number_of_threads = 0
+      set use_epsilon_scaling = false
+      set epsilon_scaling_factor = 10
+      set epsilon_scaling_steps = 3
+      set use_caching = true
+      set max_cache_size_mb = 20000
+    end
+  end
+end
+

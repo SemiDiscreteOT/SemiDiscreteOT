@@ -15,6 +15,8 @@
 #include <geogram/delaunay/delaunay.h>
 #include <geogram/voronoi/RVD.h>
 
+#include "SemiDiscreteOT/solvers/SotSolver.h"
+
 // Forward declarations for Geogram types
 namespace GEO {
     class Mesh;
@@ -25,12 +27,12 @@ namespace PowerDiagramSpace {
 
 using namespace dealii;
 
-template <int dim>
+template <int dim, int spacedim=dim>
 class PowerDiagramBase {
 public:
     virtual ~PowerDiagramBase() = default;
     
-    virtual void set_generators(const std::vector<Point<dim>> &points,
+    virtual void set_generators(const std::vector<Point<spacedim>> &points,
                               const Vector<double> &potentials) = 0;
                        
     virtual void compute_power_diagram() = 0;
@@ -39,23 +41,29 @@ public:
     
     virtual void compute_cell_centroids() = 0;
     virtual void save_centroids_to_file(const std::string& filename) const = 0;
-    virtual const std::vector<Point<dim>>& get_cell_centroids() const = 0;
+    virtual const std::vector<Point<spacedim>>& get_cell_centroids() const = 0;
 
 protected:
-    std::vector<Point<dim>> generator_points;
+    std::vector<Point<spacedim>> generator_points;
     std::vector<double> generator_potentials;
-    std::vector<Point<dim>> cell_centroids;
+    std::vector<Point<spacedim>> cell_centroids;
 };
 
-template <int dim>
-class DealIIPowerDiagram : public PowerDiagramBase<dim> {
+template <int dim, int spacedim=dim>
+class DealIIPowerDiagram : public PowerDiagramBase<dim, spacedim> {
 public:
-    DealIIPowerDiagram(const Triangulation<dim> &source_mesh);
+    DealIIPowerDiagram(const Triangulation<dim, spacedim> &source_mesh);
     
-    void set_generators(const std::vector<Point<dim>> &points,
+    void set_generators(const std::vector<Point<spacedim>> &points,
                        const Vector<double> &potentials) override;
+
+    void set_distance_function(
+        const std::function<double(const Point<spacedim>&, const Point<spacedim>&)>& dist)
+    {
+        distance_function = dist;
+    }
                        
-    double power_distance(const Point<dim> &point,
+    double power_distance(const Point<spacedim> &point,
                          const unsigned int generator_idx) const;
                          
     void compute_power_diagram() override;
@@ -67,20 +75,22 @@ public:
     
     void compute_cell_centroids() override;
     void save_centroids_to_file(const std::string& filename) const override;
-    const std::vector<Point<dim>>& get_cell_centroids() const override;
+    const std::vector<Point<spacedim>>& get_cell_centroids() const override;
 
 private:
-    const Triangulation<dim>* source_triangulation;
+    const Triangulation<dim, spacedim>* source_triangulation;
     std::vector<unsigned int> cell_assignments;
+    std::function<double(const Point<spacedim>&, const Point<spacedim>&)> distance_function;
 };
 
-template <int dim>
-class GeogramPowerDiagram : public PowerDiagramBase<dim> {
+// TODO enable if dim=3 ?
+template <int dim, int spacedim = dim>
+class GeogramPowerDiagram : public PowerDiagramBase<dim, spacedim> {
 public:
     GeogramPowerDiagram(const std::string& source_mesh_file);
     ~GeogramPowerDiagram();
     
-    void set_generators(const std::vector<Point<dim>> &points,
+    void set_generators(const std::vector<Point<spacedim>> &points,
                        const Vector<double> &potentials) override;
                        
     void compute_power_diagram() override;
@@ -89,7 +99,7 @@ public:
     
     void compute_cell_centroids() override;
     void save_centroids_to_file(const std::string& filename) const override;
-    const std::vector<Point<dim>>& get_cell_centroids() const override;
+    const std::vector<Point<spacedim>>& get_cell_centroids() const override;
 
 private:
     void init_power_diagram();
@@ -107,16 +117,19 @@ private:
 };
 
 // Factory function to create appropriate PowerDiagram implementation
-template <int dim>
-std::unique_ptr<PowerDiagramBase<dim>> create_power_diagram(
+template <int dim, int spacedim>
+std::unique_ptr<PowerDiagramBase<dim, spacedim>> create_power_diagram(
     const std::string& implementation_type,
-    const Triangulation<dim>* dealii_mesh = nullptr,
+    const Triangulation<dim, spacedim>* dealii_mesh = nullptr,
     const std::string& geogram_mesh_file = "") {
     
     if (implementation_type == "dealii" && dealii_mesh != nullptr) {
-        return std::make_unique<DealIIPowerDiagram<dim>>(*dealii_mesh);
+        return std::make_unique<DealIIPowerDiagram<dim, spacedim>>(*dealii_mesh);
     } else if (implementation_type == "geogram" && !geogram_mesh_file.empty()) {
-        return std::make_unique<GeogramPowerDiagram<dim>>(geogram_mesh_file);
+        if constexpr (dim==3 && dim==spacedim)
+            return std::make_unique<GeogramPowerDiagram<dim, spacedim>>(geogram_mesh_file);
+        else
+            throw std::runtime_error("Geogram power diagram is only available for dim==spacedim");
     }
     throw std::runtime_error("Invalid power diagram implementation type or missing required parameters");
 }

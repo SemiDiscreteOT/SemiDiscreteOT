@@ -1,26 +1,11 @@
 #include "SemiDiscreteOT/core/SemiDiscreteOT.h"
-#include "SemiDiscreteOT/utils/utils.h"
-#include "SemiDiscreteOT/core/PowerDiagram.h"
-#include "SemiDiscreteOT/solvers/ExactSot.h"
-#include "SemiDiscreteOT/core/OptimalTransportPlan.h"
-#include "SemiDiscreteOT/core/PointCloudHierarchy.h"
-#include "SemiDiscreteOT/solvers/SoftmaxRefinement.h"
-#include <deal.II/base/timer.h>
-#include <filesystem>
-#include <deal.II/base/vectorization.h>
-#include <deal.II/lac/vector_operations_internal.h>
-#include <deal.II/grid/grid_tools.h>
-#include "SemiDiscreteOT/solvers/SotSolver.h"
-#include "SemiDiscreteOT/utils/ColorDefinitions.h"
-#include <deal.II/grid/grid_in.h>
-#include <deal.II/numerics/fe_field_function.h>
-#include <deal.II/base/function.h>
+
 namespace fs = std::filesystem;
 
 using namespace dealii;
 
-template <int dim>
-SemiDiscreteOT<dim>::SemiDiscreteOT(const MPI_Comm &comm)
+template <int dim, int spacedim>
+SemiDiscreteOT<dim, spacedim>::SemiDiscreteOT(const MPI_Comm &comm)
     : mpi_communicator(comm)
     , n_mpi_processes(Utilities::MPI::n_mpi_processes(comm))
     , this_mpi_process(Utilities::MPI::this_mpi_process(comm))
@@ -38,13 +23,13 @@ SemiDiscreteOT<dim>::SemiDiscreteOT(const MPI_Comm &comm)
     , target_mesh()
     , dof_handler_source(source_mesh)
     , dof_handler_target(target_mesh)
-    , mesh_manager(std::make_unique<MeshManager<dim>>(comm))
-    , sot_solver(std::make_unique<SotSolver<dim>>(comm))
+    , mesh_manager(std::make_unique<MeshManager<dim, spacedim>>(comm))
+    , sot_solver(std::make_unique<SotSolver<dim, spacedim>>(comm))
 {
 }
 
-template <int dim>
-void SemiDiscreteOT<dim>::mesh_generation()
+template <int dim, int spacedim>
+void SemiDiscreteOT<dim, spacedim>::mesh_generation()
 {
     mesh_manager->generate_mesh(source_mesh,
                               source_params.grid_generator_function,
@@ -61,9 +46,8 @@ void SemiDiscreteOT<dim>::mesh_generation()
     mesh_manager->save_meshes(source_mesh, target_mesh);
 }
 
-
-template <int dim>
-void SemiDiscreteOT<dim>::load_meshes()
+template <int dim, int spacedim>
+void SemiDiscreteOT<dim, spacedim>::load_meshes()
 {
     mesh_manager->load_source_mesh(source_mesh);
     mesh_manager->load_target_mesh(target_mesh);
@@ -83,21 +67,21 @@ void SemiDiscreteOT<dim>::load_meshes()
     }
 }
 
-template <int dim>
-std::vector<std::pair<std::string, std::string>> SemiDiscreteOT<dim>::get_target_hierarchy_files() const
+template <int dim, int spacedim>
+std::vector<std::pair<std::string, std::string>> SemiDiscreteOT<dim, spacedim>::get_target_hierarchy_files() const
 {
     return Utils::get_target_hierarchy_files(multilevel_params.target_hierarchy_dir);
 }
 
-template <int dim>
-void SemiDiscreteOT<dim>::load_target_points_at_level(
+template <int dim, int spacedim>
+void SemiDiscreteOT<dim, spacedim>::load_target_points_at_level(
     const std::string& points_file,
     const std::string& density_file)
 {
     pcout << "Loading target points from: " << points_file << std::endl;
     pcout << "Loading target densities from: " << density_file << std::endl;
 
-    std::vector<Point<dim>> local_target_points;
+    std::vector<Point<spacedim>> local_target_points;
     std::vector<double> local_densities;
     bool load_success = true;
 
@@ -151,18 +135,18 @@ void SemiDiscreteOT<dim>::load_target_points_at_level(
     pcout << Color::green << "Successfully loaded " << n_points << " target points at this level" << Color::reset << std::endl;
 }
 
-template <int dim>
-void SemiDiscreteOT<dim>::load_hierarchy_data(const std::string& hierarchy_dir, int specific_level) {
-    has_hierarchy_data_ = Utils::load_hierarchy_data<dim>(hierarchy_dir, child_indices_, specific_level, mpi_communicator, pcout);
+template <int dim, int spacedim>
+void SemiDiscreteOT<dim, spacedim>::load_hierarchy_data(const std::string& hierarchy_dir, int specific_level) {
+    has_hierarchy_data_ = Utils::load_hierarchy_data<dim, spacedim>(hierarchy_dir, child_indices_, specific_level, mpi_communicator, pcout);
 }
 
-template <int dim>
-void SemiDiscreteOT<dim>::normalize_density(LinearAlgebra::distributed::Vector<double>& density)
+template <int dim, int spacedim>
+void SemiDiscreteOT<dim, spacedim>::normalize_density(LinearAlgebra::distributed::Vector<double>& density)
 {
-    auto quadrature = Utils::create_quadrature_for_mesh<dim>(source_mesh, solver_params.quadrature_order);
+    auto quadrature = Utils::create_quadrature_for_mesh<dim, spacedim>(source_mesh, solver_params.quadrature_order);
     // Calculate L1 norm
     double local_l1_norm = 0.0;
-    FEValues<dim> fe_values(*mapping, *fe_system, *quadrature,
+    FEValues<dim, spacedim> fe_values(*mapping, *fe_system, *quadrature,
                            update_values | update_JxW_values);
     std::vector<double> density_values(quadrature->size());
 
@@ -186,11 +170,11 @@ void SemiDiscreteOT<dim>::normalize_density(LinearAlgebra::distributed::Vector<d
 }
 
 
-template <int dim>
-void SemiDiscreteOT<dim>::setup_source_finite_elements(const bool is_multilevel)
+template <int dim, int spacedim>
+void SemiDiscreteOT<dim, spacedim>::setup_source_finite_elements(const bool is_multilevel)
 {
     // Create finite element and mapping for the mesh.
-    auto [fe, map] = Utils::create_fe_and_mapping_for_mesh<dim>(source_mesh);
+    auto [fe, map] = Utils::create_fe_and_mapping_for_mesh<dim, spacedim>(source_mesh);
     fe_system = std::move(fe);
     mapping = std::move(map);
 
@@ -208,39 +192,46 @@ void SemiDiscreteOT<dim>::setup_source_finite_elements(const bool is_multilevel)
     {
         if (source_params.density_file_format == "vtk")
         {
-            if (is_multilevel)
+            if constexpr (dim == spacedim)
             {
-                pcout << Color::green << "Interpolating source density from VTK to source mesh" << Color::reset << std::endl;
-                // For multilevel, use non-conforming nearest neighbor interpolation.
-                Utils::interpolate_non_conforming_nearest(vtk_dof_handler_source,
-                                                          vtk_field_source,
-                                                          dof_handler_source,
-                                                          source_density);
-                pcout << "Source density interpolated from VTK to source mesh" << std::endl;
-            }
-            else
-            {
-                pcout << "Using custom source density from file: " << source_params.density_file_path << std::endl;
-                bool density_loaded = false;
-                // For the regular case, read the VTK field and then interpolate.
-                density_loaded = Utils::read_vtk_field<dim>(source_params.density_file_path,
-                                                            vtk_dof_handler_source,
-                                                            vtk_field_source,
-                                                            vtk_tria_source,
-                                                            mpi_communicator,
-                                                            pcout,
-                                                            true);
-                if (density_loaded)
+                if (is_multilevel)
                 {
                     pcout << Color::green << "Interpolating source density from VTK to source mesh" << Color::reset << std::endl;
-                    Functions::FEFieldFunction<dim> field_function(vtk_dof_handler_source, vtk_field_source);
-                    VectorTools::interpolate(dof_handler_source, field_function, source_density);
+                    // For multilevel, use non-conforming nearest neighbor interpolation.
+                    Utils::interpolate_non_conforming_nearest<dim, spacedim>(vtk_dof_handler_source,
+                        vtk_field_source,
+                        dof_handler_source,
+                        source_density);
+                    pcout << "Source density interpolated from VTK to source mesh" << std::endl;
                 }
                 else
                 {
-                    pcout << Color::red << "Failed to load custom density, using uniform density" << Color::reset << std::endl;
-                    source_density = 1.0;
+                    pcout << "Using custom source density from file: " << source_params.density_file_path << std::endl;
+                    bool density_loaded = false;
+                    // For the regular case, read the VTK field and then interpolate.
+                    density_loaded = Utils::read_vtk_field<dim, spacedim>(source_params.density_file_path,
+                                                                vtk_dof_handler_source,
+                                                                vtk_field_source,
+                                                                vtk_tria_source,
+                                                                mpi_communicator,
+                                                                pcout,
+                                                                true);
+                    if (density_loaded)
+                    {
+                        pcout << Color::green << "Interpolating source density from VTK to source mesh" << Color::reset << std::endl;
+                        Functions::FEFieldFunction<dim, Vector<double>, spacedim> field_function(vtk_dof_handler_source, vtk_field_source);
+                        VectorTools::interpolate(dof_handler_source, field_function, source_density);
+                    }
+                    else
+                    {
+                        pcout << Color::red << "Failed to load custom density, using uniform density" << Color::reset << std::endl;
+                        source_density = 1.0;
+                    }
                 }
+            }
+            else 
+            {
+                pcout << Color::red << "Unsupported dim!=spacedim" << Color::reset << std::endl;
             }
         }
         else
@@ -272,8 +263,8 @@ void SemiDiscreteOT<dim>::setup_source_finite_elements(const bool is_multilevel)
     pcout << "Source mesh finite elements initialized with " << dof_handler_source.n_dofs() << " DoFs" << std::endl;
 }
 
-template <int dim>
-void SemiDiscreteOT<dim>::setup_target_finite_elements()
+template <int dim, int spacedim>
+void SemiDiscreteOT<dim, spacedim>::setup_target_finite_elements()
 {
     // Load or compute target points (shared across all processes)
     const std::string directory = "output/data_points";
@@ -282,7 +273,7 @@ void SemiDiscreteOT<dim>::setup_target_finite_elements()
 
     // Only root process reads/computes points
     if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
-        auto [fe, map] = Utils::create_fe_and_mapping_for_mesh<dim>(target_mesh);
+        auto [fe, map] = Utils::create_fe_and_mapping_for_mesh<dim, spacedim>(target_mesh);
         fe_system_target = std::move(fe);
         mapping_target = std::move(map);
         dof_handler_target.distribute_dofs(*fe_system_target);
@@ -292,7 +283,7 @@ void SemiDiscreteOT<dim>::setup_target_finite_elements()
             points_loaded = true;
             pcout << "Target points loaded from file" << std::endl;
         } else {
-            std::map<types::global_dof_index, Point<dim>> support_points_target;
+            std::map<types::global_dof_index, Point<spacedim>> support_points_target;
             DoFTools::map_dofs_to_support_points(*mapping_target, dof_handler_target, support_points_target);
             for (const auto &point_pair : support_points_target) {
                 target_points.push_back(point_pair.second);
@@ -307,28 +298,35 @@ void SemiDiscreteOT<dim>::setup_target_finite_elements()
             bool density_loaded = false;
 
             if (target_params.density_file_format == "vtk") {
-                DoFHandler<dim> vtk_dof_handler_target;
-                Vector<double> vtk_field_target;
-                Triangulation<dim> vtk_tria_target;
-                // Read VTK file only on rank 0, don't broadcast field
-                density_loaded = Utils::read_vtk_field<dim>(target_params.density_file_path,
-                                                          vtk_dof_handler_target,
-                                                          vtk_field_target,
-                                                          vtk_tria_target,
-                                                          mpi_communicator,
-                                                          pcout,
-                                                          false); // broadcast_field = false for target case
+                if constexpr (dim==spacedim)
+                {
+                    DoFHandler<dim, spacedim> vtk_dof_handler_target;
+                    Vector<double> vtk_field_target;
+                    Triangulation<dim, spacedim> vtk_tria_target;
+                    // Read VTK file only on rank 0, don't broadcast field
+                    density_loaded = Utils::read_vtk_field<dim, spacedim>(target_params.density_file_path,
+                                                            vtk_dof_handler_target,
+                                                            vtk_field_target,
+                                                            vtk_tria_target,
+                                                            mpi_communicator,
+                                                            pcout,
+                                                            false); // broadcast_field = false for target case
 
-                if (density_loaded) {
-                    pcout << "Target density loaded from VTK file" << std::endl;
-                    target_density.reinit(dof_handler_target.n_dofs());
-                    pcout << "Target density size: " << target_density.size() << std::endl;
-                    pcout << Color::green << "Interpolating target density from VTK to target mesh" << Color::reset << std::endl;
-                    Functions::FEFieldFunction<dim> field_function(vtk_dof_handler_target, vtk_field_target);
-                    VectorTools::interpolate(dof_handler_target, field_function, target_density);
-                    pcout << "Successfully interpolated VTK field to target mesh" << std::endl;
-                    pcout << "L1 norm of interpolated field: " << target_density.l1_norm() << std::endl;
-                    target_density /= target_density.l1_norm();
+                    if (density_loaded) {
+                        pcout << "Target density loaded from VTK file" << std::endl;
+                        target_density.reinit(dof_handler_target.n_dofs());
+                        pcout << "Target density size: " << target_density.size() << std::endl;
+                        pcout << Color::green << "Interpolating target density from VTK to target mesh" << Color::reset << std::endl;
+                        Functions::FEFieldFunction<dim, Vector<double>, spacedim> field_function(vtk_dof_handler_target, vtk_field_target);
+                        VectorTools::interpolate(dof_handler_target, field_function, target_density);
+                        pcout << "Successfully interpolated VTK field to target mesh" << std::endl;
+                        pcout << "L1 norm of interpolated field: " << target_density.l1_norm() << std::endl;
+                        target_density /= target_density.l1_norm();
+                    }
+                }
+                else
+                {
+                    pcout << Color::red << "Unsupported dim!=spacedim" << Color::reset << std::endl;
                 }
             } else {
                 std::vector<double> density_values;
@@ -391,23 +389,23 @@ void SemiDiscreteOT<dim>::setup_target_finite_elements()
 }
 
 
-template <int dim>
-void SemiDiscreteOT<dim>::setup_finite_elements()
+template <int dim, int spacedim>
+void SemiDiscreteOT<dim, spacedim>::setup_finite_elements()
 {
     setup_source_finite_elements();
     setup_target_finite_elements();
 }
 
 
-template <int dim>
-void SemiDiscreteOT<dim>::setup_target_points()
+template <int dim, int spacedim>
+void SemiDiscreteOT<dim, spacedim>::setup_target_points()
 {
     mesh_manager->load_target_mesh(target_mesh);
     setup_target_finite_elements();
 }
 
-template <int dim>
-void SemiDiscreteOT<dim>::assign_potentials_by_hierarchy(
+template <int dim, int spacedim>
+void SemiDiscreteOT<dim, spacedim>::assign_potentials_by_hierarchy(
     Vector<double>& potentials, int coarse_level, int fine_level, const Vector<double>& prev_potentials) {
 
     if (!has_hierarchy_data_ || coarse_level < 0 || fine_level < 0) {
@@ -431,7 +429,7 @@ void SemiDiscreteOT<dim>::assign_potentials_by_hierarchy(
               << ", Target points: " << target_points.size() << std::endl;
 
         // Create SoftmaxRefinement instance
-        SoftmaxRefinement<dim> softmax_refiner(
+        SoftmaxRefinement<dim, spacedim> softmax_refiner(
             mpi_communicator,
             dof_handler_source,
             *mapping,
@@ -477,8 +475,8 @@ void SemiDiscreteOT<dim>::assign_potentials_by_hierarchy(
 
 
 // run single sot optimization with epsilon scaling
-template <int dim>
-void SemiDiscreteOT<dim>::run_sot()
+template <int dim, int spacedim>
+void SemiDiscreteOT<dim, spacedim>::run_sot()
 {
     Timer timer;
     timer.start();
@@ -489,7 +487,7 @@ void SemiDiscreteOT<dim>::run_sot()
           << " target points and " << source_density.size() << " source points" << Color::reset << std::endl;
 
     // Configure solver parameters
-    ParameterManager::SolverParameters& solver_config = solver_params;
+    SotParameterManager::SolverParameters& solver_config = solver_params;
 
     // Set up source measure
     sot_solver->setup_source(dof_handler_source,
@@ -556,8 +554,8 @@ void SemiDiscreteOT<dim>::run_sot()
     pcout << "\n" << Color::green << Color::bold << "SOT optimization completed in " << timer.wall_time() << " seconds" << Color::reset << std::endl;
 }
 
-template <int dim>
-void SemiDiscreteOT<dim>::run_target_multilevel(
+template <int dim, int spacedim>
+void SemiDiscreteOT<dim, spacedim>::run_target_multilevel(
     const std::string& source_mesh_file,
     Vector<double>* output_potentials,
     bool save_results_to_files)
@@ -633,7 +631,7 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
     Vector<double> level_potentials;
 
     // Configure solver parameters for this level
-    ParameterManager::SolverParameters& solver_config = solver_params;
+    SotParameterManager::SolverParameters& solver_config = solver_params;
 
     // Set up source measure (this remains constant across levels)
     sot_solver->setup_source(dof_handler_source,
@@ -822,15 +820,15 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
     }
 }
 
-template <int dim>
-void SemiDiscreteOT<dim>::run_target_multilevel_for_source_level(
+template <int dim, int spacedim>
+void SemiDiscreteOT<dim, spacedim>::run_target_multilevel_for_source_level(
     const std::string& source_mesh_file, Vector<double>& potentials)
 {
     run_target_multilevel(source_mesh_file, &potentials, false);
 }
 
-template <int dim>
-void SemiDiscreteOT<dim>::run_multilevel_sot()
+template <int dim, int spacedim>
+void SemiDiscreteOT<dim, spacedim>::run_multilevel_sot()
 {
     Timer global_timer;
     global_timer.start();
@@ -1045,10 +1043,9 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
 }
 
 
-
-template <int dim>
-template <int d>
-typename std::enable_if<d == 3>::type SemiDiscreteOT<dim>::run_exact_sot()
+template<int dim, int spacedim>
+template <int d, int s>
+typename std::enable_if<d == 3 && s == 3>::type SemiDiscreteOT<dim, spacedim>::run_exact_sot()
 {
     pcout << "Running exact SOT computation..." << std::endl;
 
@@ -1094,8 +1091,8 @@ typename std::enable_if<d == 3>::type SemiDiscreteOT<dim>::run_exact_sot()
     pcout << Color::green << Color::bold << "Exact SOT computation completed successfully" << Color::reset << std::endl;
 }
 
-template <int dim>
-void SemiDiscreteOT<dim>::prepare_source_multilevel()
+template <int dim, int spacedim>
+void SemiDiscreteOT<dim, spacedim>::prepare_source_multilevel()
 {
     pcout << "Preparing multilevel mesh hierarchy..." << std::endl;
 
@@ -1133,8 +1130,8 @@ void SemiDiscreteOT<dim>::prepare_source_multilevel()
     }
 }
 
-template <int dim>
-void SemiDiscreteOT<dim>::prepare_target_multilevel()
+template <int dim, int spacedim>
+void SemiDiscreteOT<dim, spacedim>::prepare_target_multilevel()
 {
 
     if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
@@ -1190,7 +1187,7 @@ void SemiDiscreteOT<dim>::prepare_target_multilevel()
                     target_densities[i] = target_density[i];
                 }
 
-                int num_levels = hierarchy_manager.generateHierarchy<dim>(
+                int num_levels = hierarchy_manager.generateHierarchy<spacedim>(
                     target_points,
                     target_densities,
                     multilevel_params.target_hierarchy_dir
@@ -1210,8 +1207,8 @@ void SemiDiscreteOT<dim>::prepare_target_multilevel()
 }
 
 
-template <int dim>
-void SemiDiscreteOT<dim>::save_results(const Vector<double>& potential, const std::string& filename)
+template <int dim, int spacedim>
+void SemiDiscreteOT<dim, spacedim>::save_results(const Vector<double>& potential, const std::string& filename)
 {
     // Only rank 0 should create directories and write files
     if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
@@ -1227,8 +1224,8 @@ void SemiDiscreteOT<dim>::save_results(const Vector<double>& potential, const st
     MPI_Barrier(mpi_communicator);
 }
 
-template <int dim>
-void SemiDiscreteOT<dim>::compute_transport_map()
+template <int dim, int spacedim>
+void SemiDiscreteOT<dim, spacedim>::compute_transport_map()
 {
     load_meshes();
     setup_finite_elements();
@@ -1243,10 +1240,10 @@ void SemiDiscreteOT<dim>::compute_transport_map()
     }
 
     // Create transport map approximator
-    OptimalTransportPlanSpace::OptimalTransportPlan<dim> transport_plan;
+    OptimalTransportPlanSpace::OptimalTransportPlan<spacedim> transport_plan;
 
     // Get source points and density (serial version)
-    std::vector<Point<dim>> source_points;
+    std::vector<Point<spacedim>> source_points;
     Vector<double> source_density;
 
     const std::string directory = "output/data_points";
@@ -1259,7 +1256,7 @@ void SemiDiscreteOT<dim>::compute_transport_map()
 
     if (!points_loaded)
     {
-        std::map<types::global_dof_index, Point<dim>> support_points_source;
+        std::map<types::global_dof_index, Point<spacedim>> support_points_source;
         DoFTools::map_dofs_to_support_points(*mapping, dof_handler_source, support_points_source);
         source_points.clear();
         for (const auto &point_pair : support_points_source)
@@ -1334,8 +1331,8 @@ void SemiDiscreteOT<dim>::compute_transport_map()
     }
 }
 
-template <int dim>
-void SemiDiscreteOT<dim>::compute_power_diagram()
+template <int dim, int spacedim>
+void SemiDiscreteOT<dim, spacedim>::compute_power_diagram()
 {
     load_meshes();
     setup_finite_elements();
@@ -1376,12 +1373,12 @@ void SemiDiscreteOT<dim>::compute_power_diagram()
         fs::create_directories(output_dir);
 
         // Create power diagram using factory function based on parameter choice
-        std::unique_ptr<PowerDiagramSpace::PowerDiagramBase<dim>> power_diagram;
+        std::unique_ptr<PowerDiagramSpace::PowerDiagramBase<dim, spacedim>> power_diagram;
 
         try {
             if (power_diagram_params.implementation == "geogram") {
-                if constexpr (dim == 3) {
-                    power_diagram = PowerDiagramSpace::create_power_diagram<dim>(
+                if constexpr (dim == 3 and spacedim==dim) {
+                    power_diagram = PowerDiagramSpace::create_power_diagram<dim, spacedim>(
                         "geogram",
                         nullptr,
                         "output/data_mesh/source.msh"
@@ -1390,13 +1387,13 @@ void SemiDiscreteOT<dim>::compute_power_diagram()
                 } else {
                     pcout << "Geogram implementation is only available for 3D problems" << std::endl;
                     pcout << "Falling back to Deal.II implementation" << std::endl;
-                    power_diagram = PowerDiagramSpace::create_power_diagram<dim>(
+                    power_diagram = PowerDiagramSpace::create_power_diagram<dim, spacedim>(
                         "dealii",
                         &source_mesh
                     );
                 }
             } else {
-                power_diagram = PowerDiagramSpace::create_power_diagram<dim>(
+                power_diagram = PowerDiagramSpace::create_power_diagram<dim, spacedim>(
                     "dealii",
                     &source_mesh
                 );
@@ -1407,7 +1404,7 @@ void SemiDiscreteOT<dim>::compute_power_diagram()
                   << " implementation: " << e.what() << Color::reset << std::endl;
             if (power_diagram_params.implementation == "geogram") {
                 pcout << "Falling back to Deal.II implementation" << std::endl;
-                power_diagram = PowerDiagramSpace::create_power_diagram<dim>(
+                power_diagram = PowerDiagramSpace::create_power_diagram<dim, spacedim>(
                     "dealii",
                     &source_mesh
                 );
@@ -1434,8 +1431,8 @@ void SemiDiscreteOT<dim>::compute_power_diagram()
     }
 }
 
-template <int dim>
-void SemiDiscreteOT<dim>::save_discrete_measures()
+template <int dim, int spacedim>
+void SemiDiscreteOT<dim, spacedim>::save_discrete_measures()
 {
     load_meshes();
     setup_finite_elements();
@@ -1445,9 +1442,9 @@ void SemiDiscreteOT<dim>::save_discrete_measures()
     fs::create_directories(directory);
 
     // Get quadrature points and weights
-    auto quadrature = Utils::create_quadrature_for_mesh<dim>(source_mesh, solver_params.quadrature_order);
+    auto quadrature = Utils::create_quadrature_for_mesh<dim, spacedim>(source_mesh, solver_params.quadrature_order);
 
-    FEValues<dim> fe_values(*mapping, *fe_system, *quadrature,
+    FEValues<dim, spacedim> fe_values(*mapping, *fe_system, *quadrature,
                            update_values | update_quadrature_points | update_JxW_values);
 
     // Count total number of quadrature points
@@ -1455,7 +1452,7 @@ void SemiDiscreteOT<dim>::save_discrete_measures()
     const unsigned int total_q_points = source_mesh.n_active_cells() * n_q_points;
 
     // Prepare vectors for quadrature data
-    std::vector<Point<dim>> quad_points;
+    std::vector<Point<spacedim>> quad_points;
     std::vector<double> quad_weights;
     std::vector<double> density_values;
     quad_points.reserve(total_q_points);
@@ -1492,6 +1489,7 @@ void SemiDiscreteOT<dim>::save_discrete_measures()
     // Save metadata
     std::ofstream meta(directory + "/metadata.txt");
     meta << "Dimension: " << dim << "\n"
+         << "Space dimension: " << spacedim << "\n"
          << "Number of quadrature points per cell: " << n_q_points << "\n"
          << "Total number of quadrature points: " << total_q_points << "\n"
          << "Number of target points: " << target_points.size() << "\n"
@@ -1505,8 +1503,8 @@ void SemiDiscreteOT<dim>::save_discrete_measures()
 }
 
 
-template <int dim>
-void SemiDiscreteOT<dim>::run()
+template <int dim, int spacedim>
+void SemiDiscreteOT<dim, spacedim>::run()
 {
     param_manager.print_parameters();
 
@@ -1567,7 +1565,7 @@ void SemiDiscreteOT<dim>::run()
     }
     else if (selected_task == "exact_sot")
     {
-        if constexpr (dim == 3) {
+        if constexpr (dim == 3 && spacedim==3) {
             load_meshes();
             setup_finite_elements();
             run_exact_sot();
@@ -1595,3 +1593,4 @@ void SemiDiscreteOT<dim>::run()
 
 template class SemiDiscreteOT<2>;
 template class SemiDiscreteOT<3>;
+template class SemiDiscreteOT<2, 3>;

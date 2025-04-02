@@ -26,14 +26,14 @@ using namespace dealii;
  * of the solver, including mesh generation, solver settings, and multilevel methods.
  * It inherits from ParameterAcceptor to integrate with deal.II's parameter handling system.
  */
-class ParameterManager : public ParameterAcceptor
+class SotParameterManager : public ParameterAcceptor
 {
 public:
     /**
      * Constructor.
      * @param comm MPI communicator for parallel execution
      */
-    ParameterManager(const MPI_Comm &comm);
+    SotParameterManager(const MPI_Comm &comm);
 
     /**
      * Parameters for mesh generation.
@@ -139,9 +139,14 @@ public:
      * This provides a comprehensive view of the current parameter settings.
      */
     void print_logo() const;
-    void print_parameters() const;
+    virtual void print_parameters() const;
+protected:
+    // MPI members
+    MPI_Comm mpi_communicator;
+    const unsigned int n_mpi_processes;
+    const unsigned int this_mpi_process;
+    ConditionalOStream pcout;
 
-private:
     // Helper methods for printing specific parameter groups
     void print_mesh_parameters() const;
     void print_solver_parameters() const;
@@ -150,6 +155,8 @@ private:
     void print_transport_map_parameters() const;
     void print_task_information() const;
     void print_section_header(const std::string& section_name) const;
+    
+private:
 
     // Storage for parameters
     std::string selected_task_storage;
@@ -160,12 +167,48 @@ private:
     MultilevelParameters multilevel_params_storage;
     PowerDiagramParameters power_diagram_params_storage;
     TransportMapParameters transport_map_params_storage;
-
-    // MPI members
-    MPI_Comm mpi_communicator;
-    const unsigned int n_mpi_processes;
-    const unsigned int this_mpi_process;
-    ConditionalOStream pcout;
 };
+
+/**
+ * A class to manage all parameters for the RSOT solver.
+ * This class handles parameter declaration, storage, and access for all components
+ * of the solver, including mesh generation, solver settings, and multilevel methods.
+ * It inherits from ParameterAcceptor to integrate with deal.II's parameter handling system.
+ */
+ class LloydParameterManager : public SotParameterManager
+ {
+ public:
+    /**
+    * Constructor.
+    * @param comm MPI communicator for parallel execution
+    */
+    LloydParameterManager(const MPI_Comm &comm);
+
+    /**
+    * Parameters for Lloyd algorithm.
+    */
+    struct LloydParameters {
+        unsigned int max_iterations = 1000;          ///< Number of max iterations
+        double relative_tolerance = 1e-8;                     ///< Convergence tolerance
+    };
+    
+    const LloydParameters& get_lloyd_params() const { return lloyd_params; }
+
+    // Direct access to parameters through references
+    LloydParameters& lloyd_params;
+    
+    /**
+     * Print all relevant parameters based on the selected task.
+     * This provides a comprehensive view of the current parameter settings.
+     */
+    virtual void print_parameters() const override;
+ private:
+    // Helper methods for printing specific parameter groups
+    void print_lloyd_parameters() const;
+    void print_task_information() const;
+    
+    // Storage for parameters
+    LloydParameters lloyd_params_storage;
+ };
 
 #endif 
