@@ -117,10 +117,19 @@ void SotSolver<dim>::solve(
     // Initialize gradient member variable
     gradient.reinit(potentials.size());
 
+    // Determine solver tolerance - use minimum target density if no tolerance specified
+    double solver_tolerance = params.tolerance;
+    if (solver_tolerance <= 0) {
+        solver_tolerance = *std::min_element(target_measure.density.begin(), target_measure.density.end());
+        pcout << "Using minimum target density as solver tolerance: " << solver_tolerance << std::endl;
+    } else {
+        pcout << "Using user-specified solver tolerance: " << solver_tolerance << std::endl;
+    }
+
     // Create solver control with verbose output
     solver_control = std::make_unique<VerboseSolverControl>(
         params.max_iterations,
-        params.tolerance,
+        solver_tolerance,
         pcout
     );
 

@@ -54,7 +54,7 @@ public:
      */
     struct SolverParameters {
         unsigned int max_iterations = 1000;      ///< Maximum number of solver iterations
-        double tolerance = 1e-8;                 ///< Convergence tolerance
+        double tolerance = 0;                 ///< Convergence tolerance
         double regularization_param = 1e-3;      ///< Entropy regularization parameter
         double epsilon = 1e-8;                   ///< Kernel truncation parameter
         double tau = 1e-8;                       ///< Integral radius bound tolerance
