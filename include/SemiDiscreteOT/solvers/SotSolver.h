@@ -160,19 +160,33 @@ private:
                        ScratchData& scratch,
                        CopyData& copy);
 
-    // Verbose solver control for detailed output
     class VerboseSolverControl : public SolverControl
     {
     public:
         VerboseSolverControl(unsigned int n, double tol, ConditionalOStream& pcout_)
-            : SolverControl(n, tol), pcout(pcout_) {}
+            : SolverControl(n, tol)
+            , pcout(pcout_)
+            , gradient(nullptr)
+        {}
+
+        void set_gradient(const Vector<double>& grad) {
+            gradient = &grad;
+        }
 
         virtual State check(unsigned int step, double value) override
         {
+            AssertThrow(gradient != nullptr, 
+                        ExcMessage("Gradient vector not set in VerboseSolverControl"));
 
-            double rel_residual = value / initial_value();
+            double linf_norm = 0.0;
+            linf_norm = (*gradient).linfty_norm();
             
-            // Use different colors based on convergence progress
+            double rel_residual = (step == 0 || initial_linf_norm == 0.0) ? 
+                                  linf_norm : linf_norm / initial_linf_norm;
+            
+            if (step == 0)
+                initial_linf_norm = linf_norm;
+            
             std::string color;
             if (rel_residual < 0.1) {
                 color = Color::green;  // Good progress
@@ -183,13 +197,17 @@ private:
             }
             
             pcout << "Iteration " << CYAN << step << RESET
-                  << " - Function value: " << color << value << RESET
-                  << " - Relative residual: " << color << rel_residual << RESET << std::endl;
-                  
-            return SolverControl::check(step, value);
+                  << " - L-2 gradient norm: " << color << value << RESET
+                  << " - L-inf gradient norm: " << color << linf_norm << RESET
+                  << " - Relative L-inf residual: " << color << rel_residual << RESET << std::endl;
+                
+            return SolverControl::check(step, linf_norm);
         }
+        
     private:
         ConditionalOStream& pcout;
+        double initial_linf_norm = 1.0;
+        const Vector<double>* gradient; 
     };
 
     // MPI and parallel related members
@@ -211,7 +229,7 @@ private:
     double current_lambda;
     mutable double global_functional;
     mutable double global_C_integral;
-    Vector<double> gradient;  // Changed back to regular vector for global accumulation
+    Vector<double> gradient;  
 
     // Cache for local assembly computations
     struct CellCache {

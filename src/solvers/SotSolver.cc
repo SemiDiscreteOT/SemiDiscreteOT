@@ -129,6 +129,9 @@ void SotSolver<dim>::solve(
         solver_control->log_result(false);
     }
 
+    // Set the gradient in the VerboseSolverControl
+    dynamic_cast<VerboseSolverControl*>(solver_control.get())->set_gradient(gradient);
+
     try {
         Timer timer;
         timer.start();
