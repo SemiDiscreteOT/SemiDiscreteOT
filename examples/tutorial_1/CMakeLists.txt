@@ -15,6 +15,8 @@ PROJECT(Tutorial1 VERSION 1.0.0 LANGUAGES CXX)
 SET(CMAKE_CXX_STANDARD 17)
 SET(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+FIND_PACKAGE(SemiDiscreteOT REQUIRED)
+
 # Collect source files
 FILE(GLOB_RECURSE TUTORIAL_SOURCES "src/*.cc")
 
@@ -27,7 +29,7 @@ TARGET_INCLUDE_DIRECTORIES(tutorial_1 PRIVATE
 )
 
 # Link with RSOT and Deal.II
-TARGET_LINK_LIBRARIES(tutorial_1 SemiDiscreteOT)
+TARGET_LINK_LIBRARIES(tutorial_1 SemiDiscreteOT::SemiDiscreteOT)
 DEAL_II_SETUP_TARGET(tutorial_1)
 
 # Set output directory

@@ -111,36 +111,44 @@ ADD_CUSTOM_COMMAND(
 
 # Installation rules
 INSTALL(TARGETS SemiDiscreteOT
-    EXPORT SemiDiscreteOT-targets
+    EXPORT SemiDiscreteOTTargets
     LIBRARY DESTINATION lib
     ARCHIVE DESTINATION lib
     RUNTIME DESTINATION bin
     INCLUDES DESTINATION include
-    COMPONENT Runtime
 )
 
+# Install header files
+INSTALL(DIRECTORY include/ DESTINATION include)
 
 # Export targets
-INSTALL(EXPORT SemiDiscreteOT-targets
+EXPORT(EXPORT SemiDiscreteOTTargets
+    FILE "${CMAKE_CURRENT_BINARY_DIR}/SemiDiscreteOTTargets.cmake"
+    NAMESPACE SemiDiscreteOT::
+)
+
+# Install the export
+INSTALL(EXPORT SemiDiscreteOTTargets
     FILE SemiDiscreteOTTargets.cmake
     NAMESPACE SemiDiscreteOT::
     DESTINATION lib/cmake/SemiDiscreteOT
 )
 
-# Generate and install package config files
+# Generate the config file
 INCLUDE(CMakePackageConfigHelpers)
-WRITE_BASIC_PACKAGE_VERSION_FILE(
-    "${CMAKE_CURRENT_BINARY_DIR}/SemiDiscreteOTConfigVersion.cmake"
-    VERSION ${PROJECT_VERSION}
-    COMPATIBILITY SameMajorVersion
- )
-
 CONFIGURE_PACKAGE_CONFIG_FILE(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/SemiDiscreteOTConfig.cmake.in"
     "${CMAKE_CURRENT_BINARY_DIR}/SemiDiscreteOTConfig.cmake"
     INSTALL_DESTINATION lib/cmake/SemiDiscreteOT
 )
 
+WRITE_BASIC_PACKAGE_VERSION_FILE(
+    "${CMAKE_CURRENT_BINARY_DIR}/SemiDiscreteOTConfigVersion.cmake"
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion
+)
+
+# Install the config files
 INSTALL(FILES
     "${CMAKE_CURRENT_BINARY_DIR}/SemiDiscreteOTConfig.cmake"
     "${CMAKE_CURRENT_BINARY_DIR}/SemiDiscreteOTConfigVersion.cmake"
@@ -152,3 +160,5 @@ OPTION(BUILD_EXAMPLES "Build the examples" ON)
 IF(BUILD_EXAMPLES)
     ADD_SUBDIRECTORY(examples)
 ENDIF()
+
+
