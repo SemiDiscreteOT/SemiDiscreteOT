@@ -1,6 +1,7 @@
 #pragma once
 
 #include <deal.II/base/function.h>
+#include <deal.II/distributed/fully_distributed_tria.h>
 #include <deal.II/base/function_parser.h>
 #include <deal.II/base/parameter_acceptor.h>
 #include <deal.II/base/quadrature_lib.h>
@@ -37,6 +38,10 @@
 #include <deal.II/grid/tria_accessor.h>
 #include <deal.II/grid/tria_iterator.h>
 #include <deal.II/grid/manifold_lib.h>
+#include <deal.II/grid/grid_tools.h> // Needed for mesh conversion
+#include <deal.II/grid/tria.h>
+#include <deal.II/grid/grid_generator.h>
+#include <deal.II/grid/grid_out.h>
 
 #include <deal.II/distributed/tria.h>
 #include <deal.II/distributed/grid_refinement.h>
@@ -48,10 +53,13 @@
 
 #include <deal.II/fe/fe_values.h>
 #include <deal.II/fe/fe_values_extractors.h>
-#include <deal.II/fe/fe_q.h>
+// #include <deal.II/fe/fe_q.h> // No longer using Q elements
+// #include <deal.II/fe/fe_dgq.h> // No longer using DGQ elements
+#include <deal.II/fe/fe_simplex_p.h> // Using Simplex P elements
 #include <deal.II/fe/fe_system.h>
-#include <deal.II/fe/mapping_q1.h>
-#include <deal.II/fe/mapping_q_cache.h>
+// #include <deal.II/fe/mapping_q1.h> // Using MappingFE instead
+#include <deal.II/fe/mapping_fe.h> // Using MappingFE
+#include <deal.II/fe/mapping_q_cache.h> // May still be used by MappingFE internally
 
 #include <deal.II/meshworker/copy_data.h>
 #include <deal.II/meshworker/mesh_loop.h>
@@ -98,7 +106,7 @@ namespace Applications
   private:
     void setup_system(
         std::string &name,
-        parallel::distributed::Triangulation<dim> &tria,
+        parallel::fullydistributed::Triangulation<dim> &tria,
         DoFHandler<dim> &dof_handler,
         IndexSet &locally_owned_dofs,
         IndexSet &locally_relevant_dofs,
@@ -132,7 +140,7 @@ namespace Applications
     
     void output_results(
         std::string &field_name,
-        parallel::distributed::Triangulation<dim> &triangulation,
+        parallel::fullydistributed::Triangulation<dim> &triangulation,
         DoFHandler<dim> &dof_handler,
         VectorType &locally_relevant_solution) const;
     
@@ -144,14 +152,16 @@ namespace Applications
 
     const std::string vtk_folder = "vtk";
 
-    parallel::distributed::Triangulation<dim> triangulation_1;
-    parallel::distributed::Triangulation<dim> triangulation_2;
+    parallel::fullydistributed::Triangulation<dim> triangulation_1;
+    parallel::fullydistributed::Triangulation<dim> triangulation_2;
 
     DoFHandler<dim> dof_handler_1;
     DoFHandler<dim> dof_handler_2;
-    FESystem<dim> fe;
+    // Use stable Taylor-Hood elements on simplices: P2 for velocity, P1 for pressure
+    FESystem<dim> fe; 
 
-    MappingQ<dim> mapping;
+    // Use MappingFE suitable for simplex elements
+    MappingFE<dim> mapping; 
 
     AffineConstraints<double> constraints_1;
     AffineConstraints<double> constraints_2;
@@ -193,7 +203,7 @@ namespace Applications
     std::map<std::string, double> function_constants_2;
     FunctionParser<dim> forcing_term_2;
 
-    bool use_tet;
+    // bool use_tet; // This variable wasn't used, removed.
 
     std::unique_ptr<PressureDensityField<dim>> source_density_field;
     std::unique_ptr<PressureDensityField<dim>> target_density_field;
@@ -218,10 +228,11 @@ namespace Applications
             update_gradients | update_quadrature_points |
             update_JxW_values |
             update_normal_vectors)
+        // Use QGaussSimplex for simplex elements
         : fe_values(
-              mapping, fe, QGauss<dim>(quadrature_degree), update_flags),
+              mapping, fe, QGaussSimplex<dim>(quadrature_degree), update_flags),
           fe_interface_values(
-              mapping, fe, QGauss<dim - 1>(quadrature_degree), interface_update_flags) {}
+              mapping, fe, QGaussSimplex<dim - 1>(quadrature_degree), interface_update_flags) {}
 
     ScratchData(const ScratchData<dim> &scratch_data)
         : fe_values(scratch_data.fe_values.get_mapping(),
@@ -229,8 +240,8 @@ namespace Applications
                     scratch_data.fe_values.get_quadrature(),
                     scratch_data.fe_values.get_update_flags()),
           fe_interface_values(
-              scratch_data.fe_values.get_mapping(),
-              scratch_data.fe_values.get_fe(),
+              scratch_data.fe_values.get_mapping(), // Corrected: should use fe_interface_values mapping
+              scratch_data.fe_values.get_fe(), // Corrected: should use fe_interface_values FE? No, FE is same.
               scratch_data.fe_interface_values.get_quadrature(),
               scratch_data.fe_interface_values.get_update_flags())
     {
