@@ -35,6 +35,8 @@ ParameterManager::ParameterManager(const MPI_Comm &comm)
                          "Path to the density file");
             add_parameter("density file format", source_params.density_file_format,
                          "Format of the density file (vtk/h5)");
+            add_parameter("density field name", source_params.density_field_name,
+                         "Name of the field in the VTK file");
         }
         leave_subsection();
 
@@ -51,6 +53,8 @@ ParameterManager::ParameterManager(const MPI_Comm &comm)
                          "Path to the density file");
             add_parameter("density file format", target_params.density_file_format,
                          "Format of the density file (vtk/h5)");
+            add_parameter("density field name", target_params.density_field_name,
+                         "Name of the field in the VTK file");
         }
         leave_subsection();
     }

@@ -1,5 +1,11 @@
 CMAKE_MINIMUM_REQUIRED(VERSION 3.13.0)
 
+SET(CMAKE_CXX_COMPILER g++)
+SET(CMAKE_C_COMPILER gcc)
+
+PROJECT(SemiDiscreteOT VERSION 1.0.0 LANGUAGES CXX C)
+
+
 
 # Check Deal.II
 MESSAGE("Deal.II installation path: $ENV{DEAL_II_DIR}")
@@ -14,12 +20,13 @@ IF(NOT CMAKE_BUILD_TYPE OR CMAKE_BUILD_TYPE STREQUAL "")
 ENDIF()
 
 # Add compiler flags for Release build
-SET(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -march=native -DNDEBUG")
+SET(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -DNDEBUG")
 
+SET(DEAL_II_DIR "/scratch/mkhamlic/spack/opt/spack/linux-rocky8-x86_64_v4/gcc-12.2.0/dealii-9.5.0-nbal44n4aoskliqi4yri5icwmcgumyxt")
 
 # Deal.II setup first
 FIND_PACKAGE(deal.II 9.5.0 QUIET
-  HINTS ${deal.II_DIR} ${DEAL_II_DIR} ../ ../../ $ENV{DEAL_II_DIR}
+  HINTS ${deal.II_DIR} ${DEAL_II_DIR} ../ ../../ ${DEAL_II_DIR}
 )
 
 IF(NOT ${deal.II_FOUND})
@@ -28,6 +35,8 @@ IF(NOT ${deal.II_FOUND})
     "Set -DDEAL_II_DIR=/path/to/deal.II or environment variable DEAL_II_DIR"
   )
 ENDIF()
+
+FIND_PACKAGE(VTK QUIET)
 
 # Add custom release target
 ADD_CUSTOM_TARGET(release
@@ -38,7 +47,6 @@ ADD_CUSTOM_TARGET(release
 
 # Initialize Deal.II first, then set project
 DEAL_II_INITIALIZE_CACHED_VARIABLES()
-PROJECT(SemiDiscreteOT VERSION 1.0.0 LANGUAGES CXX)
 
 # Set C++ standard
 SET(CMAKE_CXX_STANDARD 17)
@@ -68,6 +76,7 @@ SET(LIB_SRC
   src/solvers/ExactSot.cc
   src/solvers/SoftmaxRefinement.cc
   src/utils/ParameterManager.cc
+  src/utils/VtkHandler.cc
 )
 
 # Create the library
@@ -87,7 +96,7 @@ TARGET_INCLUDE_DIRECTORIES(SemiDiscreteOT
 DEAL_II_SETUP_TARGET(SemiDiscreteOT)
 
 # Add Geogram libraries
-TARGET_LINK_LIBRARIES(SemiDiscreteOT ${GEOGRAM_LIBS})
+TARGET_LINK_LIBRARIES(SemiDiscreteOT ${GEOGRAM_LIBS} ${VTK_LIBRARIES})
 
 # Add compile definitions for both implementations
 TARGET_COMPILE_DEFINITIONS(SemiDiscreteOT
@@ -156,7 +165,7 @@ INSTALL(FILES
 )
 
 # Add examples subdirectory if building examples
-OPTION(BUILD_EXAMPLES "Build the examples" ON)
+OPTION(BUILD_EXAMPLES "Build the examples" OFF)
 IF(BUILD_EXAMPLES)
     ADD_SUBDIRECTORY(examples)
 ENDIF()

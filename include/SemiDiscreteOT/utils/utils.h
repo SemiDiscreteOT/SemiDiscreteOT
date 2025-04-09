@@ -831,6 +831,7 @@ std::unique_ptr<dealii::Quadrature<dim>> create_quadrature_for_mesh(
  * @param mpi_communicator MPI communicator
  * @param pcout Parallel output stream
  * @param broadcast_field Whether to broadcast the field to all processes (true for source, false for target)
+ * @param field_name Name of the field to read from the VTK file
  * @return bool Success status
  */
 template <int dim>
@@ -841,7 +842,8 @@ bool read_vtk_field(
     dealii::Triangulation<dim>& vtk_tria,
     const MPI_Comm& mpi_communicator,
     dealii::ConditionalOStream& pcout,
-    bool broadcast_field = false)
+    bool broadcast_field = false,
+    const std::string& field_name = "normalized_density")
 {
     bool success = false;
     // Clear any existing triangulation
@@ -877,13 +879,12 @@ bool read_vtk_field(
     // Only rank 0 reads the file
     if (dealii::Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
         try {
-
             // Read scalar field data
             std::ifstream vtk_reader(filename);
             std::string line;
             bool found_point_data = false;
             bool found_scalars = false;
-            std::string field_name;
+            std::string found_field_name;
 
             while (std::getline(vtk_reader, line)) {
                 if (line.find("POINT_DATA") != std::string::npos) {
@@ -891,33 +892,37 @@ bool read_vtk_field(
                 }
 
                 if (found_point_data && line.find("SCALARS") != std::string::npos) {
-                    found_scalars = true;
                     std::istringstream iss(line);
                     std::string dummy;
-                    iss >> dummy >> field_name;
-                    pcout << "Found scalar field: " << field_name << std::endl;
+                    iss >> dummy >> found_field_name;
+                    
+                    // Check if this is the field we're looking for
+                    if (found_field_name == field_name) {
+                        found_scalars = true;
+                        pcout << "Found scalar field: " << found_field_name << std::endl;
 
-                    // Skip LOOKUP_TABLE line
-                    std::getline(vtk_reader, line);
+                        // Skip LOOKUP_TABLE line
+                        std::getline(vtk_reader, line);
 
-                    // Read scalar values
-                    for (unsigned int i = 0; i < vtk_dof_handler.n_dofs(); ++i) {
-                        if (!(vtk_reader >> vtk_field[i])) {
-                            pcout << Color::red << Color::bold
-                                  << "Error reading scalar field data from VTK"
-                                  << Color::reset << std::endl;
-                            found_scalars = false;
-                            break;
+                        // Read scalar values
+                        for (unsigned int i = 0; i < vtk_dof_handler.n_dofs(); ++i) {
+                            if (!(vtk_reader >> vtk_field[i])) {
+                                pcout << Color::red << Color::bold
+                                      << "Error reading scalar field data from VTK"
+                                      << Color::reset << std::endl;
+                                found_scalars = false;
+                                break;
+                            }
                         }
+                        break;
                     }
-                    break;
                 }
             }
 
             success = found_scalars;
             if (!success) {
                 pcout << Color::red << Color::bold
-                      << "Error: Could not find scalar field data in VTK file"
+                      << "Error: Could not find scalar field '" << field_name << "' in VTK file"
                       << Color::reset << std::endl;
             }
         } catch (const std::exception& e) {
@@ -927,7 +932,6 @@ bool read_vtk_field(
             success = false;
         }
     }
-
 
     if (broadcast_field) {
         success = dealii::Utilities::MPI::broadcast(mpi_communicator, success, 0);

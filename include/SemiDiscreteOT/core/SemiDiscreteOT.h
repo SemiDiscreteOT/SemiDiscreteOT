@@ -31,7 +31,7 @@
 #include <deal.II/numerics/rtree.h>
 #include "SemiDiscreteOT/core/MeshHierarchy.h"
 #include "SemiDiscreteOT/core/MeshManager.h"
-
+#include "SemiDiscreteOT/utils/VtkHandler.h"
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -75,6 +75,7 @@ private:
     DoFHandler<dim> dof_handler_source;
     DoFHandler<dim> dof_handler_target;
 
+    std::unique_ptr<VTKHandler<dim>> source_vtk_handler;
     DoFHandler<dim> vtk_dof_handler_source;
     Vector<double> vtk_field_source;
     Triangulation<dim> vtk_tria_source;
@@ -152,6 +153,13 @@ private:
 
     // Solver member
     std::unique_ptr<SotSolver<dim>> sot_solver;
+
+    /**
+     * Save interpolated fields for source and target meshes.
+     * This is useful for debugging and visualization purposes.
+     * Uses the field names from the parameter files.
+     */
+    void save_interpolated_fields();
 };
 #endif
 

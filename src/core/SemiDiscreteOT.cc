@@ -5,6 +5,7 @@
 #include "SemiDiscreteOT/core/OptimalTransportPlan.h"
 #include "SemiDiscreteOT/core/PointCloudHierarchy.h"
 #include "SemiDiscreteOT/solvers/SoftmaxRefinement.h"
+#include "SemiDiscreteOT/utils/VtkHandler.h"
 #include <deal.II/base/timer.h>
 #include <filesystem>
 #include <deal.II/base/vectorization.h>
@@ -211,32 +212,50 @@ void SemiDiscreteOT<dim>::setup_source_finite_elements(const bool is_multilevel)
             if (is_multilevel)
             {
                 pcout << Color::green << "Interpolating source density from VTK to source mesh" << Color::reset << std::endl;
-                // For multilevel, use non-conforming nearest neighbor interpolation.
-                Utils::interpolate_non_conforming_nearest(vtk_dof_handler_source,
-                                                          vtk_field_source,
-                                                          dof_handler_source,
-                                                          source_density);
+                
+                // For multilevel, use the stored VTKHandler if available
+                if (source_vtk_handler) {
+                    pcout << "Using stored VTKHandler for source density interpolation" << std::endl;
+                    VectorTools::interpolate(dof_handler_source, *source_vtk_handler, source_density);
+                } else {
+                    // Fallback to non-conforming nearest neighbor interpolation if VTKHandler not available
+                    pcout << "VTKHandler not available, using non-conforming nearest neighbor interpolation" << std::endl;
+                    Utils::interpolate_non_conforming_nearest(vtk_dof_handler_source,
+                                                              vtk_field_source,
+                                                              dof_handler_source,
+                                                              source_density);
+                }
+                
                 pcout << "Source density interpolated from VTK to source mesh" << std::endl;
             }
             else
             {
                 pcout << "Using custom source density from file: " << source_params.density_file_path << std::endl;
                 bool density_loaded = false;
-                // For the regular case, read the VTK field and then interpolate.
-                density_loaded = Utils::read_vtk_field<dim>(source_params.density_file_path,
-                                                            vtk_dof_handler_source,
-                                                            vtk_field_source,
-                                                            vtk_tria_source,
-                                                            mpi_communicator,
-                                                            pcout,
-                                                            true);
-                if (density_loaded)
-                {
+
+                try {
+                    pcout << "Loading VTK file using VTKHandler: " << source_params.density_file_path << std::endl;
+                    
+                    // Create VTKHandler instance and store it as a member variable
+                    source_vtk_handler = std::make_unique<VTKHandler<dim>>(source_params.density_file_path);
+                    
+                    // Setup the field for interpolation using the configured field name
+                    source_vtk_handler->setup_field(source_params.density_field_name, VTKHandler<dim>::DataLocation::PointData, 0);
+                    
+                    pcout << "Source density loaded from VTK file" << std::endl;
                     pcout << Color::green << "Interpolating source density from VTK to source mesh" << Color::reset << std::endl;
-                    Functions::FEFieldFunction<dim> field_function(vtk_dof_handler_source, vtk_field_source);
-                    VectorTools::interpolate(dof_handler_source, field_function, source_density);
+                    
+                    // Interpolate the field to the source mesh
+                    VectorTools::interpolate(dof_handler_source, *source_vtk_handler, source_density);
+                    
+                    pcout << "Successfully interpolated VTK field to source mesh" << std::endl;
+                    density_loaded = true;
+                } catch (const std::exception& e) {
+                    pcout << Color::red << "Error loading VTK file: " << e.what() << Color::reset << std::endl;
+                    density_loaded = false;
                 }
-                else
+
+                if (!density_loaded)
                 {
                     pcout << Color::red << "Failed to load custom density, using uniform density" << Color::reset << std::endl;
                     source_density = 1.0;
@@ -307,28 +326,33 @@ void SemiDiscreteOT<dim>::setup_target_finite_elements()
             bool density_loaded = false;
 
             if (target_params.density_file_format == "vtk") {
-                DoFHandler<dim> vtk_dof_handler_target;
-                Vector<double> vtk_field_target;
-                Triangulation<dim> vtk_tria_target;
-                // Read VTK file only on rank 0, don't broadcast field
-                density_loaded = Utils::read_vtk_field<dim>(target_params.density_file_path,
-                                                          vtk_dof_handler_target,
-                                                          vtk_field_target,
-                                                          vtk_tria_target,
-                                                          mpi_communicator,
-                                                          pcout,
-                                                          false); // broadcast_field = false for target case
-
-                if (density_loaded) {
+                // Use the new VTKHandler class to load and interpolate the field
+                try {
+                    pcout << "Loading VTK file using VTKHandler: " << target_params.density_file_path << std::endl;
+                    
+                    // Create VTKHandler instance
+                    VTKHandler<dim> vtk_handler(target_params.density_file_path);
+                    
+                    // Setup the field for interpolation using the configured field name
+                    vtk_handler.setup_field(target_params.density_field_name, VTKHandler<dim>::DataLocation::PointData, 0);
+                    
                     pcout << "Target density loaded from VTK file" << std::endl;
                     target_density.reinit(dof_handler_target.n_dofs());
                     pcout << "Target density size: " << target_density.size() << std::endl;
+                    
                     pcout << Color::green << "Interpolating target density from VTK to target mesh" << Color::reset << std::endl;
-                    Functions::FEFieldFunction<dim> field_function(vtk_dof_handler_target, vtk_field_target);
-                    VectorTools::interpolate(dof_handler_target, field_function, target_density);
+                    
+                    // Interpolate the field to the target mesh
+                    VectorTools::interpolate(dof_handler_target, vtk_handler, target_density);
+
                     pcout << "Successfully interpolated VTK field to target mesh" << std::endl;
                     pcout << "L1 norm of interpolated field: " << target_density.l1_norm() << std::endl;
                     target_density /= target_density.l1_norm();
+                    
+                    density_loaded = true;
+                } catch (const std::exception& e) {
+                    pcout << Color::red << "Error loading VTK file: " << e.what() << Color::reset << std::endl;
+                    density_loaded = false;
                 }
             } else {
                 std::vector<double> density_values;
@@ -1504,6 +1528,109 @@ void SemiDiscreteOT<dim>::save_discrete_measures()
     pcout << "Number of target points: " << target_points.size() << std::endl;
 }
 
+template <int dim>
+void SemiDiscreteOT<dim>::save_interpolated_fields()
+{
+    pcout << Color::yellow << Color::bold << "Starting field interpolation visualization..." << Color::reset << std::endl;
+    
+    std::string output_dir = "output/interpolated_fields";
+    fs::create_directories(output_dir);
+    
+    std::string source_field_name = source_params.density_field_name;
+    std::string target_field_name = target_params.density_field_name;
+    
+    pcout << "Using source field name: " << source_field_name << std::endl;
+    pcout << "Using target field name: " << target_field_name << std::endl;
+    
+    pcout << "\n" << Color::cyan << Color::bold << "Processing base source mesh" << Color::reset << std::endl;
+    
+    mesh_manager->load_source_mesh(source_mesh);
+    setup_source_finite_elements(false); // false = not multilevel
+    
+    std::string base_source_dir = output_dir + "/base_source";
+    fs::create_directories(base_source_dir);
+    
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+        DataOut<dim> data_out;
+        data_out.attach_dof_handler(dof_handler_source);
+        data_out.add_data_vector(source_density, source_field_name);
+        data_out.build_patches();
+        
+        std::string vtk_filename = base_source_dir + "/" + source_field_name + ".vtk";
+        std::ofstream output(vtk_filename);
+        data_out.write_vtk(output);
+        
+        pcout << "Saved interpolated field for base source mesh to: " << vtk_filename << std::endl;
+    }
+    
+    pcout << "\n" << Color::cyan << Color::bold << "Processing base target mesh" << Color::reset << std::endl;
+    
+    mesh_manager->load_target_mesh(target_mesh);
+    setup_target_finite_elements();
+    
+    std::string base_target_dir = output_dir + "/base_target";
+    fs::create_directories(base_target_dir);
+    
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+        DataOut<dim> data_out;
+        data_out.attach_dof_handler(dof_handler_target);
+        data_out.add_data_vector(target_density, target_field_name);
+        data_out.build_patches();
+        
+        std::string vtk_filename = base_target_dir + "/" + target_field_name + ".vtk";
+        std::ofstream output(vtk_filename);
+        data_out.write_vtk(output);
+        
+        pcout << "Saved interpolated field for base target mesh to: " << vtk_filename << std::endl;
+    }
+    
+    if (multilevel_params.source_enabled) {
+        pcout << "\n" << Color::cyan << Color::bold << "Processing multilevel source meshes" << Color::reset << std::endl;
+        
+        std::vector<std::string> source_mesh_files;
+        unsigned int num_levels = 0;
+        
+        source_mesh_files = mesh_manager->get_mesh_hierarchy_files(multilevel_params.source_hierarchy_dir);
+        if (source_mesh_files.empty()) {
+            pcout << Color::red << Color::bold << "No source mesh hierarchy found. Please run prepare_source_multilevel first." << Color::reset << std::endl;
+        } else {
+            num_levels = source_mesh_files.size();
+            pcout << "Found " << num_levels << " levels in the source mesh hierarchy" << std::endl;
+            
+            for (size_t level = 0; level < source_mesh_files.size(); ++level) {
+                const unsigned int level_name = num_levels - level - 1;
+                pcout << "\n" << Color::cyan << Color::bold 
+                      << "Processing source mesh level " << level_name 
+                      << " (mesh: " << source_mesh_files[level] << ")" << Color::reset << std::endl;
+                
+                std::string level_dir = output_dir + "/source_level_" + std::to_string(level_name);
+                fs::create_directories(level_dir);
+                
+                mesh_manager->load_mesh_at_level(source_mesh, dof_handler_source, source_mesh_files[level]);
+                
+                setup_source_finite_elements(true);
+                
+                if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+                    DataOut<dim> data_out;
+                    data_out.attach_dof_handler(dof_handler_source);
+                    data_out.add_data_vector(source_density, source_field_name);
+                    data_out.build_patches();
+                    
+                    std::string vtk_filename = level_dir + "/" + source_field_name + ".vtk";
+                    std::ofstream output(vtk_filename);
+                    data_out.write_vtk(output);
+                    
+                    pcout << "Saved interpolated field for source level " << level_name 
+                          << " to: " << vtk_filename << std::endl;
+                }
+            }
+        }
+    }
+    
+    pcout << "\n" << Color::green << Color::bold 
+          << "Field interpolation visualization completed!" << Color::reset << std::endl;
+    pcout << "Results saved in: " << output_dir << std::endl;
+}
 
 template <int dim>
 void SemiDiscreteOT<dim>::run()
@@ -1587,11 +1714,16 @@ void SemiDiscreteOT<dim>::run()
     {
         save_discrete_measures();
     }
+    else if (selected_task == "save_interpolated_fields")
+    {
+        save_interpolated_fields();
+    }
     else
     {
         pcout << "No valid task selected" << std::endl;
     }
 }
+
 
 template class SemiDiscreteOT<2>;
 template class SemiDiscreteOT<3>;

@@ -47,6 +47,7 @@ public:
         bool use_custom_density = false;        ///< Whether to use custom density
         std::string density_file_path;          ///< Path to the density file
         std::string density_file_format = "vtk"; ///< Format of the density file (vtk/h5)
+        std::string density_field_name = "normalized_density"; ///< Name of the field in the VTK file
     };
 
     /**
