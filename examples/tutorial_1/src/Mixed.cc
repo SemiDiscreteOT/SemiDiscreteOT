@@ -6,8 +6,8 @@ namespace Applications
 
   template <int dim>
   Mixed<dim>::Mixed()
-      : ParameterAcceptor("Mixed"), 
-        mpi_communicator(MPI_COMM_WORLD), 
+      : ParameterAcceptor("Mixed"),
+        mpi_communicator(MPI_COMM_WORLD),
         pcout(std::cout, (Utilities::MPI::this_mpi_process(mpi_communicator) == 0)),
         triangulation_1(
             mpi_communicator,
@@ -19,14 +19,14 @@ namespace Applications
             typename Triangulation<dim>::MeshSmoothing(
                 Triangulation<dim>::smoothing_on_refinement |
                 Triangulation<dim>::smoothing_on_coarsening)),
-        dof_handler_1(triangulation_1), 
-        dof_handler_2(triangulation_2), 
-        fe(FE_Q<dim>(1), 3, FE_DGQ<dim>(0), 1), 
-        mapping(2), 
-        forcing_term_1(dim), 
+        dof_handler_1(triangulation_1),
+        dof_handler_2(triangulation_2),
+        fe(FE_Q<dim>(1), 3, FE_DGQ<dim>(0), 1),
+        mapping(2),
+        forcing_term_1(dim),
         forcing_term_2(dim)
   {
-    
+
     add_parameter("number of refinements source", n_refinements_1);
     add_parameter("grid generator arguments source", grid_generator_arguments_1);
     add_parameter("grid generator function source", grid_generator_function_1);
@@ -38,6 +38,11 @@ namespace Applications
     add_parameter("grid generator function target", grid_generator_function_2);
     add_parameter("forcing term expression target", forcing_term_expression_2);
     add_parameter("function constants target", function_constants_2);
+
+    add_parameter("max iterations outer", max_iterations_outer);
+    add_parameter("tolerance outer", tolerance_outer);
+    add_parameter("max iterations inner", max_iterations_inner);
+    add_parameter("tolerance inner", tolerance_inner);
 
     // Create output directory structure
     if (!std::filesystem::exists("output"))
@@ -313,7 +318,7 @@ namespace Applications
     const auto amgS = linear_operator(S, prec_S);
 
     ReductionControl inner_solver_control(
-        100, 1e-8 * rhs.l2_norm(), 1.e-2);
+        max_iterations_inner, tolerance_inner * rhs.l2_norm(), 1.e-2);
     SolverCG<LA::MPI::Vector> cg(inner_solver_control);
 
     const auto invS = inverse_operator(S, cg, amgS);
@@ -322,7 +327,7 @@ namespace Applications
         std::array<LinearOperator<typename LA::MPI::BlockVector::BlockType>, 2>{
             {amgA, amgS}});
 
-    SolverControl solver_control(mat.m(), 1e-10 * rhs.l2_norm());
+    SolverControl solver_control(max_iterations_outer, tolerance_outer * rhs.l2_norm());
     SolverFGMRES<LA::MPI::BlockVector> solver(solver_control);
 
     constraints.set_zero(solution);
@@ -370,9 +375,9 @@ namespace Applications
     DataOutBase::DataOutFilterFlags flags(true, true);
     DataOutBase::DataOutFilter data_filter(flags);
     data_out.write_filtered_data(data_filter);
-    
+
     std::string h5_filename = output_dir + "/" + field_name + ".h5";
-    data_out.write_hdf5_parallel(data_filter, 
+    data_out.write_hdf5_parallel(data_filter,
                                 h5_filename,
                                 mpi_communicator);
   }
@@ -502,7 +507,7 @@ namespace Applications
 
     run_source();
     run_target();
-    
+
     // Add density field processing and optimal transport
     setup_density_fields();
     compute_optimal_transport();

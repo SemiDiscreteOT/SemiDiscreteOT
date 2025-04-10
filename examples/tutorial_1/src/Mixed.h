@@ -193,6 +193,11 @@ namespace Applications
     std::map<std::string, double> function_constants_2;
     FunctionParser<dim> forcing_term_2;
 
+    unsigned int max_iterations_outer = 1000;
+    unsigned int max_iterations_inner = 1000;
+    double tolerance_outer = 1e-8;
+    double tolerance_inner = 1e-10;
+
     bool use_tet;
 
     std::unique_ptr<PressureDensityField<dim>> source_density_field;

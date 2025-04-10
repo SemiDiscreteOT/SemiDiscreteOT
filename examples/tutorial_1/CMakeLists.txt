@@ -10,13 +10,15 @@ FIND_PACKAGE(deal.II 9.5.0 REQUIRED)
 DEAL_II_INITIALIZE_CACHED_VARIABLES()
 
 # Set project name
-PROJECT(Tutorial1 VERSION 1.0.0 LANGUAGES CXX)
+PROJECT(Tutorial1 VERSION 1.0.0 LANGUAGES CXX C)
 
 # Set C++ standard
 SET(CMAKE_CXX_STANDARD 17)
 SET(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-#FIND_PACKAGE(SemiDiscreteOT REQUIRED)
+SET(SemiDiscreteOT_DIR ../../build)
+FIND_PACKAGE(SemiDiscreteOT REQUIRED)
+FIND_PACKAGE(VTK REQUIRED)
 
 # Collect source files
 FILE(GLOB_RECURSE TUTORIAL_SOURCES "src/*.cc")
@@ -30,8 +32,8 @@ TARGET_INCLUDE_DIRECTORIES(tutorial_1 PRIVATE
 )
 
 # Link with RSOT and Deal.II
-#TARGET_LINK_LIBRARIES(tutorial_1 SemiDiscreteOT::SemiDiscreteOT)
-TARGET_LINK_LIBRARIES(tutorial_1 SemiDiscreteOT)
+TARGET_LINK_LIBRARIES(tutorial_1 SemiDiscreteOT::SemiDiscreteOT)
+#TARGET_LINK_LIBRARIES(tutorial_1 SemiDiscreteOT)
 DEAL_II_SETUP_TARGET(tutorial_1)
 
 # Set output directory
