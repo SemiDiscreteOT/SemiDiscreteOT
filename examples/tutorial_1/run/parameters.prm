@@ -16,8 +16,8 @@ subsection Mixed
   set forcing term expression target = exp(-1/(r^2-x^2-y^2-z^2)); exp(-1/(r^2-x^2-y^2-z^2)); exp(-1/(r^2-x^2-y^2-z^2))
   set function constants target = r:1
 
-  set max iterations outer = 10000
-  set max iterations inner = 500
-  set tolerance outer = 1e-10
+  set max iterations outer = 200000
+  set max iterations inner = 100
+  set tolerance outer = 1e-8
   set tolerance inner = 1e-10
 end

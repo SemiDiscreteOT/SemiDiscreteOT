@@ -82,6 +82,13 @@ namespace Applications
         tria,
         grid_generator_function,
         grid_generator_arguments);
+    if (grid_generator_function == "hyper_ball")
+    {
+      Point<dim> center{0., 0., 0.}; 
+      for (const auto &cell : tria.active_cell_iterators())
+        if (center.distance(cell->center()) > cell->diameter() / 10)
+          cell->set_all_manifold_ids(0);
+    }
     tria.refine_global(n_refinements);
     dof_handler.distribute_dofs(fe);
 
@@ -327,12 +334,14 @@ namespace Applications
         std::array<LinearOperator<typename LA::MPI::BlockVector::BlockType>, 2>{
             {amgA, amgS}});
 
+    pcout << "mat.m() = " << mat.m() << std::endl;
     SolverControl solver_control(max_iterations_outer, tolerance_outer * rhs.l2_norm());
     SolverFGMRES<LA::MPI::BlockVector> solver(solver_control);
 
     constraints.set_zero(solution);
     solver.solve(mat, solution, rhs, P);
     pcout << "   Solved in " << solver_control.last_step() << " iterations." << std::endl;
+    pcout << " Final residual: " << solver_control.last_value() << std::endl;
 
     constraints.distribute(solution);
     locally_relevant_solution = solution;
@@ -509,8 +518,8 @@ namespace Applications
     run_target();
 
     // Add density field processing and optimal transport
-    setup_density_fields();
-    compute_optimal_transport();
+    // setup_density_fields();
+    // compute_optimal_transport();
   }
 } // namespace Applications
 

@@ -25,11 +25,19 @@ void MeshManager<dim>::generate_mesh(TriangulationType& tria,
             grid_generator_function,
             grid_generator_arguments);
 
-        if (use_tetrahedral_mesh && dim == 3) {
-            GridGenerator::convert_hypercube_to_simplex_mesh(serial_tria, serial_tria);
+        if (grid_generator_function == "hyper_ball")
+        {
+            Point<dim> center{0., 0., 0.}; 
+            for (const auto &cell : serial_tria.active_cell_iterators())
+                if (center.distance(cell->center()) > cell->diameter() / 10)
+                    cell->set_all_manifold_ids(0);
         }
 
         serial_tria.refine_global(n_refinements);
+
+        if (use_tetrahedral_mesh && dim == 3) {
+            GridGenerator::convert_hypercube_to_simplex_mesh(serial_tria, serial_tria);
+        }
 
         // Set up the partitioner to use z-order curve
         tria.set_partitioner([](Triangulation<dim>& tria_to_partition, const unsigned int n_partitions) {
@@ -50,11 +58,19 @@ void MeshManager<dim>::generate_mesh(TriangulationType& tria,
             grid_generator_function,
             grid_generator_arguments);
 
-        if (use_tetrahedral_mesh && dim == 3) {
-            GridGenerator::convert_hypercube_to_simplex_mesh(tria, tria);
+        if (grid_generator_function == "hyper_ball")
+        {
+            Point<dim> center{0., 0., 0.}; 
+            for (const auto &cell : tria.active_cell_iterators())
+                if (center.distance(cell->center()) > cell->diameter() / 10)
+                    cell->set_all_manifold_ids(0);
         }
 
         tria.refine_global(n_refinements);
+
+        if (use_tetrahedral_mesh && dim == 3) {
+            GridGenerator::convert_hypercube_to_simplex_mesh(tria, tria);
+        }
     }
 }
 
