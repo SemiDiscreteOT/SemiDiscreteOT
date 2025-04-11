@@ -163,51 +163,74 @@ private:
     class VerboseSolverControl : public SolverControl
     {
     public:
-        VerboseSolverControl(unsigned int n, double tol, ConditionalOStream& pcout_)
-            : SolverControl(n, tol)
+        // Static constant for zero tolerance check
+        static constexpr double zero_tolerance = std::numeric_limits<double>::min();  // Smallest positive normalized value
+
+        // The tolerance passed to constructor is for checking if residual is effectively zero
+        VerboseSolverControl(unsigned int n, double zero_tol, ConditionalOStream& pcout_)
+            : SolverControl(n, zero_tol)  // This tolerance is for checking against zero
             , pcout(pcout_)
             , gradient(nullptr)
+            , target_measure(nullptr)
+            , user_tolerance(1.0)  
         {}
 
         void set_gradient(const Vector<double>& grad) {
             gradient = &grad;
         }
 
+        void set_target_measure(const Vector<double>& target_density) {
+            target_measure = &target_density;
+        }
+
+        void set_user_tolerance(double tol) {
+            user_tolerance = tol;
+        }
+
         virtual State check(unsigned int step, double value) override
         {
             AssertThrow(gradient != nullptr, 
                         ExcMessage("Gradient vector not set in VerboseSolverControl"));
+            AssertThrow(target_measure != nullptr,
+                        ExcMessage("Target measure not set in VerboseSolverControl"));
 
-            double linf_norm = 0.0;
-            linf_norm = (*gradient).linfty_norm();
+            // Check if abs(grad_j) < target_measure_j * user_tolerance for every j
+            double max_scaled_residual = -std::numeric_limits<double>::infinity();
+            for (unsigned int j = 0; j < gradient->size(); ++j) {
+                double scaled_residual = std::abs((*gradient)[j]) - (*target_measure)[j] * user_tolerance;
+                max_scaled_residual = std::max(max_scaled_residual, scaled_residual);
+            }
             
-            double rel_residual = (step == 0 || initial_linf_norm == 0.0) ? 
-                                  linf_norm : linf_norm / initial_linf_norm;
+            double rel_residual = (step == 0 || initial_residual == 0.0) ? 
+                                  max_scaled_residual : max_scaled_residual / initial_residual;
             
             if (step == 0)
-                initial_linf_norm = linf_norm;
+                initial_residual = max_scaled_residual;
             
             std::string color;
-            if (rel_residual < 0.1) {
-                color = Color::green;  // Good progress
-            } else if (rel_residual < 0.5) {
-                color = Color::yellow;   // Moderate progress
+            if (max_scaled_residual < tolerance()) {  // tolerance() is the zero-check tolerance from constructor
+                color = Color::green;  // Residual effectively zero
+            } else if (rel_residual < 0.5) {  // Fixed threshold for progress indication
+                color = Color::yellow;   // Making progress
             } else {
-                color = Color::red; // Initial iterations
+                color = Color::red; // Far from convergence
             }
             
             pcout << "Iteration " << CYAN << step << RESET
                   << " - L-2 gradient norm: " << color << value << RESET
-                  << " - L-inf gradient norm: " << color << linf_norm << RESET
-                  << " - Relative L-inf residual: " << color << rel_residual << RESET << std::endl;
+                  << " - Max scaled residual: " << color << max_scaled_residual << RESET
+                  << " - Relative residual: " << color << rel_residual << RESET << std::endl;
                 
-            return SolverControl::check(step, linf_norm);
+            // Check if max_scaled_residual is effectively zero using the constructor's tolerance
+            return SolverControl::check(step, max_scaled_residual);
         }
         
     private:
         ConditionalOStream& pcout;
-        double initial_linf_norm = 1.0;
-        const Vector<double>* gradient; 
+        double initial_residual = 1.0;
+        const Vector<double>* gradient;
+        const Vector<double>* target_measure;
+        double user_tolerance; 
     };
 
     // MPI and parallel related members
