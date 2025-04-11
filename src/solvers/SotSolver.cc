@@ -117,10 +117,19 @@ void SotSolver<dim>::solve(
     // Initialize gradient member variable
     gradient.reinit(potentials.size());
 
-    // Create solver control with verbose output
+    // Configure Solver Control based on selected tolerance type
+    bool use_componentwise = (params.solver_control_type == "componentwise");
+    double solver_ctrl_tolerance;
+    if (use_componentwise) {
+        solver_ctrl_tolerance = std::numeric_limits<double>::min();
+    } else {
+        solver_ctrl_tolerance = params.tolerance;
+    }
+
     solver_control = std::make_unique<VerboseSolverControl>(
         params.max_iterations,
-        VerboseSolverControl::zero_tolerance,  // Use static constant for zero check
+        solver_ctrl_tolerance,
+        use_componentwise,
         pcout
     );
 
@@ -129,11 +138,14 @@ void SotSolver<dim>::solve(
         solver_control->log_result(false);
     }
 
-    // Set the gradient and target measure in the VerboseSolverControl
     auto* verbose_control = dynamic_cast<VerboseSolverControl*>(solver_control.get());
+    AssertThrow(verbose_control != nullptr, ExcInternalError());
+
     verbose_control->set_gradient(gradient);
-    verbose_control->set_target_measure(target_measure.density);
-    verbose_control->set_user_tolerance(params.tolerance);  // Set user's tolerance for the computation
+
+    if (use_componentwise) {
+        verbose_control->set_target_measure(target_measure.density, params.tolerance);
+    }
 
     try {
         Timer timer;

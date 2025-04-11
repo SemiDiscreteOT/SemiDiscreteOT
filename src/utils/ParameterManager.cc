@@ -66,6 +66,8 @@ ParameterManager::ParameterManager(const MPI_Comm &comm)
                      "Maximum number of iterations for the optimization solver");
         add_parameter("tolerance", solver_params.tolerance,
                      "Convergence tolerance for the optimization solver");
+        add_parameter("solver_control_type", solver_params.solver_control_type,
+                     "Type of solver control to use (l1norm/componentwise)");
         add_parameter("regularization_parameter", solver_params.regularization_param,
                      "Entropy regularization parameter (lambda)");
         add_parameter("epsilon", solver_params.epsilon,
@@ -299,7 +301,7 @@ void ParameterManager::print_solver_parameters() const
     pcout << "    Solver Type: " << BOLD << solver_params.solver_type << RESET << std::endl;
     pcout << "    Maximum Iterations: " << BOLD << solver_params.max_iterations << RESET << std::endl;
     pcout << "    Tolerance: " << BOLD << solver_params.tolerance << RESET << std::endl;
-    pcout << std::endl;
+    pcout << "    Solver Control Type: " << BOLD << solver_params.solver_control_type << RESET << std::endl;
     
     pcout << CYAN << "  Regularization Settings:" << RESET << std::endl;
     pcout << "    Regularization Parameter: " << BOLD << solver_params.regularization_param << RESET << std::endl;

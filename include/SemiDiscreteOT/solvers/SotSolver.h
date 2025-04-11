@@ -163,74 +163,102 @@ private:
     class VerboseSolverControl : public SolverControl
     {
     public:
-        // Static constant for zero tolerance check
-        static constexpr double zero_tolerance = std::numeric_limits<double>::min();  // Smallest positive normalized value
-
-        // The tolerance passed to constructor is for checking if residual is effectively zero
-        VerboseSolverControl(unsigned int n, double zero_tol, ConditionalOStream& pcout_)
-            : SolverControl(n, zero_tol)  // This tolerance is for checking against zero
+        VerboseSolverControl(unsigned int n, double tol, bool use_componentwise, ConditionalOStream& pcout_)
+            : SolverControl(n, tol)
             , pcout(pcout_)
+            , use_componentwise_check(use_componentwise)
             , gradient(nullptr)
             , target_measure(nullptr)
-            , user_tolerance(1.0)  
+            , user_tolerance_for_componentwise(1.0) 
         {}
 
         void set_gradient(const Vector<double>& grad) {
             gradient = &grad;
         }
 
-        void set_target_measure(const Vector<double>& target_density) {
+        void set_target_measure(const Vector<double>& target_density, double user_tolerance) {
+            AssertThrow(use_componentwise_check, ExcMessage("Target measure only needed for component-wise check"));
             target_measure = &target_density;
+            user_tolerance_for_componentwise = user_tolerance;
         }
 
-        void set_user_tolerance(double tol) {
-            user_tolerance = tol;
-        }
 
         virtual State check(unsigned int step, double value) override
         {
-            AssertThrow(gradient != nullptr, 
+            AssertThrow(gradient != nullptr,
                         ExcMessage("Gradient vector not set in VerboseSolverControl"));
-            AssertThrow(target_measure != nullptr,
-                        ExcMessage("Target measure not set in VerboseSolverControl"));
 
-            // Check if abs(grad_j) < target_measure_j * user_tolerance for every j
-            double max_scaled_residual = -std::numeric_limits<double>::infinity();
-            for (unsigned int j = 0; j < gradient->size(); ++j) {
-                double scaled_residual = std::abs((*gradient)[j]) - (*target_measure)[j] * user_tolerance;
-                max_scaled_residual = std::max(max_scaled_residual, scaled_residual);
-            }
-            
-            double rel_residual = (step == 0 || initial_residual == 0.0) ? 
-                                  max_scaled_residual : max_scaled_residual / initial_residual;
-            
-            if (step == 0)
-                initial_residual = max_scaled_residual;
-            
+            double check_value = 0.0;
+            std::string check_description;
             std::string color;
-            if (max_scaled_residual < tolerance()) {  // tolerance() is the zero-check tolerance from constructor
-                color = Color::green;  // Residual effectively zero
-            } else if (rel_residual < 0.5) {  // Fixed threshold for progress indication
-                color = Color::yellow;   // Making progress
-            } else {
-                color = Color::red; // Far from convergence
+
+            if (use_componentwise_check)
+            {
+                AssertThrow(target_measure != nullptr,
+                            ExcMessage("Target measure not set for component-wise check"));
+                AssertThrow(gradient->size() == target_measure->size(),
+                            ExcDimensionMismatch(gradient->size(), target_measure->size()));
+
+                double max_scaled_residual = -std::numeric_limits<double>::infinity();
+                for (unsigned int j = 0; j < gradient->size(); ++j) {
+                    double scaled_residual = std::abs((*gradient)[j]) - (*target_measure)[j] * user_tolerance_for_componentwise;
+                    max_scaled_residual = std::max(max_scaled_residual, scaled_residual);
+                }
+                check_value = max_scaled_residual; 
+
+                if (check_value < tolerance()) { 
+                    color = Color::green;
+                } else if (check_value < 0) { 
+                     color = Color::yellow;
+                } else { 
+                    color = Color::red;
+                }
+
+                check_description = "Max Scaled Residual (max |g_i| - T_i*tol): ";
+                pcout << "Iteration " << CYAN << step << RESET
+                      << " - L-2 gradient norm: " << color << value << RESET // value is L2 norm from BFGS
+                      << " - " << check_description << color << check_value << RESET << std::endl;
+
             }
-            
-            pcout << "Iteration " << CYAN << step << RESET
-                  << " - L-2 gradient norm: " << color << value << RESET
-                  << " - Max scaled residual: " << color << max_scaled_residual << RESET
-                  << " - Relative residual: " << color << rel_residual << RESET << std::endl;
-                
-            // Check if max_scaled_residual is effectively zero using the constructor's tolerance
-            return SolverControl::check(step, max_scaled_residual);
+            else // Use L1-norm check
+            {
+                check_value = gradient->l1_norm(); 
+
+                double rel_residual = (step == 0 || initial_l1_norm == 0.0) ?
+                                      check_value : check_value / initial_l1_norm;
+
+                if (step == 0)
+                    initial_l1_norm = check_value;
+
+                if (check_value < tolerance()) { 
+                    color = Color::green;  
+                } else if (rel_residual < 0.5) {
+                    color = Color::yellow;  
+                } else {
+                    color = Color::red; 
+                }
+
+                check_description = "L-1 gradient norm: ";
+                 pcout << "Iteration " << CYAN << step << RESET
+                      << " - L-2 gradient norm: " << color << value << RESET 
+                      << " - " << check_description << color << check_value << RESET
+                      << " - Relative L-1 residual: " << color << rel_residual << RESET << std::endl;
+            }
+
+            last_check_value = check_value; 
+            return SolverControl::check(step, check_value);
         }
-        
+
+        double get_last_check_value() const { return last_check_value; }
+
     private:
         ConditionalOStream& pcout;
-        double initial_residual = 1.0;
+        bool use_componentwise_check;
+        double initial_l1_norm = 1.0; 
         const Vector<double>* gradient;
-        const Vector<double>* target_measure;
-        double user_tolerance; 
+        const Vector<double>* target_measure; 
+        double user_tolerance_for_componentwise; 
+        double last_check_value = 0.0;
     };
 
     // MPI and parallel related members
