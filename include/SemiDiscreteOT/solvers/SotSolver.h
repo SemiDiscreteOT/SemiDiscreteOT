@@ -5,6 +5,7 @@
 #include <deal.II/lac/vector.h>
 #include <deal.II/lac/la_parallel_vector.h>
 #include <deal.II/lac/solver_control.h>
+#include <deal.II/lac/lapack_full_matrix.h>
 #include <deal.II/base/point.h>
 #include <deal.II/fe/fe_values.h>
 #include <deal.II/dofs/dof_handler.h>
@@ -150,11 +151,15 @@ public:
     double get_last_distance_threshold() const { return current_distance_threshold; }
     bool get_cache_limit_reached() const { return cache_limit_reached; }
 
-private:
     // Core evaluation method
     double evaluate_functional(const Vector<double>& potential,
                              Vector<double>& gradient_out);
 
+    // Compute Hessian matrix for Newton solver
+    void compute_hessian(const Vector<double>& potential,
+                        LAPACKFullMatrix<double>& hessian_out);
+
+private:
     // Local assembly methods
     void local_assemble(const typename DoFHandler<dim>::active_cell_iterator& cell,
                        ScratchData& scratch,

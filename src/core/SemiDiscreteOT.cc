@@ -464,6 +464,10 @@ void SemiDiscreteOT<dim>::assign_potentials_by_hierarchy(
             solver_params.quadrature_order,
             current_distance_threshold);
 
+        // Add timer for softmax refinement
+        Timer softmax_timer;
+        softmax_timer.start();
+
         // Apply softmax refinement
         potentials = softmax_refiner.compute_refinement(
             target_points,           // target_points_fine
@@ -475,7 +479,8 @@ void SemiDiscreteOT<dim>::assign_potentials_by_hierarchy(
             fine_level,
             child_indices_);
 
-        pcout << "Softmax-based potential assignment completed." << std::endl;
+        softmax_timer.stop();
+        pcout << "Softmax-based potential assignment completed in " << softmax_timer.wall_time() << " seconds." << std::endl;
     }
     else {
         pcout << "Applying direct potential assignment from level " << coarse_level
@@ -588,6 +593,9 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
 {
     Timer global_timer;
     global_timer.start();
+    
+    // Reset total softmax refinement time
+    double total_softmax_time = 0.0;
 
     if (save_results_to_files) {
         pcout << Color::yellow << Color::bold << "Starting target point cloud multilevel SOT computation..." << Color::reset << std::endl;
@@ -715,7 +723,15 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
         Vector<double> current_level_potentials(target_points.size());
         if (level > 0) {
             // Use hierarchy-based potential transfer from previous level
+            Timer transfer_timer;
+            transfer_timer.start();
             assign_potentials_by_hierarchy(current_level_potentials, level_number+1, level_number, level_potentials);
+            transfer_timer.stop();
+            
+            // Update total softmax time if using softmax transfer
+            if (multilevel_params.use_softmax_potential_transfer) {
+                total_softmax_time += transfer_timer.wall_time();
+            }
         }
 
         // Apply epsilon scaling for this level if enabled
@@ -842,6 +858,13 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
         global_timer.stop();
         pcout << "\n" << Color::magenta << Color::bold << "----------------------------------------" << Color::reset << std::endl;
         pcout << Color::magenta << Color::bold << "Total multilevel target computation time: " << global_timer.wall_time() << " seconds" << Color::reset << std::endl;
+        
+        // Report total softmax time if applicable
+        if (multilevel_params.use_softmax_potential_transfer && total_softmax_time > 0.0) {
+            pcout << Color::magenta << Color::bold << "Total time spent on softmax potential transfers: " << total_softmax_time 
+                  << " seconds (" << (total_softmax_time / global_timer.wall_time() * 100.0) << "%)" << Color::reset << std::endl;
+        }
+        
         pcout << Color::magenta << Color::bold << "----------------------------------------" << Color::reset << std::endl;
     }
 }
