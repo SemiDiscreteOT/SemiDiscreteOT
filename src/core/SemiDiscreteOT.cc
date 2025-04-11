@@ -747,7 +747,7 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
                         // Save intermediate results if this is not the last epsilon for this level
                         if (save_results_to_files && eps_idx < level_epsilons.size() - 1) {
                             std::string eps_suffix = "_eps" + std::to_string(eps_idx + 1);
-                            save_results(current_level_potentials, level_output_dir + "/potentials" + eps_suffix);
+                            save_results(current_level_potentials, level_output_dir + "/potentials" + eps_suffix, false);
                         }
                     } catch (const SolverControl::NoConvergence& exc) {
                         if (exc.last_step >= solver_params.max_iterations) {
@@ -809,7 +809,7 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
 
         // Save results for this level (if requested)
         if(save_results_to_files) {
-            save_results(current_level_potentials, level_output_dir + "/potentials");
+            save_results(current_level_potentials, level_output_dir + "/potentials", false);
             if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
                 std::ofstream conv_info(level_output_dir + "/convergence_info.txt");
                 conv_info << "Regularization parameter (λ): " << solver_params.regularization_param << "\n";
@@ -891,8 +891,8 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
 
     // Create output directory structure.
     std::string eps_dir = "output/epsilon_" + std::to_string(original_regularization);
-    std::string multilevel_dir = "multilevel";
-    fs::create_directories(eps_dir + "/" + multilevel_dir);
+    std::string multilevel_dir = eps_dir + "/multilevel";
+    fs::create_directories(multilevel_dir);
 
     // Setup epsilon scaling if enabled (and target multilevel is not enabled).
     std::vector<std::vector<double>> epsilon_distribution;
@@ -928,7 +928,7 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
                         if (eps_idx < level_epsilons.size() - 1)
                         {
                             std::string eps_suffix = "_eps" + std::to_string(eps_idx + 1);
-                            save_results(potentials, level_dir + "/potentials" + eps_suffix);
+                            save_results(potentials, level_dir + "/potentials" + eps_suffix, false);
                         }
                     }
                     catch (const SolverControl::NoConvergence &exc)
@@ -977,7 +977,7 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
                   << "============================================" << Color::reset << std::endl;
 
             // Create directory for this source level.
-            std::string source_level_dir = eps_dir + "/" + multilevel_dir + "/source_level_" + std::to_string(level_name);
+            std::string source_level_dir = multilevel_dir + "/source_level_" + std::to_string(level_name);
             fs::create_directories(source_level_dir);
 
             Vector<double> level_potentials;
@@ -1028,7 +1028,7 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
 
             level_timer.stop();
             // Save the result for the level.
-            save_results(level_potentials, source_level_dir + "/potentials");
+            save_results(level_potentials, source_level_dir + "/potentials", false);
 
             // Log summary for this level.
             pcout << "\n" << Color::blue << Color::bold << "Source level " << level_name << " summary:" << Color::reset << std::endl;
@@ -1051,7 +1051,7 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
     }
 
     // Save final results.
-    save_results(final_potentials, multilevel_dir + "/potentials");
+    save_results(final_potentials, multilevel_dir + "/potentials", false);
 
     // Restore original solver parameters.
     solver_params.max_iterations = original_max_iterations;
@@ -1063,7 +1063,7 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
           << "============================================" << Color::reset << std::endl;
     pcout << Color::green << Color::bold << "Multilevel computation completed!" << Color::reset << std::endl;
     pcout << Color::green << Color::bold << "Total computation time: " << global_timer.wall_time() << " seconds" << Color::reset << std::endl;
-    pcout << Color::green << "Final results saved in: " << eps_dir << "/" << multilevel_dir << Color::reset << std::endl;
+    pcout << Color::green << "Final results saved in: " << multilevel_dir << Color::reset << std::endl;
     pcout << Color::green << Color::bold
           << "============================================" << Color::reset << std::endl;
 }
@@ -1235,17 +1235,24 @@ void SemiDiscreteOT<dim>::prepare_target_multilevel()
 
 
 template <int dim>
-void SemiDiscreteOT<dim>::save_results(const Vector<double>& potential, const std::string& filename)
+void SemiDiscreteOT<dim>::save_results(const Vector<double>& potential, const std::string& filename, bool add_epsilon_prefix)
 {
     // Only rank 0 should create directories and write files
     if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
-        // Create epsilon-specific directory
-        std::string eps_dir = "output/epsilon_" + std::to_string(solver_params.regularization_param);
-        fs::create_directories(eps_dir);
+        std::string full_path;
+        if (add_epsilon_prefix) {
+            // Create epsilon-specific directory
+            std::string eps_dir = "output/epsilon_" + std::to_string(solver_params.regularization_param);
+            fs::create_directories(eps_dir);
+            full_path = eps_dir + "/" + filename;
+        } else {
+            // Use the filename as is
+            full_path = filename;
+        }
 
         // Save potential
         std::vector<double> potential_vec(potential.begin(), potential.end());
-        Utils::write_vector(potential_vec, eps_dir + "/" + filename, io_coding);
+        Utils::write_vector(potential_vec, full_path, io_coding);
     }
     // Make sure all processes wait for rank 0 to finish writing
     MPI_Barrier(mpi_communicator);

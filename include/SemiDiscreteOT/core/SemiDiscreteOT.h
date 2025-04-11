@@ -113,7 +113,7 @@ private:
     void setup_finite_elements();
     void setup_target_points();
     void setup_multilevel_finite_elements();
-    void save_results(const Vector<double>& potentials, const std::string& filename);
+    void save_results(const Vector<double>& potentials, const std::string& filename, bool add_epsilon_prefix = true);
 
     // Exact SOT method (3D only)
     template <int d = dim>
