@@ -50,6 +50,7 @@ public:
     SemiDiscreteOT(const MPI_Comm &mpi_communicator);
     void run();
     void save_discrete_measures();
+    void run_new_combined_multilevel();
 
 private:
     // MPI-related members
