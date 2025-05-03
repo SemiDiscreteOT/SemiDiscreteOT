@@ -8,7 +8,7 @@ subsection ParameterManager
       set number of refinements = 4
       set grid generator function = hyper_cube
       set grid generator arguments = -1 : 1 : false
-      set use tetrahedral mesh = false
+      set use tetrahedral mesh = true
       set use custom density = false
       set density file path  = output/density_field/field.vtu
       set density field name = u
@@ -19,7 +19,7 @@ subsection ParameterManager
       set number of refinements = 3
       set grid generator function = hyper_ball
       set grid generator arguments = 0, 0, 0 : 1 : true
-      set use tetrahedral mesh = false
+      set use tetrahedral mesh = true
       set use custom density = false
       set density file path  = output/density_field/field.vtk
       set density file format = vtk
@@ -54,15 +54,15 @@ subsection ParameterManager
     set epsilon = 1e-12
     set tau = 1e-4  # Truncation error tolerance for integral radius bound
     set tolerance = 1e-2
-    set solver_control_type = componentwise
-    set verbose_output = false
+    set solver_control_type = l1norm
+    set verbose_output = true
     set solver_type = BFGS
     set quadrature_order = 3
     set number_of_threads = 0
     set use_epsilon_scaling = false
     set epsilon_scaling_factor = 10
     set epsilon_scaling_steps = 3
-    set use_caching = true
+    set use_caching = false
     set max_cache_size_mb = 20000
   end
 

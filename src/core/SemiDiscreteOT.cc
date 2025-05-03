@@ -1485,6 +1485,7 @@ void SemiDiscreteOT<dim>::compute_transport_map()
         transport_plan.set_source_measure(source_points, source_density_vec);
         transport_plan.set_target_measure(target_points, target_density_vec);
         transport_plan.set_potential(potentials_dealii, regularization_param);
+        transport_plan.set_truncation_radius(transport_map_params.truncation_radius);
 
         // Try different strategies and save results
         for (const auto &strategy : transport_plan.get_available_strategies())
@@ -1943,6 +1944,17 @@ void SemiDiscreteOT<dim>::run_new_combined_multilevel()
     std::string combined_multilevel_dir = eps_dir + "/new_combined_multilevel";
     fs::create_directories(combined_multilevel_dir);
 
+    // Create/Open the summary log file on rank 0
+    std::ofstream summary_log;
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+        summary_log.open(combined_multilevel_dir + "/summary_log.txt", std::ios::app);
+        // Write header if file is new or empty
+        if (summary_log.tellp() == 0) {
+            summary_log << "Combined Iter | Solver Iterations | Time (s) | Last Threshold\n";
+            summary_log << "------------------------------------------------------------\n";
+        }
+    }
+
     // Setup epsilon scaling if enabled
     if (solver_params.use_epsilon_scaling && epsilon_scaling_handler) {
         pcout << "Computing epsilon distribution for combined multilevel optimization..." << std::endl;
@@ -2105,6 +2117,21 @@ void SemiDiscreteOT<dim>::run_new_combined_multilevel()
         current_distance_threshold = sot_solver->get_last_distance_threshold();
 
         level_timer.stop();
+        const double level_time = level_timer.wall_time();
+        const unsigned int last_iterations = sot_solver->get_last_iteration_count();
+
+        // Log summary information to file (only rank 0)
+        if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0 && summary_log.is_open()) {
+            summary_log << std::setw(13) << combined_iter << " | "
+                        << std::setw(17) << last_iterations << " | "
+                        << std::setw(8) << std::fixed << std::setprecision(4) << level_time << " | "
+                        << std::setw(14) << std::scientific << std::setprecision(6) << current_distance_threshold << "\n";
+        }
+    }
+
+    // Close the log file on rank 0
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0 && summary_log.is_open()) {
+        summary_log.close();
     }
 
     // Restore original parameters

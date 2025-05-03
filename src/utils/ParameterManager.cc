@@ -141,12 +141,8 @@ ParameterManager::ParameterManager(const MPI_Comm &comm)
 
     enter_subsection("transport_map_parameters");
     {
-        add_parameter("n_neighbors", transport_map_params.n_neighbors,
-                     "Number of neighbors for local methods");
-        add_parameter("kernel_width", transport_map_params.kernel_width,
-                     "Kernel width for smooth approximations");
-        add_parameter("interpolation_type", transport_map_params.interpolation_type,
-                     "Type of interpolation");
+        add_parameter("truncation_radius", transport_map_params.truncation_radius,
+                     "Truncation radius for map approximation (-1 = disabled)");
     }
     leave_subsection();
 }
@@ -375,8 +371,7 @@ void ParameterManager::print_power_diagram_parameters() const
 void ParameterManager::print_transport_map_parameters() const
 {
     pcout << CYAN << "  Transport Map Settings:" << RESET << std::endl;
-    pcout << "    Number of Neighbors: " << BOLD << transport_map_params.n_neighbors << RESET << std::endl;
-    pcout << "    Kernel Width: " << BOLD << transport_map_params.kernel_width << RESET << std::endl;
-    pcout << "    Interpolation Type: " << BOLD << transport_map_params.interpolation_type << RESET << std::endl;
+    pcout << "    Truncation Radius: " << BOLD << (transport_map_params.truncation_radius < 0 ? "disabled" : 
+                                                 std::to_string(transport_map_params.truncation_radius)) << RESET << std::endl;
     pcout << std::endl;
 } 

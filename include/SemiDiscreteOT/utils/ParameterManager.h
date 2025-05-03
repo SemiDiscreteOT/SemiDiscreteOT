@@ -109,9 +109,7 @@ public:
      * Parameters for transport map computation.
      */
     struct TransportMapParameters {
-        unsigned int n_neighbors = 10;           ///< Number of neighbors for local methods
-        double kernel_width = 0.1;              ///< Width for smooth approximations
-        std::string interpolation_type = "linear";///< Type of interpolation
+        double truncation_radius = -1.0;        ///< Truncation radius for map approximation (-1 = disabled)
     };
 
     // Const access to parameters through getters

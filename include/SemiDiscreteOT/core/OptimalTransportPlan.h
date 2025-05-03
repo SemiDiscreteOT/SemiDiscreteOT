@@ -30,7 +30,7 @@ public:
     /**
      * Constructor taking an optional strategy name.
      */
-    OptimalTransportPlan(const std::string& strategy_name = "nearest_neighbor");
+    OptimalTransportPlan(const std::string& strategy_name = "modal");
 
     /**
      * Set the source measure data.
@@ -57,6 +57,14 @@ public:
                       const double regularization_param = 0.0);
 
     /**
+     * Set the truncation radius for map computation.
+     * Points outside this radius will not be considered in the map computation.
+     * A negative value means no truncation (all points are considered).
+     * @param radius The truncation radius
+     */
+    void set_truncation_radius(double radius);
+
+    /**
      * Compute the optimal transport map approximation using the current strategy.
      */
     void compute_map();
@@ -79,14 +87,6 @@ public:
     static std::vector<std::string> get_available_strategies();
 
 private:
-    // Parameters for the approximation
-    struct Parameters {
-        unsigned int n_samples = 1000;        // Number of samples for Monte Carlo methods
-        unsigned int n_neighbors = 10;         // Number of neighbors for local methods
-        double kernel_width = 0.1;            // Kernel width for smooth approximations
-        std::string interpolation_type = "linear"; // Type of interpolation
-    } params;
-
     // Data members
     std::vector<Point<dim>> source_points;
     std::vector<double> source_density;
@@ -94,6 +94,7 @@ private:
     std::vector<double> target_density;
     Vector<double> transport_potential;
     double regularization_parameter;
+    double truncation_radius = -1.0;  // Negative means no truncation
 
     // Strategy pattern implementation
     std::unique_ptr<MapApproximationStrategy<dim>> strategy;
@@ -116,7 +117,8 @@ public:
                            const std::vector<Point<dim>>& target_points,
                            const std::vector<double>& target_density,
                            const Vector<double>& potential,
-                           const double regularization_param) = 0;
+                           const double regularization_param,
+                           const double truncation_radius) = 0;
 
     virtual void save_results(const std::string& output_dir) const = 0;
 
@@ -126,23 +128,28 @@ protected:
 };
 
 /**
- * Nearest neighbor strategy for map approximation.
+ * Modal strategy for map approximation.
+ * Maps each source point to the target point that maximizes:
+ * score = potential[j] - 0.5*||x-y||^2 + regularization_param * log(target_density[j])
  */
 template <int dim>
-class NearestNeighborStrategy : public MapApproximationStrategy<dim> {
+class ModalStrategy : public MapApproximationStrategy<dim> {
 public:
     void compute_map(const std::vector<Point<dim>>& source_points,
                     const std::vector<double>& source_density,
                     const std::vector<Point<dim>>& target_points,
                     const std::vector<double>& target_density,
                     const Vector<double>& potential,
-                    const double regularization_param) override;
+                    const double regularization_param,
+                    const double truncation_radius) override;
 
     void save_results(const std::string& output_dir) const override;
 };
 
 /**
  * Barycentric interpolation strategy for map approximation.
+ * Computes a weighted average of target points where weights are:
+ * w_j = target_density[j] * exp((potential[j] - 0.5*||x-y||^2) / regularization_param)
  */
 template <int dim>
 class BarycentricStrategy : public MapApproximationStrategy<dim> {
@@ -152,23 +159,8 @@ public:
                     const std::vector<Point<dim>>& target_points,
                     const std::vector<double>& target_density,
                     const Vector<double>& potential,
-                    const double regularization_param) override;
-
-    void save_results(const std::string& output_dir) const override;
-};
-
-/**
- * Kernel-based strategy for smooth map approximation.
- */
-template <int dim>
-class KernelStrategy : public MapApproximationStrategy<dim> {
-public:
-    void compute_map(const std::vector<Point<dim>>& source_points,
-                    const std::vector<double>& source_density,
-                    const std::vector<Point<dim>>& target_points,
-                    const std::vector<double>& target_density,
-                    const Vector<double>& potential,
-                    const double regularization_param) override;
+                    const double regularization_param,
+                    const double truncation_radius) override;
 
     void save_results(const std::string& output_dir) const override;
 };
