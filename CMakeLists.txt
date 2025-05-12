@@ -1,18 +1,9 @@
 CMAKE_MINIMUM_REQUIRED(VERSION 3.13.0)
 
+SET(CMAKE_CXX_COMPILER g++)
+SET(CMAKE_C_COMPILER gcc)
+
 PROJECT(SemiDiscreteOT VERSION 1.0.0 LANGUAGES CXX C)
-SET(CMAKE_SKIP_BUILD_RPATH FALSE)
-SET(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
-SET(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/lib")
-SET(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
-SET(CMAKE_MACOSX_RPATH TRUE)
-
-# Make sure the executable can find libraries in the same build directory
-IF(APPLE)
-    SET(CMAKE_INSTALL_NAME_DIR "@rpath")
-    SET(CMAKE_INSTALL_RPATH "@loader_path/../lib;@executable_path/../lib")
-ENDIF()
-
 ADD_COMPILE_DEFINITIONS(HX=HX HY=HY HZ=HZ)
 
 
@@ -67,16 +58,9 @@ SET(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/run)
 # Geogram setup
 INCLUDE_DIRECTORIES($ENV{GEOGRAM_DIR}/src/lib)
 SET(CMAKE_MODULE_PATH $ENV{GEOGRAM_DIR}/cmake)
-
-IF(APPLE)
-    SET(LIB_EXTENSION "dylib")
-ELSE()
-    SET(LIB_EXTENSION "so")
-ENDIF()
-
 SET(GEOGRAM_LIBS
-    $ENV{GEOGRAM_DIR}/build/Darwin-clang-dynamic-Release/lib/libgeogram.${LIB_EXTENSION}
-    $ENV{GEOGRAM_DIR}/build/Darwin-clang-dynamic-Release/lib/libexploragram.${LIB_EXTENSION}
+    $ENV{GEOGRAM_DIR}/build/Linux64-gcc-dynamic-Release/lib/libgeogram.so
+    $ENV{GEOGRAM_DIR}/build/Linux64-gcc-dynamic-Release/lib/libexploragram.so
 )
 
 # Library source files

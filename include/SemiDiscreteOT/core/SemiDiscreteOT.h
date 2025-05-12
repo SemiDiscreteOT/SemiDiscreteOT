@@ -50,7 +50,6 @@ public:
     SemiDiscreteOT(const MPI_Comm &mpi_communicator);
     void run();
     void save_discrete_measures();
-    void run_new_combined_multilevel();
 
 private:
     // MPI-related members
@@ -101,10 +100,11 @@ private:
     // Multilevel methods
     void prepare_source_multilevel();
     void prepare_target_multilevel();
-    void run_multilevel_sot();
+    void run_multilevel();
+    void run_combined_multilevel();
+    void run_source_multilevel();
     void run_target_multilevel(const std::string& source_mesh_file = "",
-                             Vector<double>* output_potentials = nullptr,
-                             bool save_results_to_files = true);
+                             Vector<double>* output_potentials = nullptr);
     void run_target_multilevel_for_source_level(const std::string& source_mesh_file, 
                                               Vector<double>& potentials);
 

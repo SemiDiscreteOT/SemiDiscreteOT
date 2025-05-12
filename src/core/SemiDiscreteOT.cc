@@ -16,9 +16,9 @@
 #include <deal.II/grid/grid_in.h>
 #include <deal.II/numerics/fe_field_function.h>
 #include <deal.II/base/function.h>
-#include <deal.II/base/data_out_base.h> // Include necessary header for DataOut
-#include <deal.II/numerics/data_out.h>  // Include necessary header for DataOut
-#include <deal.II/base/logstream.h>     // Include necessary header for AssertDimension
+#include <deal.II/base/data_out_base.h> 
+#include <deal.II/numerics/data_out.h>  
+#include <deal.II/base/logstream.h>     
 
 namespace fs = std::filesystem;
 
@@ -621,15 +621,28 @@ void SemiDiscreteOT<dim>::run_sot()
     save_results(potential, "potentials");
 
     timer.stop();
+    const double total_time = timer.wall_time();
     pcout << "\n"
-          << Color::green << Color::bold << "SOT optimization completed in " << timer.wall_time() << " seconds" << Color::reset << std::endl;
+          << Color::green << Color::bold << "SOT optimization completed in " << total_time << " seconds" << Color::reset << std::endl;
+          
+    // Save convergence info
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+        std::string eps_dir = "output/epsilon_" + std::to_string(solver_config.regularization_param);
+        fs::create_directories(eps_dir);
+        std::ofstream conv_info(eps_dir + "/convergence_info.txt");
+        conv_info << "Regularization parameter (λ): " << solver_config.regularization_param << "\n";
+        conv_info << "Number of iterations: " << sot_solver->get_last_iteration_count() << "\n";
+        conv_info << "Final function value: " << sot_solver->get_last_functional_value() << "\n";
+        conv_info << "Last threshold value: " << sot_solver->get_last_distance_threshold() << "\n";
+        conv_info << "Total execution time: " << total_time << " seconds\n";
+        conv_info << "Convergence achieved: " << sot_solver->get_convergence_status() << "\n";
+    }
 }
 
 template <int dim>
 void SemiDiscreteOT<dim>::run_target_multilevel(
     const std::string &source_mesh_file,
-    Vector<double> *output_potentials,
-    bool save_results_to_files)
+    Vector<double> *output_potentials)
 {
     Timer global_timer;
     global_timer.start();
@@ -637,14 +650,7 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
     // Reset total softmax refinement time
     double total_softmax_time = 0.0;
 
-    if (save_results_to_files)
-    {
-        pcout << Color::yellow << Color::bold << "Starting target point cloud multilevel SOT computation..." << Color::reset << std::endl;
-    }
-    else
-    {
-        pcout << "Running target multilevel optimization for source mesh: " << source_mesh_file << std::endl;
-    }
+    pcout << Color::yellow << Color::bold << "Starting target point cloud multilevel SOT computation..." << Color::reset << std::endl;
 
     // Load source mesh based on input parameters
     if (source_mesh_file.empty())
@@ -656,7 +662,6 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
     {
         pcout << "Source mesh loaded from file: " << source_mesh_file << std::endl;
         mesh_manager->load_mesh_at_level(source_mesh, dof_handler_source, source_mesh_file);
-        // setup_multilevel_finite_elements();
         setup_source_finite_elements(true);
         pcout << "Source mesh loaded from file: " << source_mesh_file << std::endl;
     }
@@ -705,6 +710,22 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
     const double original_tolerance = solver_params.tolerance;
     const double original_regularization = solver_params.regularization_param;
 
+    // Create output directory
+    std::string eps_dir = "output/epsilon_" + std::to_string(original_regularization);
+    std::string target_multilevel_dir = eps_dir + "/target_multilevel";
+    fs::create_directories(target_multilevel_dir);
+
+    // Create/Open the summary log file on rank 0
+    std::ofstream summary_log;
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+        summary_log.open(target_multilevel_dir + "/summary_log.txt", std::ios::app);
+        // Write header if file is new or empty
+        if (summary_log.tellp() == 0) {
+            summary_log << "Target Level | Solver Iterations | Time (s) | Last Threshold\n";
+            summary_log << "------------------------------------------------------------\n";
+        }
+    }
+
     // Setup epsilon scaling if enabled
     std::vector<std::vector<double>> epsilon_distribution;
     if (solver_params.use_epsilon_scaling && epsilon_scaling_handler)
@@ -747,12 +768,9 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
                 points_file.find("_points") - points_file.find("level_") - 6);
             level_number = std::stoi(level_num);
 
-            // Create output directory for this level (if saving results)
-            if (save_results_to_files)
-            {
-                level_output_dir = multilevel_params.output_prefix + "/level_" + level_num;
-                fs::create_directories(level_output_dir);
-            }
+            // Create output directory for this level
+            level_output_dir = target_multilevel_dir + "/target_level_" + level_num;
+            fs::create_directories(level_output_dir);
         }
         level_number = Utilities::MPI::broadcast(mpi_communicator, level_number, 0);
 
@@ -794,6 +812,9 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
             }
         }
 
+        Timer level_timer;
+        level_timer.start();
+
         // Apply epsilon scaling for this level if enabled
         if (solver_params.use_epsilon_scaling && epsilon_scaling_handler && !epsilon_distribution.empty())
         {
@@ -813,19 +834,13 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
                     // Update regularization parameter
                     solver_config.regularization_param = current_epsilon;
 
-                    Timer level_timer;
-                    level_timer.start();
-
                     try
                     {
                         // Run optimization with current epsilon
                         sot_solver->solve(current_level_potentials, solver_config);
 
-                        level_timer.stop();
-                        pcout << "  Completed in " << level_timer.wall_time() << " seconds" << std::endl;
-
                         // Save intermediate results if this is not the last epsilon for this level
-                        if (save_results_to_files && eps_idx < level_epsilons.size() - 1)
+                        if (eps_idx < level_epsilons.size() - 1)
                         {
                             std::string eps_suffix = "_eps" + std::to_string(eps_idx + 1);
                             save_results(current_level_potentials, level_output_dir + "/potentials" + eps_suffix, false);
@@ -840,7 +855,7 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
                                   << Color::reset << std::endl;
                         }
                         pcout << Color::red << Color::bold << "  Warning: Optimization did not converge for epsilon "
-                              << current_epsilon << " at source level " << level_number << Color::reset << std::endl;
+                              << current_epsilon << " at target level " << level_number << Color::reset << std::endl;
                         // Continue with next epsilon value
                     }
                 }
@@ -850,16 +865,10 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
                 // If no epsilon values for this level, use the smallest epsilon from the sequence
                 solver_config.regularization_param = original_regularization;
 
-                Timer level_timer;
-                level_timer.start();
-
                 try
                 {
                     // Run optimization with default epsilon
                     sot_solver->solve(current_level_potentials, solver_config);
-
-                    level_timer.stop();
-                    pcout << "  Completed in " << level_timer.wall_time() << " seconds" << std::endl;
                 }
                 catch (const SolverControl::NoConvergence &exc)
                 {
@@ -877,16 +886,10 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
         else
         {
             // No epsilon scaling, just run the optimization once
-            Timer level_timer;
-            level_timer.start();
-
             try
             {
                 // Run optimization for this level
                 sot_solver->solve(current_level_potentials, solver_config);
-
-                level_timer.stop();
-                pcout << "  Completed in " << level_timer.wall_time() << " seconds" << std::endl;
             }
             catch (SolverControl::NoConvergence &exc)
             {
@@ -904,29 +907,34 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
             }
         }
 
-        // Save results for this level (if requested)
-        if (save_results_to_files)
-        {
-            save_results(current_level_potentials, level_output_dir + "/potentials", false);
-            if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0)
-            {
-                std::ofstream conv_info(level_output_dir + "/convergence_info.txt");
-                conv_info << "Regularization parameter (λ): " << solver_params.regularization_param << "\n";
-                conv_info << "Number of iterations: " << sot_solver->get_last_iteration_count() << "\n";
-                conv_info << "Final function value: " << sot_solver->get_last_functional_value() << "\n";
-                conv_info << "Convergence achieved: " << sot_solver->get_convergence_status() << "\n";
-                conv_info << "Level: " << level_number << "\n";
-                pcout << "Level " << level_number << " results saved to " << level_output_dir << "/potentials" << std::endl;
-            }
+        level_timer.stop();
+        const double level_time = level_timer.wall_time();
+        const unsigned int last_iterations = sot_solver->get_last_iteration_count();
+        current_distance_threshold = sot_solver->get_last_distance_threshold();
+        
+        // Log summary information to file (only rank 0)
+        if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0 && summary_log.is_open()) {
+            summary_log << std::setw(13) << level_number << " | "
+                      << std::setw(17) << last_iterations << " | "
+                      << std::setw(8) << std::fixed << std::setprecision(4) << level_time << " | "
+                      << std::setw(14) << std::scientific << std::setprecision(6) << current_distance_threshold << "\n";
         }
-        else
+
+        // Save results for this level
+        save_results(current_level_potentials, level_output_dir + "/potentials", false);
+        if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0)
         {
-            pcout << "Level " << level_number << " completed" << std::endl;
+            std::ofstream conv_info(level_output_dir + "/convergence_info.txt");
+            conv_info << "Regularization parameter (λ): " << solver_params.regularization_param << "\n";
+            conv_info << "Number of iterations: " << sot_solver->get_last_iteration_count() << "\n";
+            conv_info << "Final function value: " << sot_solver->get_last_functional_value() << "\n";
+            conv_info << "Convergence achieved: " << sot_solver->get_convergence_status() << "\n";
+            conv_info << "Level: " << level_number << "\n";
+            pcout << "Level " << level_number << " results saved to " << level_output_dir << "/potentials" << std::endl;
         }
 
         // Store potentials for next level
         level_potentials = current_level_potentials;
-        current_distance_threshold = sot_solver->get_last_distance_threshold();
     }
 
     // If output_potentials is provided, copy the final potentials
@@ -935,66 +943,71 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
         *output_potentials = level_potentials;
     }
 
+    // Save final potentials in the top-level directory
+    save_results(level_potentials, target_multilevel_dir + "/potentials", false);
+
+    // Close the log file on rank 0
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0 && summary_log.is_open()) {
+        summary_log.close();
+    }
+
     // Restore original parameters
     solver_params.tolerance = original_tolerance;
     solver_params.max_iterations = original_max_iterations;
     solver_params.regularization_param = original_regularization;
 
-    if (save_results_to_files)
-    {
-        global_timer.stop();
-        pcout << "\n"
-              << Color::magenta << Color::bold << "----------------------------------------" << Color::reset << std::endl;
-        pcout << Color::magenta << Color::bold << "Total multilevel target computation time: " << global_timer.wall_time() << " seconds" << Color::reset << std::endl;
-
-        // Report total softmax time if applicable
-        if (multilevel_params.use_softmax_potential_transfer && total_softmax_time > 0.0)
-        {
-            pcout << Color::magenta << Color::bold << "Total time spent on softmax potential transfers: " << total_softmax_time
-                  << " seconds (" << (total_softmax_time / global_timer.wall_time() * 100.0) << "%)" << Color::reset << std::endl;
-        }
-
-        pcout << Color::magenta << Color::bold << "----------------------------------------" << Color::reset << std::endl;
+    global_timer.stop();
+    const double total_time = global_timer.wall_time();
+    
+    // Save global convergence info
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+        std::ofstream conv_info(target_multilevel_dir + "/convergence_info.txt");
+        conv_info << "Regularization parameter (λ): " << original_regularization << "\n";
+        conv_info << "Final number of iterations: " << sot_solver->get_last_iteration_count() << "\n";
+        conv_info << "Final function value: " << sot_solver->get_last_functional_value() << "\n";
+        conv_info << "Last threshold value: " << current_distance_threshold << "\n";
+        conv_info << "Total execution time: " << total_time << " seconds\n";
+        conv_info << "Convergence achieved: " << sot_solver->get_convergence_status() << "\n";
+        conv_info << "Number of levels: " << num_levels << "\n";
     }
+    
+    pcout << "\n"
+          << Color::magenta << Color::bold << "----------------------------------------" << Color::reset << std::endl;
+    pcout << Color::magenta << Color::bold << "Total multilevel target computation time: " << total_time << " seconds" << Color::reset << std::endl;
+
+    // Report total softmax time if applicable
+    if (multilevel_params.use_softmax_potential_transfer && total_softmax_time > 0.0)
+    {
+        pcout << Color::magenta << Color::bold << "Total time spent on softmax potential transfers: " << total_softmax_time
+              << " seconds (" << (total_softmax_time / total_time * 100.0) << "%)" << Color::reset << std::endl;
+    }
+
+    pcout << Color::magenta << Color::bold << "----------------------------------------" << Color::reset << std::endl;
 }
 
 template <int dim>
 void SemiDiscreteOT<dim>::run_target_multilevel_for_source_level(
     const std::string &source_mesh_file, Vector<double> &potentials)
 {
-    run_target_multilevel(source_mesh_file, &potentials, false);
+    run_target_multilevel(source_mesh_file, &potentials);
 }
 
 template <int dim>
-void SemiDiscreteOT<dim>::run_multilevel_sot()
+void SemiDiscreteOT<dim>::run_source_multilevel()
 {
     Timer global_timer;
     global_timer.start();
 
-    pcout << Color::yellow << Color::bold << "Starting multilevel SOT computation..." << Color::reset << std::endl;
+    pcout << Color::yellow << Color::bold << "Starting source multilevel SOT computation..." << Color::reset << std::endl;
 
-    // Check that at least one multilevel (source or target) is enabled.
-    if (!multilevel_params.source_enabled && !multilevel_params.target_enabled)
+    // Retrieve source mesh hierarchy files.
+    std::vector<std::string> source_mesh_files = mesh_manager->get_mesh_hierarchy_files(multilevel_params.source_hierarchy_dir);
+    if (source_mesh_files.empty())
     {
-        pcout << Color::red << Color::bold
-              << "Error: Neither source nor target multilevel is enabled. Please enable at least one in parameters.prm"
-              << Color::reset << std::endl;
+        pcout << "No source mesh hierarchy found. Please run prepare_source_multilevel first." << std::endl;
         return;
     }
-
-    // Retrieve source mesh hierarchy files if source multilevel is enabled.
-    std::vector<std::string> source_mesh_files;
-    unsigned int num_levels = 0;
-    if (multilevel_params.source_enabled)
-    {
-        source_mesh_files = mesh_manager->get_mesh_hierarchy_files(multilevel_params.source_hierarchy_dir);
-        if (source_mesh_files.empty())
-        {
-            pcout << "No source mesh hierarchy found. Please run prepare_source_multilevel first." << std::endl;
-            return;
-        }
-        num_levels = source_mesh_files.size();
-    }
+    unsigned int num_levels = source_mesh_files.size();
 
     // Backup original solver parameters.
     const unsigned int original_max_iterations = solver_params.max_iterations;
@@ -1003,30 +1016,40 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
 
     // Create output directory structure.
     std::string eps_dir = "output/epsilon_" + std::to_string(original_regularization);
-    std::string multilevel_dir = eps_dir + "/multilevel";
-    fs::create_directories(multilevel_dir);
+    std::string source_multilevel_dir = eps_dir + "/source_multilevel";
+    fs::create_directories(source_multilevel_dir);
 
-    // Setup epsilon scaling if enabled (and target multilevel is not enabled).
+    // Create/Open the summary log file on rank 0
+    std::ofstream summary_log;
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+        summary_log.open(source_multilevel_dir + "/summary_log.txt", std::ios::app);
+        // Write header if file is new or empty
+        if (summary_log.tellp() == 0) {
+            summary_log << "Source Level | Solver Iterations | Time (s) | Last Threshold\n";
+            summary_log << "------------------------------------------------------------\n";
+        }
+    }
+
+    // Setup epsilon scaling if enabled.
     std::vector<std::vector<double>> epsilon_distribution;
-    if (solver_params.use_epsilon_scaling && epsilon_scaling_handler && !multilevel_params.target_enabled)
+    if (solver_params.use_epsilon_scaling && epsilon_scaling_handler)
     {
-        pcout << "Computing epsilon distribution for multilevel optimization..." << std::endl;
+        pcout << "Computing epsilon distribution for source multilevel optimization..." << std::endl;
         epsilon_distribution = epsilon_scaling_handler->compute_epsilon_distribution(num_levels);
         epsilon_scaling_handler->print_epsilon_distribution();
     }
 
     // Lambda to encapsulate the epsilon scaling and solver call.
-    auto process_epsilon_scaling = [this, &original_regularization, &epsilon_distribution](Vector<double> &potentials,
-                                                                                           const unsigned int level,
-                                                                                           const std::string &level_dir)
-
-    {
+    auto process_epsilon_scaling_for_source_multilevel =
+        [this, &original_regularization, &epsilon_distribution](Vector<double> &potentials,
+                                                                const unsigned int level_idx, // 0 to num_levels-1
+                                                                const std::string &level_output_dir) {
         if (solver_params.use_epsilon_scaling && epsilon_scaling_handler && !epsilon_distribution.empty())
         {
-            const auto &level_epsilons = epsilon_scaling_handler->get_epsilon_values_for_level(level);
+            const auto &level_epsilons = epsilon_scaling_handler->get_epsilon_values_for_level(level_idx);
             if (!level_epsilons.empty())
             {
-                pcout << "Using " << level_epsilons.size() << " epsilon values for source level " << level << std::endl;
+                pcout << "Using " << level_epsilons.size() << " epsilon values for source level " << level_idx << std::endl;
                 for (size_t eps_idx = 0; eps_idx < level_epsilons.size(); ++eps_idx)
                 {
                     double current_epsilon = level_epsilons[eps_idx];
@@ -1040,7 +1063,7 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
                         if (eps_idx < level_epsilons.size() - 1)
                         {
                             std::string eps_suffix = "_eps" + std::to_string(eps_idx + 1);
-                            save_results(potentials, level_dir + "/potentials" + eps_suffix, false);
+                            save_results(potentials, level_output_dir + "/potentials" + eps_suffix, false);
                         }
                     }
                     catch (const SolverControl::NoConvergence &exc)
@@ -1051,11 +1074,11 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
                                   << " (epsilon=" << current_epsilon << "): Max iterations reached" << Color::reset << std::endl;
                         }
                         pcout << Color::red << Color::bold << "  Warning: Optimization did not converge for epsilon "
-                              << current_epsilon << " at source level " << level << Color::reset << std::endl;
+                              << current_epsilon << " at source level " << level_idx << Color::reset << std::endl;
                         // Continue with the next epsilon value.
                     }
                 }
-                return;
+                return; // Epsilon scaling applied
             }
         }
         // If no epsilon scaling is applied or no epsilon values exist for this level.
@@ -1063,125 +1086,419 @@ void SemiDiscreteOT<dim>::run_multilevel_sot()
         sot_solver->solve(potentials, solver_params);
     };
 
-    // Vector to hold the final potentials.
     Vector<double> final_potentials;
+    Vector<double> previous_source_potentials;
 
-    // Process source mesh levels if source multilevel is enabled.
-    if (multilevel_params.source_enabled)
+    mesh_manager->load_source_mesh(source_mesh);                                
+    setup_source_finite_elements();     
+    setup_target_points(); 
+
+    for (size_t source_level_idx = 0; source_level_idx < source_mesh_files.size(); ++source_level_idx)
     {
-        // Always load the source mesh initially.
-        mesh_manager->load_source_mesh(source_mesh);
-        setup_source_finite_elements();
+        const unsigned int current_level_display_name = num_levels - source_level_idx -1 ;
 
-        pcout << "\n"
-              << Color::yellow << Color::bold << "Processing source mesh hierarchy..." << Color::reset << std::endl;
+        pcout << Color::cyan << Color::bold
+              << "============================================" << Color::reset << std::endl;
+        pcout << Color::cyan << Color::bold << "Processing source mesh level " << current_level_display_name
+              << " (mesh: " << source_mesh_files[source_level_idx] << ")" << Color::reset << std::endl;
+        pcout << Color::cyan << Color::bold
+              << "============================================" << Color::reset << std::endl;
 
-        // This vector will hold potentials from the previous level.
-        Vector<double> previous_source_potentials;
+        std::string source_level_dir = source_multilevel_dir + "/source_level_" + std::to_string(current_level_display_name);
+        fs::create_directories(source_level_dir);
 
-        for (size_t source_level = 0; source_level < source_mesh_files.size(); ++source_level)
+        Vector<double> level_potentials;
+        Timer level_timer;
+        level_timer.start();
+
+        mesh_manager->load_mesh_at_level(source_mesh, dof_handler_source, source_mesh_files[source_level_idx]);
+        setup_source_finite_elements(true); // true for is_multilevel
+
+        if (source_level_idx == 0)
         {
-            const unsigned int level_name = num_levels - source_level - 1;
-            pcout << "\n"
-                  << Color::cyan << Color::bold
-                  << "============================================" << Color::reset << std::endl;
-            pcout << Color::cyan << Color::bold << "Processing source mesh level " << level_name
-                  << " (mesh: " << source_mesh_files[source_level] << ")" << Color::reset << std::endl;
-            pcout << Color::cyan << Color::bold
-                  << "============================================" << Color::reset << std::endl;
+            level_potentials.reinit(target_points.size());
+            level_potentials = 0.0; // Initialize potentials for the coarsest level
+        }
+        else
+        {
+            level_potentials.reinit(previous_source_potentials.size());
+            level_potentials = previous_source_potentials;
 
-            // Create directory for this source level.
-            std::string source_level_dir = multilevel_dir + "/source_level_" + std::to_string(level_name);
-            fs::create_directories(source_level_dir);
+            // Adjust solver tolerance for finer levels
+            double n_levels_double = static_cast<double>(source_mesh_files.size());
+            double tolerance_exponent = static_cast<double>(source_level_idx) - n_levels_double + 1.0;
+            solver_params.tolerance = original_tolerance * std::pow(0.5, -tolerance_exponent); // std::pow(2.0, tolerance_exponent) effectively
+            pcout << "\nSource level " << current_level_display_name << " solver parameters:" << std::endl;
+            pcout << "  Tolerance: " << solver_params.tolerance << std::endl;
+        }
+        pcout << "  Max iterations: " << solver_params.max_iterations << std::endl;
 
-            Vector<double> level_potentials;
-            Timer level_timer;
-            level_timer.start();
 
-            if (source_level == 0)
-            {
-                // For level 0: either run target multilevel if enabled or load and prepare the mesh.
-                if (multilevel_params.target_enabled)
-                {
-                    run_target_multilevel_for_source_level(source_mesh_files[source_level], level_potentials);
-                }
-                else
-                {
-                    mesh_manager->load_mesh_at_level(source_mesh, dof_handler_source, source_mesh_files[source_level]);
-                    setup_source_finite_elements(true);
-                    setup_target_points();
-                    level_potentials.reinit(target_points.size());
-                }
-            }
-            else
-            {
-                // For subsequent levels, load the new mesh and adjust solver tolerance.
-                mesh_manager->load_mesh_at_level(source_mesh, dof_handler_source, source_mesh_files[source_level]);
-                setup_source_finite_elements(true);
+        sot_solver->setup_source(dof_handler_source, *mapping, *fe_system, source_density, solver_params.quadrature_order);
+        sot_solver->setup_target(target_points, target_density); 
 
-                double num_levels = static_cast<double>(source_mesh_files.size());
-                double tolerance_exponent = static_cast<double>(source_level) - num_levels + 1.0;
-                solver_params.tolerance = original_tolerance * std::pow(2.0, tolerance_exponent);
+        process_epsilon_scaling_for_source_multilevel(level_potentials, source_level_idx, source_level_dir);
 
-                pcout << "\nSource level " << level_name << " solver parameters:" << std::endl;
-                pcout << "  Level: " << level_name << " of " << num_levels << std::endl;
-                pcout << "  Tolerance: " << solver_params.tolerance << std::endl;
-                pcout << "  Max iterations: " << solver_params.max_iterations << std::endl;
+        level_timer.stop();
+        const double level_time = level_timer.wall_time();
+        const unsigned int last_iterations = sot_solver->get_last_iteration_count();
+        const double last_threshold = sot_solver->get_last_distance_threshold();
 
-                // Initialize the potentials with the solution from the previous level.
-                level_potentials.reinit(previous_source_potentials.size());
-                level_potentials = previous_source_potentials;
-            }
+        // Log summary information to file (only rank 0)
+        if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0 && summary_log.is_open()) {
+            summary_log << std::setw(13) << current_level_display_name << " | "
+                      << std::setw(17) << last_iterations << " | "
+                      << std::setw(8) << std::fixed << std::setprecision(4) << level_time << " | "
+                      << std::setw(14) << std::scientific << std::setprecision(6) << last_threshold << "\n";
+        }
+        
+        save_results(level_potentials, source_level_dir + "/potentials", false);
 
-            // Setup solver (source and target measures).
-            sot_solver->setup_source(dof_handler_source, *mapping, *fe_system, source_density, solver_params.quadrature_order);
-            sot_solver->setup_target(target_points, target_density);
+        pcout << Color::blue << Color::bold << "Source level " << current_level_display_name << " summary:" << Color::reset << std::endl;
+        pcout << Color::blue << "  Status: Completed" << Color::reset << std::endl;
+        pcout << Color::blue << "  Time taken: " << level_timer.wall_time() << " seconds" << Color::reset << std::endl;
+        pcout << Color::blue << "  Final number of iterations: " << sot_solver->get_last_iteration_count() << Color::reset << std::endl;
+        pcout << Color::blue << "  Final function value: " << sot_solver->get_last_functional_value() << Color::reset << std::endl;
+        pcout << Color::blue << "  Results saved in: " << source_level_dir << Color::reset << std::endl;
 
-            // Process epsilon scaling (or just a single solve) for this level.
-            process_epsilon_scaling(level_potentials, static_cast<unsigned int>(source_level), source_level_dir);
-
-            level_timer.stop();
-            // Save the result for the level.
-            save_results(level_potentials, source_level_dir + "/potentials", false);
-
-            // Log summary for this level.
-            pcout << "\n"
-                  << Color::blue << Color::bold << "Source level " << level_name << " summary:" << Color::reset << std::endl;
-            pcout << Color::blue << "  Status: Completed successfully" << Color::reset << std::endl;
-            pcout << Color::blue << "  Time taken: " << level_timer.wall_time() << " seconds" << Color::reset << std::endl;
-            pcout << Color::blue << "  Final number of iterations: " << sot_solver->get_last_iteration_count() << Color::reset << std::endl;
-            pcout << Color::blue << "  Final function value: " << sot_solver->get_last_functional_value() << Color::reset << std::endl;
-            pcout << Color::blue << "  Results saved in: " << source_level_dir << Color::reset << std::endl;
-
-            // Store the solution for use in the next level.
-            previous_source_potentials = level_potentials;
-            if (source_level == source_mesh_files.size() - 1)
-                final_potentials = level_potentials;
+        previous_source_potentials = level_potentials;
+        if (source_level_idx == source_mesh_files.size() - 1)
+        {
+            final_potentials = level_potentials;
         }
     }
-    else if (multilevel_params.target_enabled)
-    {
-        // If only target multilevel is enabled, run it directly.
-        run_target_multilevel("", &final_potentials, true);
+
+    // Save final results from the finest level
+    save_results(final_potentials, source_multilevel_dir + "/potentials", false);
+
+    // Close the log file on rank 0
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0 && summary_log.is_open()) {
+        summary_log.close();
     }
 
-    // Save final results.
-    save_results(final_potentials, multilevel_dir + "/potentials", false);
-
-    // Restore original solver parameters.
     solver_params.max_iterations = original_max_iterations;
     solver_params.tolerance = original_tolerance;
     solver_params.regularization_param = original_regularization;
 
     global_timer.stop();
+    const double total_time = global_timer.wall_time();
+    
+    // Save global convergence info
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+        std::ofstream conv_info(source_multilevel_dir + "/convergence_info.txt");
+        conv_info << "Regularization parameter (λ): " << original_regularization << "\n";
+        conv_info << "Final number of iterations: " << sot_solver->get_last_iteration_count() << "\n";
+        conv_info << "Final function value: " << sot_solver->get_last_functional_value() << "\n";
+        conv_info << "Last threshold value: " << sot_solver->get_last_distance_threshold() << "\n";
+        conv_info << "Total execution time: " << total_time << " seconds\n";
+        conv_info << "Convergence achieved: " << sot_solver->get_convergence_status() << "\n";
+        conv_info << "Number of levels: " << num_levels << "\n";
+    }
+    
     pcout << "\n"
           << Color::green << Color::bold
           << "============================================" << Color::reset << std::endl;
-    pcout << Color::green << Color::bold << "Multilevel computation completed!" << Color::reset << std::endl;
-    pcout << Color::green << Color::bold << "Total computation time: " << global_timer.wall_time() << " seconds" << Color::reset << std::endl;
-    pcout << Color::green << "Final results saved in: " << multilevel_dir << Color::reset << std::endl;
+    pcout << Color::green << Color::bold << "Source multilevel SOT computation completed!" << Color::reset << std::endl;
+    pcout << Color::green << Color::bold << "Total computation time: " << total_time << " seconds" << Color::reset << std::endl;
+    pcout << Color::green << "Final results saved in: " << source_multilevel_dir << Color::reset << std::endl;
     pcout << Color::green << Color::bold
           << "============================================" << Color::reset << std::endl;
+}
+
+template <int dim>
+void SemiDiscreteOT<dim>::run_combined_multilevel()
+{
+    Timer global_timer;
+    global_timer.start();
+
+    pcout << Color::yellow << Color::bold << "Starting combined multilevel SOT computation..." << Color::reset << std::endl;
+
+    // Get source mesh hierarchy files
+    std::vector<std::string> source_mesh_files = mesh_manager->get_mesh_hierarchy_files(multilevel_params.source_hierarchy_dir);
+    unsigned int n_s_levels = Utilities::MPI::broadcast(mpi_communicator, source_mesh_files.size(), 0);
+
+    // Get target point cloud hierarchy files
+    std::vector<std::pair<std::string, std::string>> target_hierarchy_files;
+    unsigned int n_t_levels = 0;
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+        target_hierarchy_files = Utils::get_target_hierarchy_files(multilevel_params.target_hierarchy_dir);
+        n_t_levels = target_hierarchy_files.size();
+    }
+    n_t_levels = Utilities::MPI::broadcast(mpi_communicator, n_t_levels, 0);
+
+    // Calculate total combined levels
+    const unsigned int n_c_levels = std::max(n_s_levels, n_t_levels);
+
+    // Backup original solver parameters
+    const unsigned int original_max_iterations = solver_params.max_iterations;
+    const double original_tolerance = solver_params.tolerance;
+    const double original_regularization = solver_params.regularization_param;
+
+    // Create output directory
+    std::string eps_dir = "output/epsilon_" + std::to_string(original_regularization);
+    std::string combined_multilevel_dir = eps_dir + "/combined_multilevel";
+    fs::create_directories(combined_multilevel_dir);
+
+    // Create/Open the summary log file on rank 0
+    std::ofstream summary_log;
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+        summary_log.open(combined_multilevel_dir + "/summary_log.txt", std::ios::app);
+        // Write header if file is new or empty
+        if (summary_log.tellp() == 0) {
+            summary_log << "Combined Level | Solver Iterations | Time (s) | Last Threshold\n";
+            summary_log << "------------------------------------------------------------\n";
+        }
+    }
+
+    // Setup epsilon scaling if enabled
+    if (solver_params.use_epsilon_scaling && epsilon_scaling_handler) {
+        pcout << "Computing epsilon distribution for combined multilevel optimization..." << std::endl;
+        epsilon_scaling_handler->compute_epsilon_distribution(n_c_levels);
+        epsilon_scaling_handler->print_epsilon_distribution();
+    }
+
+    // Initialize state variables
+    Vector<double> current_potentials;
+    int prev_actual_target_level_num = -1;
+    unsigned int prev_source_idx = -1;  // Track previous source index
+    double total_softmax_time = 0.0;
+
+    // loading mesh and setup FEs, needed for first iteration in order to load interpolate 
+    mesh_manager->load_source_mesh(source_mesh);                                
+    setup_source_finite_elements();     
+
+    // Main Loop (Combined Levels)
+    for (unsigned int combined_iter = 0; combined_iter < n_c_levels; ++combined_iter) {
+        Timer level_timer;
+        level_timer.start();
+
+        pcout << "\n" << Color::cyan << Color::bold
+              << "============================================" << Color::reset << std::endl;
+        pcout << Color::cyan << Color::bold << "Processing combined level " << combined_iter
+              << " of " << n_c_levels - 1 << Color::reset << std::endl;
+
+        // Determine Source and Target indices
+        unsigned int current_source_idx = 0;
+        unsigned int current_target_idx = 0;
+
+        if (n_s_levels >= n_t_levels) {
+            current_source_idx = combined_iter;
+            current_target_idx = (combined_iter >= (n_s_levels - n_t_levels)) ?
+                                 (combined_iter - (n_s_levels - n_t_levels)) : 0;
+        } else {
+            current_target_idx = combined_iter;
+            current_source_idx = (combined_iter >= (n_t_levels - n_s_levels)) ?
+                                 (combined_iter - (n_t_levels - n_s_levels)) : 0;
+        }
+
+        // Get current files
+        const std::string current_source_mesh_file = source_mesh_files[current_source_idx];
+        std::string current_target_points_file;
+        std::string current_target_density_file;
+
+        if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+            current_target_points_file = target_hierarchy_files[current_target_idx].first;
+            current_target_density_file = target_hierarchy_files[current_target_idx].second;
+        }
+
+        // Broadcast filenames
+        current_target_points_file = Utilities::MPI::broadcast(mpi_communicator, current_target_points_file, 0);
+        current_target_density_file = Utilities::MPI::broadcast(mpi_communicator, current_target_density_file, 0);
+
+        // Extract target level number
+        int current_actual_target_level_num = -1;
+        if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+            size_t level_pos = current_target_points_file.find("level_");
+            size_t level_end = current_target_points_file.find("_points");
+            if (level_pos != std::string::npos && level_end != std::string::npos) {
+                current_actual_target_level_num = std::stoi(current_target_points_file.substr(
+                    level_pos + 6, level_end - (level_pos + 6)));
+            }
+        }
+        current_actual_target_level_num = Utilities::MPI::broadcast(mpi_communicator, current_actual_target_level_num, 0);
+
+        // Create level directory
+        std::string level_dir = combined_multilevel_dir + "/combined_level_" + std::to_string(combined_iter);
+        fs::create_directories(level_dir);
+
+        // Only load source mesh and setup FEs if source level changed
+        if (current_source_idx != prev_source_idx) {
+            mesh_manager->load_mesh_at_level(source_mesh, dof_handler_source, current_source_mesh_file);
+            setup_source_finite_elements(true);
+            prev_source_idx = current_source_idx;
+        }
+
+        // Save previous target data if not first iteration
+        if (combined_iter > 0) {
+            target_points_coarse = target_points;
+            target_density_coarse = target_density;
+        }
+
+        // Load target points
+        load_target_points_at_level(current_target_points_file, current_target_density_file);
+
+        // Initialize potentials
+        Vector<double> potentials_for_this_level(target_points.size());
+
+        potentials_for_this_level = 0.0;  // Default initialization
+        if (combined_iter > 0) {
+            bool target_level_changed = (current_actual_target_level_num != prev_actual_target_level_num);
+            bool hierarchical_transfer_possible = target_level_changed &&
+                                                (prev_actual_target_level_num == current_actual_target_level_num + 1);
+
+            if (hierarchical_transfer_possible) {
+                load_hierarchy_data(multilevel_params.target_hierarchy_dir, current_actual_target_level_num);
+                Timer transfer_timer;
+                transfer_timer.start();
+
+                assign_potentials_by_hierarchy(potentials_for_this_level,
+                                            prev_actual_target_level_num,
+                                            current_actual_target_level_num,
+                                            current_potentials);
+
+                transfer_timer.stop();
+                if (multilevel_params.use_softmax_potential_transfer) {
+                    total_softmax_time += transfer_timer.wall_time();
+                }
+            } else if (current_potentials.size() == potentials_for_this_level.size()) {
+                potentials_for_this_level = current_potentials;
+            }
+        }
+
+        // Setup solver
+        sot_solver->setup_source(dof_handler_source, *mapping, *fe_system, source_density, solver_params.quadrature_order);
+        sot_solver->setup_target(target_points, target_density);
+
+        // Solve with epsilon scaling
+        bool solve_successful = true;
+        if (solver_params.use_epsilon_scaling && epsilon_scaling_handler) {
+            const auto& level_epsilons = epsilon_scaling_handler->get_epsilon_values_for_level(combined_iter);
+            if (!level_epsilons.empty()) {
+                for (size_t eps_idx = 0; eps_idx < level_epsilons.size(); ++eps_idx) {
+                    solver_params.regularization_param = level_epsilons[eps_idx];
+                    try {
+                        sot_solver->solve(potentials_for_this_level, solver_params);
+                        if (eps_idx < level_epsilons.size() - 1) {
+                            save_results(potentials_for_this_level, level_dir + "/potentials_eps" + std::to_string(eps_idx + 1), false);
+                        }
+                    } catch (const SolverControl::NoConvergence& exc) {
+                        solve_successful = false;
+                    }
+                }
+            } else {
+                solver_params.regularization_param = original_regularization;
+                try {
+                    sot_solver->solve(potentials_for_this_level, solver_params);
+                } catch (const SolverControl::NoConvergence& exc) {
+                    solve_successful = false;
+                }
+            }
+        } else {
+            solver_params.regularization_param = original_regularization;
+            try {
+                sot_solver->solve(potentials_for_this_level, solver_params);
+            } catch (const SolverControl::NoConvergence& exc) {
+                solve_successful = false;
+            }
+        }
+
+        if (!solve_successful && combined_iter == 0) {
+            pcout << Color::red << Color::bold << "Initial iteration failed. Aborting." << Color::reset << std::endl;
+            break;
+        }
+
+        // Save results
+        save_results(potentials_for_this_level, level_dir + "/potentials", false);
+
+        // Update state for next iteration
+        current_potentials = potentials_for_this_level;
+        prev_actual_target_level_num = current_actual_target_level_num;
+        current_distance_threshold = sot_solver->get_last_distance_threshold();
+
+        level_timer.stop();
+        const double level_time = level_timer.wall_time();
+        const unsigned int last_iterations = sot_solver->get_last_iteration_count();
+
+        // Log summary information to file (only rank 0)
+        if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0 && summary_log.is_open()) {
+            summary_log << std::setw(13) << combined_iter << " | "
+                        << std::setw(17) << last_iterations << " | "
+                        << std::setw(8) << std::fixed << std::setprecision(4) << level_time << " | "
+                        << std::setw(14) << std::scientific << std::setprecision(6) << current_distance_threshold << "\n";
+        }
+    }
+    
+    // Save final potentials in the top-level directory
+    if (current_potentials.size() > 0) {
+        save_results(current_potentials, combined_multilevel_dir + "/potentials", false);
+    }
+
+    // Close the log file on rank 0
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0 && summary_log.is_open()) {
+        summary_log.close();
+    }
+
+    // Restore original parameters
+    solver_params.max_iterations = original_max_iterations;
+    solver_params.tolerance = original_tolerance;
+    solver_params.regularization_param = original_regularization;
+
+    global_timer.stop();
+    const double total_time = global_timer.wall_time();
+    
+    // Save global convergence info
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+        std::ofstream conv_info(combined_multilevel_dir + "/convergence_info.txt");
+        conv_info << "Regularization parameter (λ): " << original_regularization << "\n";
+        conv_info << "Final number of iterations: " << sot_solver->get_last_iteration_count() << "\n";
+        conv_info << "Final function value: " << sot_solver->get_last_functional_value() << "\n";
+        conv_info << "Last threshold value: " << current_distance_threshold << "\n";
+        conv_info << "Total execution time: " << total_time << " seconds\n";
+        conv_info << "Convergence achieved: " << sot_solver->get_convergence_status() << "\n";
+        conv_info << "Number of levels: " << n_c_levels << "\n";
+    }
+    
+    pcout << "\n" << Color::green << Color::bold
+          << "============================================" << Color::reset << std::endl;
+    pcout << Color::green << Color::bold << "Combined multilevel computation completed!" << Color::reset << std::endl;
+    pcout << Color::green << Color::bold << "Total computation time: " << total_time << " seconds" << Color::reset << std::endl;
+    if (multilevel_params.use_softmax_potential_transfer && total_softmax_time > 0.0) {
+        pcout << Color::green << Color::bold << "Total softmax transfer time: " << total_softmax_time
+              << " seconds (" << (total_softmax_time / total_time * 100.0) << "%)" << Color::reset << std::endl;
+    }
+    pcout << Color::green << Color::bold << "============================================" << Color::reset << std::endl;
+}
+
+template <int dim>
+void SemiDiscreteOT<dim>::run_multilevel()
+{
+    pcout << Color::yellow << Color::bold << "Starting multilevel SOT computation (dispatcher)..." << Color::reset << std::endl;
+
+    const bool source_ml_enabled = multilevel_params.source_enabled;
+    const bool target_ml_enabled = multilevel_params.target_enabled;
+
+    if (source_ml_enabled && !target_ml_enabled)
+    {
+        pcout << "Executing Source-Only Multilevel SOT." << std::endl;
+        run_source_multilevel();
+    }
+    else if (!source_ml_enabled && target_ml_enabled)
+    {
+        pcout << "Executing Target-Only Multilevel SOT." << std::endl;
+        run_target_multilevel("", nullptr);
+    }
+    else if (source_ml_enabled && target_ml_enabled)
+    {
+        pcout << "Executing Combined Source and Target Multilevel SOT." << std::endl;
+        run_combined_multilevel();
+    }
+    else
+    {
+        pcout << Color::red << Color::bold
+              << "Error: No multilevel strategy enabled (neither source nor target). "
+              << "Please enable at least one in parameters.prm and select the 'multilevel_sot' task."
+              << Color::reset << std::endl;
+    }
 }
 
 template <int dim>
@@ -1854,23 +2171,17 @@ void SemiDiscreteOT<dim>::run()
             prepare_target_multilevel();
         }
     }
-    else if (selected_task == "source_multilevel_sot")
-    {
-        multilevel_params.source_enabled = true;
-        multilevel_params.target_enabled = false;
-        run_multilevel_sot();
-    }
-    else if (selected_task == "target_multilevel_sot")
+    else if (selected_task == "target_multilevel")
     {
         run_target_multilevel();
     }
-    else if (selected_task == "multilevel_sot")
+    else if (selected_task == "source_multilevel")
     {
-        run_multilevel_sot();
+        run_source_multilevel();
     }
-    else if (selected_task == "new_combined_multilevel_sot")
+    else if (selected_task == "multilevel")
     {
-        run_new_combined_multilevel();
+        run_multilevel();
     }
     else if (selected_task == "exact_sot")
     {
@@ -1906,247 +2217,9 @@ void SemiDiscreteOT<dim>::run()
         pcout << "No valid task selected" << std::endl;
     }
 }
+
+
 // Explicit template instantiation
 template class SemiDiscreteOT<2>;
 template class SemiDiscreteOT<3>;
 
-template <int dim>
-void SemiDiscreteOT<dim>::run_new_combined_multilevel()
-{
-    Timer global_timer;
-    global_timer.start();
-
-    pcout << Color::yellow << Color::bold << "Starting new combined multilevel SOT computation..." << Color::reset << std::endl;
-
-    // Get source mesh hierarchy files
-    std::vector<std::string> source_mesh_files = mesh_manager->get_mesh_hierarchy_files(multilevel_params.source_hierarchy_dir);
-    unsigned int n_s_levels = Utilities::MPI::broadcast(mpi_communicator, source_mesh_files.size(), 0);
-
-    // Get target point cloud hierarchy files
-    std::vector<std::pair<std::string, std::string>> target_hierarchy_files;
-    unsigned int n_t_levels = 0;
-    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
-        target_hierarchy_files = Utils::get_target_hierarchy_files(multilevel_params.target_hierarchy_dir);
-        n_t_levels = target_hierarchy_files.size();
-    }
-    n_t_levels = Utilities::MPI::broadcast(mpi_communicator, n_t_levels, 0);
-
-    // Calculate total combined levels
-    const unsigned int n_c_levels = std::max(n_s_levels, n_t_levels);
-
-    // Backup original solver parameters
-    const unsigned int original_max_iterations = solver_params.max_iterations;
-    const double original_tolerance = solver_params.tolerance;
-    const double original_regularization = solver_params.regularization_param;
-
-    // Create output directory
-    std::string eps_dir = "output/epsilon_" + std::to_string(original_regularization);
-    std::string combined_multilevel_dir = eps_dir + "/new_combined_multilevel";
-    fs::create_directories(combined_multilevel_dir);
-
-    // Create/Open the summary log file on rank 0
-    std::ofstream summary_log;
-    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
-        summary_log.open(combined_multilevel_dir + "/summary_log.txt", std::ios::app);
-        // Write header if file is new or empty
-        if (summary_log.tellp() == 0) {
-            summary_log << "Combined Iter | Solver Iterations | Time (s) | Last Threshold\n";
-            summary_log << "------------------------------------------------------------\n";
-        }
-    }
-
-    // Setup epsilon scaling if enabled
-    if (solver_params.use_epsilon_scaling && epsilon_scaling_handler) {
-        pcout << "Computing epsilon distribution for combined multilevel optimization..." << std::endl;
-        epsilon_scaling_handler->compute_epsilon_distribution(n_c_levels);
-        epsilon_scaling_handler->print_epsilon_distribution();
-    }
-
-    // Initialize state variables
-    Vector<double> current_potentials;
-    int prev_actual_target_level_num = -1;
-    unsigned int prev_source_idx = -1;  // Track previous source index
-    double total_softmax_time = 0.0;
-
-    // Main Loop (Combined Levels)
-    for (unsigned int combined_iter = 0; combined_iter < n_c_levels; ++combined_iter) {
-        Timer level_timer;
-        level_timer.start();
-
-        pcout << "\n" << Color::cyan << Color::bold
-              << "============================================" << Color::reset << std::endl;
-        pcout << Color::cyan << Color::bold << "Processing combined iteration " << combined_iter
-              << " of " << n_c_levels - 1 << Color::reset << std::endl;
-
-        // Determine Source and Target indices
-        unsigned int current_source_idx = 0;
-        unsigned int current_target_idx = 0;
-
-        if (n_s_levels >= n_t_levels) {
-            current_source_idx = combined_iter;
-            current_target_idx = (combined_iter >= (n_s_levels - n_t_levels)) ?
-                                 (combined_iter - (n_s_levels - n_t_levels)) : 0;
-        } else {
-            current_target_idx = combined_iter;
-            current_source_idx = (combined_iter >= (n_t_levels - n_s_levels)) ?
-                                 (combined_iter - (n_t_levels - n_s_levels)) : 0;
-        }
-
-        // Get current files
-        const std::string current_source_mesh_file = source_mesh_files[current_source_idx];
-        std::string current_target_points_file;
-        std::string current_target_density_file;
-
-        if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
-            current_target_points_file = target_hierarchy_files[current_target_idx].first;
-            current_target_density_file = target_hierarchy_files[current_target_idx].second;
-        }
-
-        // Broadcast filenames
-        current_target_points_file = Utilities::MPI::broadcast(mpi_communicator, current_target_points_file, 0);
-        current_target_density_file = Utilities::MPI::broadcast(mpi_communicator, current_target_density_file, 0);
-
-        // Extract target level number
-        int current_actual_target_level_num = -1;
-        if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
-            size_t level_pos = current_target_points_file.find("level_");
-            size_t level_end = current_target_points_file.find("_points");
-            if (level_pos != std::string::npos && level_end != std::string::npos) {
-                current_actual_target_level_num = std::stoi(current_target_points_file.substr(
-                    level_pos + 6, level_end - (level_pos + 6)));
-            }
-        }
-        current_actual_target_level_num = Utilities::MPI::broadcast(mpi_communicator, current_actual_target_level_num, 0);
-
-        // Create level directory
-        std::string level_dir = combined_multilevel_dir + "/combined_iter_" + std::to_string(combined_iter);
-        fs::create_directories(level_dir);
-
-        // Only load source mesh and setup FEs if source level changed
-        if (current_source_idx != prev_source_idx) {
-            mesh_manager->load_mesh_at_level(source_mesh, dof_handler_source, current_source_mesh_file);
-            setup_source_finite_elements(true);
-            prev_source_idx = current_source_idx;
-        }
-
-        // Save previous target data if not first iteration
-        if (combined_iter > 0) {
-            target_points_coarse = target_points;
-            target_density_coarse = target_density;
-        }
-
-        // Load target points
-        load_target_points_at_level(current_target_points_file, current_target_density_file);
-
-        // Initialize potentials
-        Vector<double> potentials_for_this_level(target_points.size());
-
-        potentials_for_this_level = 0.0;  // Default initialization
-        if (combined_iter > 0) {
-            bool target_level_changed = (current_actual_target_level_num != prev_actual_target_level_num);
-            bool hierarchical_transfer_possible = target_level_changed &&
-                                                (prev_actual_target_level_num == current_actual_target_level_num + 1);
-
-            if (hierarchical_transfer_possible) {
-                load_hierarchy_data(multilevel_params.target_hierarchy_dir, current_actual_target_level_num);
-                Timer transfer_timer;
-                transfer_timer.start();
-
-                assign_potentials_by_hierarchy(potentials_for_this_level,
-                                            prev_actual_target_level_num,
-                                            current_actual_target_level_num,
-                                            current_potentials);
-
-                transfer_timer.stop();
-                if (multilevel_params.use_softmax_potential_transfer) {
-                    total_softmax_time += transfer_timer.wall_time();
-                }
-            } else if (current_potentials.size() == potentials_for_this_level.size()) {
-                potentials_for_this_level = current_potentials;
-            }
-        }
-
-        // Setup solver
-        sot_solver->setup_source(dof_handler_source, *mapping, *fe_system, source_density, solver_params.quadrature_order);
-        sot_solver->setup_target(target_points, target_density);
-
-        // Solve with epsilon scaling
-        bool solve_successful = true;
-        if (solver_params.use_epsilon_scaling && epsilon_scaling_handler) {
-            const auto& level_epsilons = epsilon_scaling_handler->get_epsilon_values_for_level(combined_iter);
-            if (!level_epsilons.empty()) {
-                for (size_t eps_idx = 0; eps_idx < level_epsilons.size(); ++eps_idx) {
-                    solver_params.regularization_param = level_epsilons[eps_idx];
-                    try {
-                        sot_solver->solve(potentials_for_this_level, solver_params);
-                        if (eps_idx < level_epsilons.size() - 1) {
-                            save_results(potentials_for_this_level, level_dir + "/potentials_eps" + std::to_string(eps_idx + 1), false);
-                        }
-                    } catch (const SolverControl::NoConvergence& exc) {
-                        solve_successful = false;
-                    }
-                }
-            } else {
-                solver_params.regularization_param = original_regularization;
-                try {
-                    sot_solver->solve(potentials_for_this_level, solver_params);
-                } catch (const SolverControl::NoConvergence& exc) {
-                    solve_successful = false;
-                }
-            }
-        } else {
-            solver_params.regularization_param = original_regularization;
-            try {
-                sot_solver->solve(potentials_for_this_level, solver_params);
-            } catch (const SolverControl::NoConvergence& exc) {
-                solve_successful = false;
-            }
-        }
-
-        if (!solve_successful && combined_iter == 0) {
-            pcout << Color::red << Color::bold << "Initial iteration failed. Aborting." << Color::reset << std::endl;
-            break;
-        }
-
-        // Save results
-        save_results(potentials_for_this_level, level_dir + "/potentials", false);
-
-        // Update state for next iteration
-        current_potentials = potentials_for_this_level;
-        prev_actual_target_level_num = current_actual_target_level_num;
-        current_distance_threshold = sot_solver->get_last_distance_threshold();
-
-        level_timer.stop();
-        const double level_time = level_timer.wall_time();
-        const unsigned int last_iterations = sot_solver->get_last_iteration_count();
-
-        // Log summary information to file (only rank 0)
-        if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0 && summary_log.is_open()) {
-            summary_log << std::setw(13) << combined_iter << " | "
-                        << std::setw(17) << last_iterations << " | "
-                        << std::setw(8) << std::fixed << std::setprecision(4) << level_time << " | "
-                        << std::setw(14) << std::scientific << std::setprecision(6) << current_distance_threshold << "\n";
-        }
-    }
-
-    // Close the log file on rank 0
-    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0 && summary_log.is_open()) {
-        summary_log.close();
-    }
-
-    // Restore original parameters
-    solver_params.max_iterations = original_max_iterations;
-    solver_params.tolerance = original_tolerance;
-    solver_params.regularization_param = original_regularization;
-
-    global_timer.stop();
-    pcout << "\n" << Color::green << Color::bold
-          << "============================================" << Color::reset << std::endl;
-    pcout << Color::green << Color::bold << "Combined multilevel computation completed!" << Color::reset << std::endl;
-    pcout << Color::green << Color::bold << "Total computation time: " << global_timer.wall_time() << " seconds" << Color::reset << std::endl;
-    if (multilevel_params.use_softmax_potential_transfer && total_softmax_time > 0.0) {
-        pcout << Color::green << Color::bold << "Total softmax transfer time: " << total_softmax_time
-              << " seconds (" << (total_softmax_time / global_timer.wall_time() * 100.0) << "%)" << Color::reset << std::endl;
-    }
-    pcout << Color::green << Color::bold << "============================================" << Color::reset << std::endl;
-}

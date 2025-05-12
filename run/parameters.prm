@@ -1,6 +1,6 @@
 subsection ParameterManager
 
-  set selected_task =  sot    # Options: mesh_generation, load_meshes, sot, exact_sot, power_diagram, map, prepare_source_multilevel, prepare_target_multilevel, multilevel_sot, save_multilevel_source_interpolation
+  set selected_task =  multilevel    # Options: mesh_generation, load_meshes, sot, exact_sot, power_diagram, map, prepare_source_multilevel, prepare_target_multilevel, multilevel_sot, save_multilevel_source_interpolation
   set io_coding = txt
 
   subsection mesh_generation
@@ -9,9 +9,9 @@ subsection ParameterManager
       set grid generator function = hyper_cube
       set grid generator arguments = -1 : 1 : false
       set use tetrahedral mesh = true
-      set use custom density = false
-      set density file path  = output/density_field/field.vtu
-      set density field name = u
+      set use custom density = true
+      set density file path  = output/density_field/source_density.vtu
+      set density field name = p
       set density file format = vtk
     end
 
@@ -20,8 +20,9 @@ subsection ParameterManager
       set grid generator function = hyper_ball
       set grid generator arguments = 0, 0, 0 : 1 : true
       set use tetrahedral mesh = true
-      set use custom density = false
-      set density file path  = output/density_field/field.vtk
+      set use custom density = true
+      set density file path  = output/density_field/target_density.vtu
+      set density field name = p
       set density file format = vtk
     end
 
@@ -69,12 +70,5 @@ subsection ParameterManager
   subsection power_diagram_parameters
     set implementation = geogram  # Options: dealii/geogram
   end
-
-  subsection transport_map_parameters
-    set n_neighbors = 10          # Number of neighbors for local methods
-    set kernel_width = 0.1        # Kernel width for smooth approximations
-    set interpolation_type = linear # Type of interpolation
-  end
-
 
 end
