@@ -92,6 +92,8 @@ ParameterManager::ParameterManager(const MPI_Comm &comm)
                      "Enable distance threshold caching");
         add_parameter("max_cache_size_mb", solver_params.max_cache_size_mb,
                      "Maximum cache size in MB/per processor");
+        add_parameter("use_log_sum_exp_trick", solver_params.use_log_sum_exp_trick,
+                     "Enable log-sum-exp trick for numerical stability with small entropy");
     }
     leave_subsection();
 
@@ -303,6 +305,7 @@ void ParameterManager::print_solver_parameters() const
     pcout << "    Regularization Parameter: " << BOLD << solver_params.regularization_param << RESET << std::endl;
     pcout << "    Epsilon: " << BOLD << solver_params.epsilon << RESET << std::endl;
     pcout << "    Tau: " << BOLD << solver_params.tau << RESET << std::endl;
+    pcout << "    Log-Sum-Exp Trick: " << BOLD << (solver_params.use_log_sum_exp_trick ? "enabled" : "disabled") << RESET << std::endl;
     
     if (solver_params.use_epsilon_scaling) {
         pcout << "    Epsilon Scaling: " << BOLD << "enabled" << RESET << std::endl;

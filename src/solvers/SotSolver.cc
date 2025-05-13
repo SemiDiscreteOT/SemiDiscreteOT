@@ -109,6 +109,15 @@ void SotSolver<dim>::solve(
           << "  Threads per process: " << n_threads << std::endl
           << "  Total parallel units: " << n_threads * n_mpi_processes << std::endl;
 
+    // Print log-sum-exp status if using small entropy
+    if (params.regularization_param < 1e-2) {
+        pcout << "Small entropy detected (λ = " << params.regularization_param << ")" << std::endl;
+        pcout << "  Log-Sum-Exp trick: " << (params.use_log_sum_exp_trick ? "enabled" : "disabled") << std::endl;
+        if (!params.use_log_sum_exp_trick && params.regularization_param < 1e-4) {
+            pcout << "  \033[1;33mWARNING: Using very small entropy without Log-Sum-Exp trick may cause numerical instability\033[0m" << std::endl;
+        }
+    }
+
     // Initialize potentials if needed
     if (potentials.size() != target_measure.points.size()) {
         potentials.reinit(target_measure.points.size());
@@ -314,6 +323,7 @@ void SotSolver<dim>::local_assemble(
 
     const unsigned int n_q_points = q_points.size();
     const double lambda_inv = 1.0 / current_lambda;
+    const bool use_log_sum_exp = current_params.use_log_sum_exp_trick;
 
     if (current_params.use_caching && is_caching_active) {
         // Caching path
@@ -366,7 +376,7 @@ void SotSolver<dim>::local_assemble(
                 CellCache& cell_cache = cell_caches[cell_id];
                 cell_cache_ptr = &cell_cache;
                 cell_cache.target_indices = cell_target_indices;
-                cell_cache.precomputed_exp_terms.resize(n_q_points * cell_target_indices.size());
+                cell_cache.precomputed_distance_terms.resize(n_q_points * cell_target_indices.size());
                 current_cache_size_mb.store(current_cache_size_mb.load() + entry_size_mb);
             }
         }
@@ -393,38 +403,104 @@ void SotSolver<dim>::local_assemble(
             const double JxW = scratch.fe_values.JxW(q);
 
             double total_sum_exp = 0.0;
+            double max_exponent = -std::numeric_limits<double>::max();
             std::vector<double> active_exp_terms(n_target_points, 0.0);
 
             const unsigned int base_idx = q * n_target_points;
+            
             if (need_computation) {
-                #pragma omp simd reduction(+:total_sum_exp)
+                // First pass: compute distances and find maximum exponent
+                #pragma omp simd reduction(max:max_exponent)
                 for (size_t i = 0; i < n_target_points; ++i) {
                     if (cell_target_indices[i] >= target_measure.points.size()) {
                         continue;
                     }
                     const double local_dist2 = (x - target_positions[i]).norm_square();
-                    const double precomputed_term = target_densities[i] *
-                        std::exp(-0.5 * local_dist2 * lambda_inv);
-                    cell_cache_ptr->precomputed_exp_terms[base_idx + i] = precomputed_term;
-                    active_exp_terms[i] = precomputed_term * std::exp(potential_values[i] * lambda_inv);
-                    total_sum_exp += active_exp_terms[i];
+                    const double distance_term = -0.5 * local_dist2;
+                    cell_cache_ptr->precomputed_distance_terms[base_idx + i] = distance_term;
+                    
+                    if (use_log_sum_exp) {
+                        const double exponent = (potential_values[i] + distance_term) * lambda_inv;
+                        max_exponent = std::max(max_exponent, exponent);
+                    }
+                }
+                
+                // Second pass: compute exponentials
+                if (use_log_sum_exp) {
+                    #pragma omp simd reduction(+:total_sum_exp)
+                    for (size_t i = 0; i < n_target_points; ++i) {
+                        if (cell_target_indices[i] >= target_measure.points.size()) {
+                            continue;
+                        }
+                        const double distance_term = cell_cache_ptr->precomputed_distance_terms[base_idx + i];
+                        const double shifted_exp = std::exp((potential_values[i] + distance_term) * lambda_inv - max_exponent);
+                        active_exp_terms[i] = target_densities[i] * shifted_exp;
+                        total_sum_exp += active_exp_terms[i];
+                    }
+                } else {
+                    // Original computation method
+                    #pragma omp simd reduction(+:total_sum_exp)
+                    for (size_t i = 0; i < n_target_points; ++i) {
+                        if (cell_target_indices[i] >= target_measure.points.size()) {
+                            continue;
+                        }
+                        const double distance_term = cell_cache_ptr->precomputed_distance_terms[base_idx + i];
+                        const double exp_term = std::exp((potential_values[i] + distance_term) * lambda_inv);
+                        active_exp_terms[i] = target_densities[i] * exp_term;
+                        total_sum_exp += active_exp_terms[i];
+                    }
                 }
             } else {
-                #pragma omp simd reduction(+:total_sum_exp)
-                for (size_t i = 0; i < n_target_points; ++i) {
-                    if (cell_target_indices[i] >= target_measure.points.size()) {
-                        continue;
+                // Using existing cache
+                if (use_log_sum_exp) {
+                    // First pass: find maximum exponent
+                    #pragma omp simd reduction(max:max_exponent)
+                    for (size_t i = 0; i < n_target_points; ++i) {
+                        if (cell_target_indices[i] >= target_measure.points.size()) {
+                            continue;
+                        }
+                        const double distance_term = cell_cache_ptr->precomputed_distance_terms[base_idx + i];
+                        const double exponent = (potential_values[i] + distance_term) * lambda_inv;
+                        max_exponent = std::max(max_exponent, exponent);
                     }
-                    const double cached_term = cell_cache_ptr->precomputed_exp_terms[base_idx + i];
-                    active_exp_terms[i] = cached_term * std::exp(potential_values[i] * lambda_inv);
-                    total_sum_exp += active_exp_terms[i];
+                    
+                    // Second pass: compute shifted exponentials
+                    #pragma omp simd reduction(+:total_sum_exp)
+                    for (size_t i = 0; i < n_target_points; ++i) {
+                        if (cell_target_indices[i] >= target_measure.points.size()) {
+                            continue;
+                        }
+                        const double distance_term = cell_cache_ptr->precomputed_distance_terms[base_idx + i];
+                        const double shifted_exp = std::exp((potential_values[i] + distance_term) * lambda_inv - max_exponent);
+                        active_exp_terms[i] = target_densities[i] * shifted_exp;
+                        total_sum_exp += active_exp_terms[i];
+                    }
+                } else {
+                    // Original computation method
+                    #pragma omp simd reduction(+:total_sum_exp)
+                    for (size_t i = 0; i < n_target_points; ++i) {
+                        if (cell_target_indices[i] >= target_measure.points.size()) {
+                            continue;
+                        }
+                        const double distance_term = cell_cache_ptr->precomputed_distance_terms[base_idx + i];
+                        const double exp_term = std::exp((potential_values[i] + distance_term) * lambda_inv);
+                        active_exp_terms[i] = target_densities[i] * exp_term;
+                        total_sum_exp += active_exp_terms[i];
+                    }
                 }
             }
 
             if (total_sum_exp <= 0.0) continue;
 
-            copy.functional_value += density_value * current_lambda *
-                std::log(total_sum_exp) * JxW;
+            // Calculate functional value based on whether log-sum-exp is used
+            if (use_log_sum_exp) {
+                copy.functional_value += density_value * current_lambda * 
+                    (max_exponent + std::log(total_sum_exp)) * JxW;
+            } else {
+                copy.functional_value += density_value * current_lambda *
+                    std::log(total_sum_exp) * JxW;
+            }
+            
             copy.C_integral += density_value * JxW / total_sum_exp;
 
             const double scale = density_value * JxW / total_sum_exp;
@@ -470,20 +546,48 @@ direct_computation:
         const double JxW = scratch.fe_values.JxW(q);
 
         double total_sum_exp = 0.0;
+        double max_exponent = -std::numeric_limits<double>::max();
         std::vector<double> exp_terms(n_target_points);
 
-        #pragma omp simd reduction(+:total_sum_exp)
-        for (size_t i = 0; i < n_target_points; ++i) {
-            const double local_dist2 = (x - target_positions[i]).norm_square();
-            exp_terms[i] = target_densities[i] *
-                std::exp((potential_values[i] - 0.5 * local_dist2) * lambda_inv);
-            total_sum_exp += exp_terms[i];
+        if (use_log_sum_exp) {
+            // First pass: find maximum exponent
+            #pragma omp simd reduction(max:max_exponent)
+            for (size_t i = 0; i < n_target_points; ++i) {
+                const double local_dist2 = (x - target_positions[i]).norm_square();
+                const double exponent = (potential_values[i] - 0.5 * local_dist2) * lambda_inv;
+                max_exponent = std::max(max_exponent, exponent);
+            }
+            
+            // Second pass: compute shifted exponentials
+            #pragma omp simd reduction(+:total_sum_exp)
+            for (size_t i = 0; i < n_target_points; ++i) {
+                const double local_dist2 = (x - target_positions[i]).norm_square();
+                const double shifted_exp = std::exp((potential_values[i] - 0.5 * local_dist2) * lambda_inv - max_exponent);
+                exp_terms[i] = target_densities[i] * shifted_exp;
+                total_sum_exp += exp_terms[i];
+            }
+        } else {
+            // Original computation method
+            #pragma omp simd reduction(+:total_sum_exp)
+            for (size_t i = 0; i < n_target_points; ++i) {
+                const double local_dist2 = (x - target_positions[i]).norm_square();
+                exp_terms[i] = target_densities[i] *
+                    std::exp((potential_values[i] - 0.5 * local_dist2) * lambda_inv);
+                total_sum_exp += exp_terms[i];
+            }
         }
 
         if (total_sum_exp <= 0.0) continue;
 
-        copy.functional_value += density_value * current_lambda *
-            std::log(total_sum_exp) * JxW;
+        // Calculate functional value based on whether log-sum-exp is used
+        if (use_log_sum_exp) {
+            copy.functional_value += density_value * current_lambda * 
+                (max_exponent + std::log(total_sum_exp)) * JxW;
+        } else {
+            copy.functional_value += density_value * current_lambda *
+                std::log(total_sum_exp) * JxW;
+        }
+        
         copy.C_integral += density_value * JxW / total_sum_exp;
 
         const double scale = density_value * JxW / total_sum_exp;
@@ -501,6 +605,7 @@ void SotSolver<dim>::compute_distance_threshold() const
 {
     if (current_potential == nullptr) {
         current_distance_threshold = std::numeric_limits<double>::max();
+        effective_distance_threshold = std::numeric_limits<double>::max();
         is_caching_active = false;
         return;
     }
@@ -518,15 +623,24 @@ void SotSolver<dim>::compute_distance_threshold() const
         return;
     }
 
-    // Even if cache limit is reached, we still want to use existing cache entries
-    if (is_caching_active && computed_threshold <= effective_distance_threshold) {
-        current_distance_threshold = effective_distance_threshold;
-        return;
-    }
+    double new_proposed_effective_threshold = computed_threshold * 1.1;
+    bool clear_cache_condition = !is_caching_active || 
+                                 (is_caching_active && new_proposed_effective_threshold > effective_distance_threshold);
 
-    current_distance_threshold = computed_threshold;
-    effective_distance_threshold = computed_threshold * 1.1;
-    is_caching_active = true;
+    if (clear_cache_condition) {
+        {
+            std::lock_guard<std::mutex> lock(cache_mutex);
+            cell_caches.clear();
+            current_cache_size_mb.store(0.0);
+            cache_limit_reached = false;
+        }
+        
+        current_distance_threshold = computed_threshold;
+        effective_distance_threshold = new_proposed_effective_threshold;
+        is_caching_active = true;
+    } else {
+        current_distance_threshold = computed_threshold;
+    }
 }
 
 template <int dim>

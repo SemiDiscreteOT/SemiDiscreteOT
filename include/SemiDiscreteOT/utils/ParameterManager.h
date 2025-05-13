@@ -70,6 +70,7 @@ public:
         unsigned int epsilon_scaling_steps = 5;  ///< Number of scaling steps
         bool use_caching = false;               ///< Enable distance threshold caching
         double max_cache_size_mb = 1024.0;      ///< Maximum cache size per processor in MB (0 = unlimited)
+        bool use_log_sum_exp_trick = false;     ///< Enable log-sum-exp trick for numerical stability with small entropy
     };
 
     /**

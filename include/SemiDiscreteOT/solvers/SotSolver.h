@@ -290,7 +290,7 @@ private:
     // Cache for local assembly computations
     struct CellCache {
         std::vector<std::size_t> target_indices;
-        std::vector<double> precomputed_exp_terms;
+        std::vector<double> precomputed_distance_terms;
         bool is_valid;
 
         CellCache() : is_valid(false) {}
