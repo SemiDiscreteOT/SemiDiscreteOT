@@ -110,6 +110,7 @@ public:
         double functional_value{0.0};
         Vector<double> gradient_values;  // Local gradient contribution
         Vector<double> potential_values;  // For softmax refinement
+        double local_C_sum = 0.0; // Sum of scale terms for this cell
 
         CopyData(const unsigned int n_target_points)
             : gradient_values(n_target_points),
@@ -149,6 +150,7 @@ public:
     double get_cache_size_mb() const;
     double get_last_distance_threshold() const { return current_distance_threshold; }
     bool get_cache_limit_reached() const { return cache_limit_reached; }
+    double get_C_global() const { return C_global; }
 
     /**
      * @brief Computes the covering radius of the target measure with respect to the source domain
@@ -323,6 +325,7 @@ private:
     Vector<double> gradient;  
     double covering_radius;           
     double min_target_density;       
+    double C_global = 0.0; // Sum of all scale terms
 
     // Cache for local assembly computations
     struct CellCache {

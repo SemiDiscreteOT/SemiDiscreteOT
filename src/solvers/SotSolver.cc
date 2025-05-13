@@ -32,6 +32,7 @@ SotSolver<dim>::SotSolver(const MPI_Comm& comm)
     , cell_caches()
     , current_cache_size_mb(0.0)
     , cache_limit_reached(false)
+    , C_global(0.0)
 {}
 
 template <int dim>
@@ -217,8 +218,10 @@ double SotSolver<dim>::evaluate_functional(
     // Reset global accumulators
     global_functional = 0.0;
     gradient = 0;  // Reset class member gradient
+    C_global = 0.0; // Reset C_global
     double local_process_functional = 0.0;
     Vector<double> local_process_gradient(target_measure.points.size());
+    double local_process_C_sum = 0.0; // Accumulator for C_sum on this MPI process
 
     // Update distance threshold for target point search
     compute_distance_threshold();
@@ -261,10 +264,11 @@ double SotSolver<dim>::evaluate_functional(
                    CopyData& copy) {
                 this->local_assemble(cell, scratch, copy);
             },
-            [this, &local_process_functional, &local_process_gradient](const CopyData& copy) {
+            [this, &local_process_functional, &local_process_gradient, &local_process_C_sum](const CopyData& copy) {
                 std::lock_guard<std::mutex> lock(cache_mutex);
                 local_process_functional += copy.functional_value;
                 local_process_gradient += copy.gradient_values;
+                local_process_C_sum += copy.local_C_sum; // Accumulate local_C_sum
             },
             scratch_data,
             copy_data);
@@ -273,6 +277,7 @@ double SotSolver<dim>::evaluate_functional(
         global_functional = Utilities::MPI::sum(local_process_functional, mpi_communicator);
         gradient = 0;  // Reset gradient
         Utilities::MPI::sum(local_process_gradient, mpi_communicator, gradient);
+        C_global = Utilities::MPI::sum(local_process_C_sum, mpi_communicator); // Sum C_global across processes
 
         // Add linear term (only on root process to avoid duplication)
         if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
@@ -292,6 +297,7 @@ double SotSolver<dim>::evaluate_functional(
         if (current_params.verbose_output) {
             pcout << "Functional evaluation completed:" << std::endl;
             pcout << "  Function value: " << global_functional << std::endl;
+            pcout << "  C_global: " << C_global << std::endl;
             
             // Calculate and print the geometric radius bound for comparison
             if (current_potential != nullptr && current_potential->size() == target_measure.points.size()) {
@@ -344,6 +350,7 @@ void SotSolver<dim>::local_assemble(
 
     copy.functional_value = 0.0;
     copy.gradient_values = 0;
+    copy.local_C_sum = 0.0; // Accumulator for C_sum on this cell
 
     const unsigned int n_q_points = q_points.size();
     const double lambda_inv = 1.0 / current_lambda;
@@ -526,6 +533,7 @@ void SotSolver<dim>::local_assemble(
             }
             
             const double scale = density_value * JxW / total_sum_exp;
+            copy.local_C_sum += scale; // Add scale to local_C_sum for this cell q-point
             #pragma omp simd
             for (size_t i = 0; i < n_target_points; ++i) {
                 if (cell_target_indices[i] >= target_measure.points.size()) {
@@ -611,6 +619,7 @@ direct_computation:
         }
 
         const double scale = density_value * JxW / total_sum_exp;
+        copy.local_C_sum += scale; // Add scale to local_C_sum for this cell q-point
         #pragma omp simd
         for (size_t i = 0; i < n_target_points; ++i) {
             if (exp_terms[i] > 0.0) {
@@ -660,7 +669,7 @@ void SotSolver<dim>::compute_distance_threshold() const
         return;
     }
 
-    double new_proposed_effective_threshold = computed_threshold * 1.01;
+    double new_proposed_effective_threshold = computed_threshold * 1.1;
     bool clear_cache_condition = !is_caching_active || 
                                  (is_caching_active && new_proposed_effective_threshold > effective_distance_threshold);
 

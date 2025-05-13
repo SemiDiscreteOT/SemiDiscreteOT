@@ -58,9 +58,16 @@ SET(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/run)
 # Geogram setup
 INCLUDE_DIRECTORIES($ENV{GEOGRAM_DIR}/src/lib)
 SET(CMAKE_MODULE_PATH $ENV{GEOGRAM_DIR}/cmake)
+
+IF(APPLE)
+    SET(LIB_EXTENSION "dylib")
+ELSE()
+    SET(LIB_EXTENSION "so")
+ENDIF()
+
 SET(GEOGRAM_LIBS
-    $ENV{GEOGRAM_DIR}/build/Linux64-gcc-dynamic-Release/lib/libgeogram.so
-    $ENV{GEOGRAM_DIR}/build/Linux64-gcc-dynamic-Release/lib/libexploragram.so
+    $ENV{GEOGRAM_DIR}/build/Darwin-clang-dynamic-Release/lib/libgeogram.${LIB_EXTENSION}
+    $ENV{GEOGRAM_DIR}/build/Darwin-clang-dynamic-Release/lib/libexploragram.${LIB_EXTENSION}
 )
 
 # Library source files
