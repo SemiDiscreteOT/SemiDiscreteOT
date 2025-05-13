@@ -26,7 +26,10 @@ SotSolver<dim>::SotSolver(const MPI_Comm& comm)
     , current_potential(nullptr)
     , current_lambda(1.0)
     , global_functional(0.0)
-    , global_C_integral(0.0)
+    , gradient()
+    , covering_radius(0.0)
+    , min_target_density(0.0)
+    , cell_caches()
     , current_cache_size_mb(0.0)
     , cache_limit_reached(false)
 {}
@@ -108,6 +111,13 @@ void SotSolver<dim>::solve(
           << " (Current rank: " << this_mpi_process << ")" << std::endl
           << "  Threads per process: " << n_threads << std::endl
           << "  Total parallel units: " << n_threads * n_mpi_processes << std::endl;
+
+    // Compute and cache the covering radius and minimum target density
+    covering_radius = compute_covering_radius();
+    min_target_density = *std::min_element(target_measure.density.begin(), target_measure.density.end());
+    
+    pcout << "Covering radius (R0): " << covering_radius << std::endl
+          << "  (Maximum distance from any source cell center to the nearest target point)" << std::endl;
 
     // Print log-sum-exp status if using small entropy
     if (params.regularization_param < 1e-2) {
@@ -206,10 +216,8 @@ double SotSolver<dim>::evaluate_functional(
 
     // Reset global accumulators
     global_functional = 0.0;
-    global_C_integral = 0.0;
     gradient = 0;  // Reset class member gradient
     double local_process_functional = 0.0;
-    double local_process_C_integral = 0.0;  // Local C integral accumulator
     Vector<double> local_process_gradient(target_measure.points.size());
 
     // Update distance threshold for target point search
@@ -253,10 +261,9 @@ double SotSolver<dim>::evaluate_functional(
                    CopyData& copy) {
                 this->local_assemble(cell, scratch, copy);
             },
-            [this, &local_process_functional, &local_process_C_integral, &local_process_gradient](const CopyData& copy) {
+            [this, &local_process_functional, &local_process_gradient](const CopyData& copy) {
                 std::lock_guard<std::mutex> lock(cache_mutex);
                 local_process_functional += copy.functional_value;
-                local_process_C_integral += copy.C_integral;
                 local_process_gradient += copy.gradient_values;
             },
             scratch_data,
@@ -264,7 +271,6 @@ double SotSolver<dim>::evaluate_functional(
 
         // Synchronize across MPI processes
         global_functional = Utilities::MPI::sum(local_process_functional, mpi_communicator);
-        global_C_integral = Utilities::MPI::sum(local_process_C_integral, mpi_communicator);
         gradient = 0;  // Reset gradient
         Utilities::MPI::sum(local_process_gradient, mpi_communicator, gradient);
 
@@ -284,9 +290,28 @@ double SotSolver<dim>::evaluate_functional(
         gradient_out = gradient;
 
         if (current_params.verbose_output) {
-            pcout << "Functional evaluation completed:" << std::endl
-                  << "  Function value: " << global_functional << std::endl
-                  << "  C integral: " << global_C_integral << std::endl;
+            pcout << "Functional evaluation completed:" << std::endl;
+            pcout << "  Function value: " << global_functional << std::endl;
+            
+            // Calculate and print the geometric radius bound for comparison
+            if (current_potential != nullptr && current_potential->size() == target_measure.points.size()) {
+                double geom_radius_bound = compute_geometric_radius_bound(*current_potential, current_lambda, current_params.tau);
+                
+                // Calculate traditional pointwise bound for comparison
+                double max_pot = *std::max_element(current_potential->begin(), current_potential->end());
+                double min_tgt_density = min_target_density > 0.0 ? 
+                                      min_target_density : 
+                                      *std::min_element(target_measure.density.begin(), target_measure.density.end());
+                double sq_threshold = -2.0 * current_lambda * std::log(current_params.epsilon/min_tgt_density) + 2.0 * max_pot;
+                double pointwise_bound = std::sqrt(std::max(0.0, sq_threshold));
+                
+                pcout << "  Current distance threshold: " << current_distance_threshold 
+                      << " (using: " << current_params.distance_threshold_type << ")" << std::endl
+                      << "  Pointwise bound: " << pointwise_bound << std::endl
+                      << "  Integral bound (τ=" << current_params.tau << "): " << geom_radius_bound
+                      << " (ratio to pointwise: " << geom_radius_bound/pointwise_bound << ")" << std::endl;
+            }
+            
             if (current_params.use_caching) {
                 pcout << "  Cache size: " << get_cache_size_mb() << " MB" << std::endl
                       << "  Cached cells: " << cell_caches.size() << std::endl;
@@ -319,7 +344,6 @@ void SotSolver<dim>::local_assemble(
 
     copy.functional_value = 0.0;
     copy.gradient_values = 0;
-    copy.C_integral = 0.0;
 
     const unsigned int n_q_points = q_points.size();
     const double lambda_inv = 1.0 / current_lambda;
@@ -501,8 +525,6 @@ void SotSolver<dim>::local_assemble(
                     std::log(total_sum_exp) * JxW;
             }
             
-            copy.C_integral += density_value * JxW / total_sum_exp;
-
             const double scale = density_value * JxW / total_sum_exp;
             #pragma omp simd
             for (size_t i = 0; i < n_target_points; ++i) {
@@ -587,8 +609,6 @@ direct_computation:
             copy.functional_value += density_value * current_lambda *
                 std::log(total_sum_exp) * JxW;
         }
-        
-        copy.C_integral += density_value * JxW / total_sum_exp;
 
         const double scale = density_value * JxW / total_sum_exp;
         #pragma omp simd
@@ -610,12 +630,29 @@ void SotSolver<dim>::compute_distance_threshold() const
         return;
     }
 
-    double max_potential = *std::max_element(current_potential->begin(), current_potential->end());
-    double min_target_density = *std::min_element(target_measure.density.begin(), target_measure.density.end());
+    // Choose distance threshold calculation method based on parameter
+    double computed_threshold = 0.0;
+    
+    if (current_params.distance_threshold_type == "integral") {
+        // Use geometric radius bound (integral approach)
+        computed_threshold = compute_geometric_radius_bound(*current_potential, current_lambda, current_params.tau);
+        
+        if (current_params.verbose_output) {
+            pcout << "Using integral distance threshold (geometric radius bound): " << computed_threshold << std::endl;
+        }
+    } else {
+        // Use traditional pointwise approach
+        double max_potential = *std::max_element(current_potential->begin(), current_potential->end());
+        double min_target_density = *std::min_element(target_measure.density.begin(), target_measure.density.end());
 
-    double squared_threshold = -2.0 * current_lambda *
-        std::log(current_params.epsilon/min_target_density) + 2.0 * max_potential;
-    double computed_threshold = std::sqrt(std::max(0.0, squared_threshold));
+        double squared_threshold = -2.0 * current_lambda *
+            std::log(current_params.epsilon/min_target_density) + 2.0 * max_potential;
+        computed_threshold = std::sqrt(std::max(0.0, squared_threshold));
+        
+        if (current_params.verbose_output) {
+            pcout << "Using pointwise distance threshold: " << computed_threshold << std::endl;
+        }
+    }
 
     if (!current_params.use_caching) {
         current_distance_threshold = computed_threshold;
@@ -623,7 +660,7 @@ void SotSolver<dim>::compute_distance_threshold() const
         return;
     }
 
-    double new_proposed_effective_threshold = computed_threshold * 1.1;
+    double new_proposed_effective_threshold = computed_threshold * 1.01;
     bool clear_cache_condition = !is_caching_active || 
                                  (is_caching_active && new_proposed_effective_threshold > effective_distance_threshold);
 
@@ -641,6 +678,94 @@ void SotSolver<dim>::compute_distance_threshold() const
     } else {
         current_distance_threshold = computed_threshold;
     }
+}
+
+template <int dim>
+double SotSolver<dim>::compute_covering_radius() const
+{
+    namespace bgi = boost::geometry::index;
+    
+    if (!validate_measures()) {
+        throw std::runtime_error("Invalid measures configuration for computing covering radius");
+    }
+    
+    double max_min_distance = 0.0;
+    
+    // Iterate through all locally owned cells in source domain
+    FilteredIterator<typename DoFHandler<dim>::active_cell_iterator>
+        begin_filtered(IteratorFilters::LocallyOwnedCell(),
+                      source_measure.dof_handler->begin_active()),
+        end_filtered(IteratorFilters::LocallyOwnedCell(),
+                    source_measure.dof_handler->end());
+                    
+    std::vector<double> local_min_distances;
+    
+    // For each cell, find the minimum distance to any target point
+    for (auto cell = begin_filtered; cell != end_filtered; ++cell) {
+        const Point<dim>& cell_center = cell->center();
+        
+        // Use rtree to find the nearest target point - fixed to match container type
+        std::vector<IndexedPoint> nearest_results;
+        target_measure.rtree.query(bgi::nearest(cell_center, 1), std::back_inserter(nearest_results));
+        
+        if (!nearest_results.empty()) {
+            const Point<dim>& nearest_point = nearest_results[0].first;
+            const double distance = (nearest_point - cell_center).norm();
+            local_min_distances.push_back(distance);
+        }
+    }
+    
+    // Find maximum of all minimum distances
+    if (!local_min_distances.empty()) {
+        max_min_distance = *std::max_element(local_min_distances.begin(), local_min_distances.end());
+    }
+    
+    // Synchronize across MPI processes
+    return Utilities::MPI::max(max_min_distance, mpi_communicator);
+}
+
+template <int dim>
+double SotSolver<dim>::compute_geometric_radius_bound(
+    const Vector<double>& potentials,
+    const double epsilon,
+    const double tolerance) const
+{
+    if (!validate_measures() || potentials.size() != target_measure.points.size()) {
+        throw std::runtime_error("Invalid configuration for computing geometric radius bound");
+    }
+    
+    // Use cached covering radius value instead of computing it again
+    // (if it's not already computed, use the method)
+    double r0 = covering_radius > 0.0 ? covering_radius : compute_covering_radius();
+    
+    // Compute potential range Γ(ψ) = M - m
+    double min_potential = *std::min_element(potentials.begin(), potentials.end());
+    double max_potential = *std::max_element(potentials.begin(), potentials.end());
+    double potential_range = max_potential - min_potential;
+    
+    // Use cached minimum target density
+    double min_density = min_target_density > 0.0 ? 
+                        min_target_density : 
+                        *std::min_element(target_measure.density.begin(), target_measure.density.end());
+    
+    // Use current functional value or safety value if close to zero
+    double functional_value = std::abs(global_functional);
+    const double safety_value = 1e-10;
+    if (functional_value < safety_value) {
+        functional_value = safety_value;
+    }
+    
+    // Calculate the radius bound R_geom according to the formula:
+    // R_geom^2 ≥ R_0^2 + 2Γ(ψ) + 2ε ln(ε/(ν_min * τ * |J_ε(ψ)|))
+    double log_term = std::log(epsilon / (min_density * tolerance * functional_value));
+    double radius_squared = r0 * r0 + 2.0 * potential_range + 2.0 * epsilon * log_term;
+    
+    // Ensure radius is not less than covering radius
+    if (radius_squared < r0 * r0) {
+        radius_squared = r0 * r0;
+    }
+    
+    return std::sqrt(radius_squared);
 }
 
 template <int dim>

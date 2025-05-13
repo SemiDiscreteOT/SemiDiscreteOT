@@ -74,6 +74,8 @@ ParameterManager::ParameterManager(const MPI_Comm &comm)
                      "Truncation criterion for the kernel evaluation");
         add_parameter("tau", solver_params.tau,
                      "Truncation error tolerance for integral radius bound");
+        add_parameter("distance_threshold_type", solver_params.distance_threshold_type,
+                     "Type of distance threshold bound (pointwise/integral)");
         add_parameter("verbose_output", solver_params.verbose_output,
                      "Enable detailed solver output");
         add_parameter("solver_type", solver_params.solver_type,
@@ -305,6 +307,7 @@ void ParameterManager::print_solver_parameters() const
     pcout << "    Regularization Parameter: " << BOLD << solver_params.regularization_param << RESET << std::endl;
     pcout << "    Epsilon: " << BOLD << solver_params.epsilon << RESET << std::endl;
     pcout << "    Tau: " << BOLD << solver_params.tau << RESET << std::endl;
+    pcout << "    Distance Threshold Type: " << BOLD << solver_params.distance_threshold_type << RESET << std::endl;
     pcout << "    Log-Sum-Exp Trick: " << BOLD << (solver_params.use_log_sum_exp_trick ? "enabled" : "disabled") << RESET << std::endl;
     
     if (solver_params.use_epsilon_scaling) {

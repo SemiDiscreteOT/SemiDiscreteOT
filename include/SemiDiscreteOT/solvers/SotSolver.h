@@ -109,7 +109,6 @@ public:
     struct CopyData {
         double functional_value{0.0};
         Vector<double> gradient_values;  // Local gradient contribution
-        double C_integral{0.0};
         Vector<double> potential_values;  // For softmax refinement
 
         CopyData(const unsigned int n_target_points)
@@ -150,6 +149,43 @@ public:
     double get_cache_size_mb() const;
     double get_last_distance_threshold() const { return current_distance_threshold; }
     bool get_cache_limit_reached() const { return cache_limit_reached; }
+
+    /**
+     * @brief Computes the covering radius of the target measure with respect to the source domain
+     * 
+     * The covering radius R0 is defined as:
+     * R0 = max_{x∈Ω} min_{1≤j≤N} ||x - y_j||
+     * 
+     * which represents the maximum distance any point in the source domain
+     * needs to travel to reach the nearest target point.
+     * 
+     * @return The covering radius value
+     */
+    double compute_covering_radius() const;
+
+    /**
+     * @brief Computes the geometric radius bound for truncating quadrature rules
+     * 
+     * The geometric radius bound R_geom is defined as:
+     * R_geom^2 ≥ R_0^2 + 2Γ(ψ) + 2ε ln(ε/(ν_min * τ * |J_ε(ψ)|))
+     * 
+     * where:
+     * - R_0 is the covering radius
+     * - Γ(ψ) = M-m is the potential range (max - min)
+     * - ε is the regularization parameter
+     * - τ is the tolerance parameter
+     * - ν_min is the minimum target density
+     * - J_ε(ψ) is the functional value
+     * 
+     * @param potentials Current potential values
+     * @param epsilon Regularization parameter
+     * @param tolerance Desired tolerance for truncation error
+     * @return The geometric radius bound
+     */
+    double compute_geometric_radius_bound(
+        const Vector<double>& potentials,
+        const double epsilon,
+        const double tolerance) const;
 
     // Core evaluation method
     double evaluate_functional(const Vector<double>& potential,
@@ -284,8 +320,9 @@ private:
     const Vector<double>* current_potential;
     double current_lambda;
     mutable double global_functional;
-    mutable double global_C_integral;
     Vector<double> gradient;  
+    double covering_radius;           
+    double min_target_density;       
 
     // Cache for local assembly computations
     struct CellCache {
