@@ -351,6 +351,12 @@ private:
     std::vector<std::size_t> find_nearest_target_points(const Point<dim>& query_point) const;
     double estimate_cache_entry_size_mb(const std::vector<std::size_t>& target_indices, 
                                       unsigned int n_q_points) const;
+    double compute_integral_radius_bound(
+        const Vector<double>& potentials,
+        double lambda,
+        double tolerance,
+        double C_value,
+        double current_functional_val) const;
 
     // Validation methods
     bool validate_measures() const;

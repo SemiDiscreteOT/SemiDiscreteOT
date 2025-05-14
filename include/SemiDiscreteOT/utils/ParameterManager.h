@@ -60,7 +60,7 @@ public:
         double regularization_param = 1e-3;      ///< Entropy regularization parameter
         double epsilon = 1e-8;                   ///< Kernel truncation parameter
         double tau = 1e-8;                       ///< Integral radius bound tolerance
-        std::string distance_threshold_type = "pointwise"; ///< Type of distance threshold bound (pointwise/integral)
+        std::string distance_threshold_type = "pointwise"; ///< Type of distance threshold bound (pointwise|integral|geometric)
         bool verbose_output = true;              ///< Enable detailed solver output
         std::string solver_type = "BFGS";        ///< Type of optimization solver
         unsigned int quadrature_order = 3;       ///< Order of quadrature formula

@@ -114,7 +114,7 @@ void SotSolver<dim>::solve(
           << "  Total parallel units: " << n_threads * n_mpi_processes << std::endl;
 
     // Compute and cache the covering radius and minimum target density
-    covering_radius = compute_covering_radius();
+    covering_radius = compute_covering_radius() * 1.1;
     min_target_density = *std::min_element(target_measure.density.begin(), target_measure.density.end());
     
     pcout << "Covering radius (R0): " << covering_radius << std::endl
@@ -215,6 +215,9 @@ double SotSolver<dim>::evaluate_functional(
     current_potential = &potentials;
     current_lambda = current_params.regularization_param;
 
+    // Update distance threshold for target point search
+    compute_distance_threshold();
+
     // Reset global accumulators
     global_functional = 0.0;
     gradient = 0;  // Reset class member gradient
@@ -223,8 +226,6 @@ double SotSolver<dim>::evaluate_functional(
     Vector<double> local_process_gradient(target_measure.points.size());
     double local_process_C_sum = 0.0; // Accumulator for C_sum on this MPI process
 
-    // Update distance threshold for target point search
-    compute_distance_threshold();
     if (current_params.verbose_output) {
         pcout << "Using distance threshold: " << current_distance_threshold
               << " (Effective: " << effective_distance_threshold << ")" << std::endl;
@@ -310,12 +311,22 @@ double SotSolver<dim>::evaluate_functional(
                                       *std::min_element(target_measure.density.begin(), target_measure.density.end());
                 double sq_threshold = -2.0 * current_lambda * std::log(current_params.epsilon/min_tgt_density) + 2.0 * max_pot;
                 double pointwise_bound = std::sqrt(std::max(0.0, sq_threshold));
+
+                // Calculate the new integral radius bound
+                double integral_radius_bound = compute_integral_radius_bound(
+                    *current_potential, 
+                    current_lambda, 
+                    current_params.tau, 
+                    C_global,           
+                    global_functional   
+                );
                 
                 pcout << "  Current distance threshold: " << current_distance_threshold 
                       << " (using: " << current_params.distance_threshold_type << ")" << std::endl
-                      << "  Pointwise bound: " << pointwise_bound << std::endl
-                      << "  Integral bound (τ=" << current_params.tau << "): " << geom_radius_bound
-                      << " (ratio to pointwise: " << geom_radius_bound/pointwise_bound << ")" << std::endl;
+                      << "  Pointwise bound (eps_machine=" << current_params.epsilon << "): " << pointwise_bound << std::endl
+                      << "  Integral bound (C_global=" << C_global << ", τ=" << current_params.tau << "): " << integral_radius_bound << std::endl
+                      << "  Geometric bound (τ=" << current_params.tau << "): " << geom_radius_bound
+                      << " (ratio to pointwise: " << (pointwise_bound > 1e-9 ? geom_radius_bound/pointwise_bound : 0.0) << ")" << std::endl;
             }
             
             if (current_params.use_caching) {
@@ -641,28 +652,49 @@ void SotSolver<dim>::compute_distance_threshold() const
 
     // Choose distance threshold calculation method based on parameter
     double computed_threshold = 0.0;
+    std::string used_method_for_log;
     
     if (current_params.distance_threshold_type == "integral") {
+            computed_threshold = compute_integral_radius_bound(
+            *current_potential, 
+            current_lambda, 
+            current_params.tau, 
+            C_global, 
+            global_functional
+        );
+        used_method_for_log = "integral (C_global based)";
+    } else if (current_params.distance_threshold_type == "geometric") {
         // Use geometric radius bound (integral approach)
         computed_threshold = compute_geometric_radius_bound(*current_potential, current_lambda, current_params.tau);
-        
-        if (current_params.verbose_output) {
-            pcout << "Using integral distance threshold (geometric radius bound): " << computed_threshold << std::endl;
-        }
-    } else {
-        // Use traditional pointwise approach
+        used_method_for_log = "geometric (covering radius based)";
+    } else { // Default to pointwise, or if type is explicitly "pointwise"
         double max_potential = *std::max_element(current_potential->begin(), current_potential->end());
-        double min_target_density = *std::min_element(target_measure.density.begin(), target_measure.density.end());
+        double current_min_target_density = min_target_density > 0.0 ? 
+                                          min_target_density : 
+                                          *std::min_element(target_measure.density.begin(), target_measure.density.end());
 
-        double squared_threshold = -2.0 * current_lambda *
-            std::log(current_params.epsilon/min_target_density) + 2.0 * max_potential;
-        computed_threshold = std::sqrt(std::max(0.0, squared_threshold));
-        
-        if (current_params.verbose_output) {
-            pcout << "Using pointwise distance threshold: " << computed_threshold << std::endl;
+        if (current_min_target_density <= 0 || current_params.epsilon <=0) {
+             pcout << "Warning: min_target_density (" << current_min_target_density 
+                   << ") or epsilon (" << current_params.epsilon 
+                   << ") is non-positive in pointwise threshold. Returning max radius." << std::endl;
+             computed_threshold = std::numeric_limits<double>::max();   
+        } else {
+            double squared_threshold = -2.0 * current_lambda *
+                std::log(current_params.epsilon/current_min_target_density) + 2.0 * max_potential;
+            computed_threshold = std::sqrt(std::max(0.0, squared_threshold));
         }
+        used_method_for_log = "pointwise (epsilon based)";
     }
 
+    // Ensure the computed threshold exceed the covering radius
+    if (covering_radius > 0.0) {
+        computed_threshold = std::max(computed_threshold, covering_radius);
+    }
+
+    if (current_params.verbose_output) {
+        pcout << "Computed distance threshold using " << used_method_for_log << ": " << computed_threshold << std::endl;
+    }
+    
     if (!current_params.use_caching) {
         current_distance_threshold = computed_threshold;
         is_caching_active = false;
@@ -731,6 +763,40 @@ double SotSolver<dim>::compute_covering_radius() const
     
     // Synchronize across MPI processes
     return Utilities::MPI::max(max_min_distance, mpi_communicator);
+}
+
+template <int dim>
+double SotSolver<dim>::compute_integral_radius_bound(
+    const Vector<double>& potentials,
+    double lambda,      // Regularization parameter (epsilon in formula)
+    double tolerance,   // Tolerance for relative error (tau in formula)
+    double C_value,     // Accumulated C_global (C in formula)
+    double current_functional_val) const // J_epsilon(psi)
+{
+    /**
+     * Computes the integral radius bound R_int based on the formula:
+     * R_int^2 >= 2*M + 2*lambda*log( (lambda*C_value) / (tolerance*|J_epsilon(psi)|) )
+     * where M is the max potential value.
+     */
+
+    double max_potential = *std::max_element(potentials.begin(), potentials.end());
+
+    double abs_functional_val = std::abs(current_functional_val);
+    const double safety_value = 1e-10; // Consistent with geometric_radius_bound
+    if (abs_functional_val < safety_value) {
+        abs_functional_val = safety_value;
+    }
+
+    double log_numerator = lambda * C_value;
+    double log_denominator = tolerance * abs_functional_val;
+
+    // log_numerator must be positive (lambda > 0, C_value > 0 ensured by checks)
+    // log_denominator must be positive (tolerance > 0, abs_functional_val >= safety_value > 0 ensured by checks)
+    double log_argument = log_numerator / log_denominator;
+    
+    double radius_squared = 2.0 * max_potential + 2.0 * lambda * std::log(log_argument);
+
+    return std::sqrt(std::max(0.0, radius_squared));
 }
 
 template <int dim>

@@ -75,7 +75,7 @@ ParameterManager::ParameterManager(const MPI_Comm &comm)
         add_parameter("tau", solver_params.tau,
                      "Truncation error tolerance for integral radius bound");
         add_parameter("distance_threshold_type", solver_params.distance_threshold_type,
-                     "Type of distance threshold bound (pointwise/integral)");
+                     "Type of distance threshold bound (pointwise/integral/geometric)");
         add_parameter("verbose_output", solver_params.verbose_output,
                      "Enable detailed solver output");
         add_parameter("solver_type", solver_params.solver_type,
