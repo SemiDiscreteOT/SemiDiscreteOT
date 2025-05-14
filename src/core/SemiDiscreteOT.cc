@@ -1123,13 +1123,6 @@ void SemiDiscreteOT<dim>::run_source_multilevel()
         {
             level_potentials.reinit(previous_source_potentials.size());
             level_potentials = previous_source_potentials;
-
-            // Adjust solver tolerance for finer levels
-            double n_levels_double = static_cast<double>(source_mesh_files.size());
-            double tolerance_exponent = static_cast<double>(source_level_idx) - n_levels_double + 1.0;
-            solver_params.tolerance = original_tolerance * std::pow(0.5, -tolerance_exponent); // std::pow(2.0, tolerance_exponent) effectively
-            pcout << "\nSource level " << current_level_display_name << " solver parameters:" << std::endl;
-            pcout << "  Tolerance: " << solver_params.tolerance << std::endl;
         }
         pcout << "  Max iterations: " << solver_params.max_iterations << std::endl;
 
