@@ -662,6 +662,7 @@ void SotSolver<dim>::compute_distance_threshold() const
             C_global, 
             global_functional
         );
+        computed_threshold = std::max(computed_threshold, covering_radius);
         used_method_for_log = "integral (C_global based)";
     } else if (current_params.distance_threshold_type == "geometric") {
         // Use geometric radius bound (integral approach)
@@ -681,11 +682,6 @@ void SotSolver<dim>::compute_distance_threshold() const
             computed_threshold = std::sqrt(std::max(0.0, squared_threshold));
         }
         used_method_for_log = "pointwise (epsilon based)";
-    }
-
-    // Ensure the computed threshold exceed the covering radius
-    if (covering_radius > 0.0) {
-        computed_threshold = std::max(computed_threshold, covering_radius);
     }
 
     if (current_params.verbose_output) {
