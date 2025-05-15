@@ -559,62 +559,69 @@ void SemiDiscreteOT<dim>::run_sot()
 
     Vector<double> potential(target_points.size());
 
-    if (solver_config.use_epsilon_scaling && epsilon_scaling_handler)
+    try
     {
-        pcout << "Using epsilon scaling with EpsilonScalingHandler:" << std::endl
-              << "  Initial epsilon: " << solver_config.regularization_param << std::endl
-              << "  Scaling factor: " << solver_config.epsilon_scaling_factor << std::endl
-              << "  Number of steps: " << solver_config.epsilon_scaling_steps << std::endl;
-        // Compute epsilon distribution for a single level
-        std::vector<std::vector<double>> epsilon_distribution =
-            epsilon_scaling_handler->compute_epsilon_distribution(1);
-
-        if (!epsilon_distribution.empty() && !epsilon_distribution[0].empty())
+        if (solver_config.use_epsilon_scaling && epsilon_scaling_handler)
         {
-            const auto &epsilon_sequence = epsilon_distribution[0];
+            pcout << "Using epsilon scaling with EpsilonScalingHandler:" << std::endl
+                  << "  Initial epsilon: " << solver_config.regularization_param << std::endl
+                  << "  Scaling factor: " << solver_config.epsilon_scaling_factor << std::endl
+                  << "  Number of steps: " << solver_config.epsilon_scaling_steps << std::endl;
+            // Compute epsilon distribution for a single level
+            std::vector<std::vector<double>> epsilon_distribution =
+                epsilon_scaling_handler->compute_epsilon_distribution(1);
 
-            // Run optimization for each epsilon value
-            for (size_t i = 0; i < epsilon_sequence.size(); ++i)
+            if (!epsilon_distribution.empty() && !epsilon_distribution[0].empty())
             {
-                pcout << "\nEpsilon scaling step " << i + 1 << "/" << epsilon_sequence.size()
-                      << " (λ = " << epsilon_sequence[i] << ")" << std::endl;
+                const auto &epsilon_sequence = epsilon_distribution[0];
 
-                solver_config.regularization_param = epsilon_sequence[i];
-
-                try
+                // Run optimization for each epsilon value
+                for (size_t i = 0; i < epsilon_sequence.size(); ++i)
                 {
-                    sot_solver->solve(potential, solver_config);
+                    pcout << "\nEpsilon scaling step " << i + 1 << "/" << epsilon_sequence.size()
+                          << " (λ = " << epsilon_sequence[i] << ")" << std::endl;
 
-                    // Save intermediate results
-                    if (i < epsilon_sequence.size() - 1)
+                    solver_config.regularization_param = epsilon_sequence[i];
+
+                    try
                     {
-                        std::string eps_suffix = "_eps" + std::to_string(i + 1);
-                        save_results(potential, "potential" + eps_suffix);
+                        sot_solver->solve(potential, solver_config);
+
+                        // Save intermediate results
+                        if (i < epsilon_sequence.size() - 1)
+                        {
+                            std::string eps_suffix = "_eps" + std::to_string(i + 1);
+                            save_results(potential, "potential" + eps_suffix);
+                        }
                     }
-                }
-                catch (const SolverControl::NoConvergence &exc)
-                {
-                    if (exc.last_step >= solver_params.max_iterations)
+                    catch (const SolverControl::NoConvergence &exc)
                     {
-                        pcout << Color::red << Color::bold << "  Warning: Optimization failed at step " << i + 1
-                              << " (epsilon=" << epsilon_sequence[i] << "): Max iterations reached"
-                              << Color::reset << std::endl;
+                        if (exc.last_step >= solver_params.max_iterations)
+                        {
+                            pcout << Color::red << Color::bold << "  Warning: Optimization failed at step " << i + 1
+                                  << " (epsilon=" << epsilon_sequence[i] << "): Max iterations reached"
+                                  << Color::reset << std::endl;
+                        }
                     }
                 }
             }
         }
+        else
+        {
+            // Run single optimization with original epsilon
+            try
+            {
+                sot_solver->solve(potential, solver_config);
+            }
+            catch (const SolverControl::NoConvergence &exc)
+            {
+                pcout << Color::red << Color::bold << "Warning: Optimization did not converge." << Color::reset << std::endl;
+            }
+        }
     }
-    else
+    catch (const std::exception &e)
     {
-        // Run single optimization with original epsilon
-        try
-        {
-            sot_solver->solve(potential, solver_config);
-        }
-        catch (const SolverControl::NoConvergence &exc)
-        {
-            pcout << Color::red << Color::bold << "Warning: Optimization did not converge." << Color::reset << std::endl;
-        }
+        pcout << Color::red << Color::bold << "An exception occurred during SOT solve: " << e.what() << Color::reset << std::endl;
     }
 
     // Save final results
