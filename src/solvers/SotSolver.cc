@@ -674,9 +674,6 @@ void SotSolver<dim>::compute_distance_threshold() const
                                           *std::min_element(target_measure.density.begin(), target_measure.density.end());
 
         if (current_min_target_density <= 0 || current_params.epsilon <=0) {
-             pcout << "Warning: min_target_density (" << current_min_target_density 
-                   << ") or epsilon (" << current_params.epsilon 
-                   << ") is non-positive in pointwise threshold. Returning max radius." << std::endl;
              computed_threshold = std::numeric_limits<double>::max();   
         } else {
             double squared_threshold = -2.0 * current_lambda *
