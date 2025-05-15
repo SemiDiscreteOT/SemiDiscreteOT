@@ -6,6 +6,8 @@
 #include <fstream>
 #include <iostream>
 #include <filesystem>
+#include <iomanip>
+#include <limits>
 #include <deal.II/grid/grid_out.h>
 #include <deal.II/numerics/data_out.h>
 #include <deal.II/grid/grid_in.h>
@@ -29,6 +31,18 @@
  * @brief Collection of utility functions for file I/O, mesh handling and data management
  */
 namespace Utils {
+
+/**
+ * @brief Convert a double to a string in scientific notation
+ * @param value The double value to convert
+ * @param precision Number of significant digits (default: 6)
+ * @return String representation in scientific notation
+ */
+inline std::string to_scientific_string(double value, int precision = 6) {
+    std::ostringstream oss;
+    oss << std::scientific << std::setprecision(precision) << value;
+    return oss.str();
+}
 
 /**
  * @brief Write a vector container to a file in binary or text format
@@ -71,6 +85,7 @@ void write_vector(const VectorContainer& points,
             std::cerr << "Error: Unable to open file for writing in text mode." << std::endl;
             return;
         }
+        file << std::setprecision(std::numeric_limits<double>::max_digits10);
         for (const auto& point : points) {
             file << point << std::endl;
         }

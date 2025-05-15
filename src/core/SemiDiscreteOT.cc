@@ -627,7 +627,7 @@ void SemiDiscreteOT<dim>::run_sot()
           
     // Save convergence info
     if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
-        std::string eps_dir = "output/epsilon_" + std::to_string(solver_config.regularization_param);
+        std::string eps_dir = "output/epsilon_" + Utils::to_scientific_string(solver_config.regularization_param);
         fs::create_directories(eps_dir);
         std::ofstream conv_info(eps_dir + "/convergence_info.txt");
         conv_info << "Regularization parameter (λ): " << solver_config.regularization_param << "\n";
@@ -711,7 +711,7 @@ void SemiDiscreteOT<dim>::run_target_multilevel(
     const double original_regularization = solver_params.regularization_param;
 
     // Create output directory
-    std::string eps_dir = "output/epsilon_" + std::to_string(original_regularization);
+    std::string eps_dir = "output/epsilon_" + Utils::to_scientific_string(original_regularization);
     std::string target_multilevel_dir = eps_dir + "/target_multilevel";
     fs::create_directories(target_multilevel_dir);
 
@@ -1015,7 +1015,7 @@ void SemiDiscreteOT<dim>::run_source_multilevel()
     const double original_regularization = solver_params.regularization_param;
 
     // Create output directory structure.
-    std::string eps_dir = "output/epsilon_" + std::to_string(original_regularization);
+    std::string eps_dir = "output/epsilon_" + Utils::to_scientific_string(original_regularization);
     std::string source_multilevel_dir = eps_dir + "/source_multilevel";
     fs::create_directories(source_multilevel_dir);
 
@@ -1228,7 +1228,7 @@ void SemiDiscreteOT<dim>::run_combined_multilevel()
     const double original_regularization = solver_params.regularization_param;
 
     // Create output directory
-    std::string eps_dir = "output/epsilon_" + std::to_string(original_regularization);
+    std::string eps_dir = "output/epsilon_" + Utils::to_scientific_string(original_regularization);
     std::string combined_multilevel_dir = eps_dir + "/combined_multilevel";
     fs::create_directories(combined_multilevel_dir);
 
@@ -1682,7 +1682,7 @@ void SemiDiscreteOT<dim>::save_results(const Vector<double> &potential, const st
         if (add_epsilon_prefix)
         {
             // Create epsilon-specific directory
-            std::string eps_dir = "output/epsilon_" + std::to_string(solver_params.regularization_param);
+            std::string eps_dir = "output/epsilon_" + Utils::to_scientific_string(solver_params.regularization_param);
             fs::create_directories(eps_dir);
             full_path = eps_dir + "/" + filename;
         }
