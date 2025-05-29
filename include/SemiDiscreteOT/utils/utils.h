@@ -580,7 +580,7 @@ void interpolate_non_conforming_nearest(
       const unsigned int nearest_index = nearest.front().second;
       auto chosen_source_cell = cell_centers[nearest_index].second;
 
-      Point<spacedim> p_unit;
+      Point<dim> p_unit;
       try
       {
         p_unit = source_mapping->transform_real_to_unit_cell(chosen_source_cell, target_point);

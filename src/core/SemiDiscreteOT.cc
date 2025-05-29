@@ -1,5 +1,4 @@
 #include "SemiDiscreteOT/core/SemiDiscreteOT.h"
-
 namespace fs = std::filesystem;
 
 using namespace dealii;
@@ -203,12 +202,12 @@ void SemiDiscreteOT<dim, spacedim>::setup_source_finite_elements(const bool is_m
     {
         if (source_params.density_file_format == "vtk")
         {
-            if constexpr (dim == spacedim)
+            if (constexpr dim==spacedim)
             {
                 if (is_multilevel)
                 {
                     pcout << Color::green << "Interpolating source density from VTK to source mesh" << Color::reset << std::endl;
-
+    
                     // For multilevel, use the stored VTKHandler if available
                     if (source_vtk_handler)
                     {
@@ -219,36 +218,35 @@ void SemiDiscreteOT<dim, spacedim>::setup_source_finite_elements(const bool is_m
                     {
                         // Fallback to non-conforming nearest neighbor interpolation if VTKHandler not available
                         pcout << "VTKHandler not available, using non-conforming nearest neighbor interpolation" << std::endl;
-                        Utils::interpolate_non_conforming_nearest<dim, spacedim>(
-                            vtk_dof_handler_source,
-                            vtk_field_source,
-                            dof_handler_source,
-                            source_density);
+                        Utils::interpolate_non_conforming_nearest(vtk_dof_handler_source,
+                                                                  vtk_field_source,
+                                                                  dof_handler_source,
+                                                                  source_density);
                     }
-
+    
                     pcout << "Source density interpolated from VTK to source mesh" << std::endl;
                 }
                 else
                 {
                     pcout << "Using custom source density from file: " << source_params.density_file_path << std::endl;
                     bool density_loaded = false;
-
+    
                     try
                     {
                         pcout << "Loading VTK file using VTKHandler: " << source_params.density_file_path << std::endl;
-
+    
                         // Create VTKHandler instance and store it as a member variable
                         source_vtk_handler = std::make_unique<VTKHandler<dim>>(source_params.density_file_path);
-
+    
                         // Setup the field for interpolation using the configured field name
                         source_vtk_handler->setup_field(source_params.density_field_name, VTKHandler<dim>::DataLocation::PointData, 0);
-
+    
                         pcout << "Source density loaded from VTK file" << std::endl;
                         pcout << Color::green << "Interpolating source density from VTK to source mesh" << Color::reset << std::endl;
-
+    
                         // Interpolate the field to the source mesh
                         VectorTools::interpolate(dof_handler_source, *source_vtk_handler, source_density);
-
+    
                         pcout << "Successfully interpolated VTK field to source mesh" << std::endl;
                         density_loaded = true;
                     }
@@ -257,17 +255,17 @@ void SemiDiscreteOT<dim, spacedim>::setup_source_finite_elements(const bool is_m
                         pcout << Color::red << "Error loading VTK file: " << e.what() << Color::reset << std::endl;
                         density_loaded = false;
                     }
-
+    
                     if (!density_loaded)
                     {
                         pcout << Color::red << "Failed to load custom density, using uniform density" << Color::reset << std::endl;
                         source_density = 1.0;
                     }
                 }
-            }
-            else 
-            {
-                pcout << Color::red << "Unsupported dim!=spacedim with VtkHandler" << Color::reset << std::endl;
+
+            } else {
+                pcout << Color::red << "Unsupported dim!=spacedim" << Color::reset << std::endl;
+                throw std::runtime_error("Unsupported dimension for source mesh");
             }
         }
         else
@@ -296,36 +294,43 @@ void SemiDiscreteOT<dim, spacedim>::setup_source_finite_elements(const bool is_m
                         vtk_field_source,
                         dof_handler_source,
                         source_density);
-                    pcout << "Source density interpolated from VTK to source mesh" << std::endl;
                 }
-                else
-                {
-                    pcout << "Using custom source density from file: " << source_params.density_file_path << std::endl;
-                    bool density_loaded = false;
-                    // For the regular case, read the VTK field and then interpolate.
-                    density_loaded = Utils::read_vtk_field<dim, spacedim>(source_params.density_file_path,
-                                                                vtk_dof_handler_source,
-                                                                vtk_field_source,
-                                                                vtk_tria_source,
-                                                                mpi_communicator,
-                                                                pcout,
-                                                                true);
-                    if (density_loaded)
-                    {
-                        pcout << Color::green << "Interpolating source density from VTK to source mesh" << Color::reset << std::endl;
-                        Functions::FEFieldFunction<dim, Vector<double>, spacedim> field_function(vtk_dof_handler_source, vtk_field_source);
-                        VectorTools::interpolate(dof_handler_source, field_function, source_density);
-                    }
-                    else
-                    {
-                        pcout << Color::red << "Failed to load custom density, using uniform density" << Color::reset << std::endl;
-                        source_density = 1.0;
-                    }
-                }
+                
+                pcout << "Source density interpolated from VTK to source mesh" << std::endl;
             }
-            else 
+            else
             {
-                pcout << Color::red << "Unsupported dim!=spacedim" << Color::reset << std::endl;
+                pcout << "Using custom source density from file: " << source_params.density_file_path << std::endl;
+                bool density_loaded = false;
+
+                try {
+                    pcout << "Loading VTK file using VTKHandler: " << source_params.density_file_path << std::endl;
+                    
+                    // Create VTKHandler instance and store it as a member variable
+                    source_vtk_handler = std::make_unique<VTKHandler<dim, spacedim>>(source_params.density_file_path);
+                    
+                    // Setup the field for interpolation using the configured field name
+                    source_vtk_handler->setup_field(
+                        source_params.density_field_name, VTKHandler<dim, spacedim>::DataLocation::PointData, 0);
+                    
+                    pcout << "Source density loaded from VTK file" << std::endl;
+                    pcout << Color::green << "Interpolating source density from VTK to source mesh" << Color::reset << std::endl;
+                    
+                    // Interpolate the field to the source mesh
+                    VectorTools::interpolate(dof_handler_source, *source_vtk_handler, source_density);
+                    
+                    pcout << "Successfully interpolated VTK field to source mesh" << std::endl;
+                    density_loaded = true;
+                } catch (const std::exception& e) {
+                    pcout << Color::red << "Error loading VTK file: " << e.what() << Color::reset << std::endl;
+                    density_loaded = false;
+                }
+
+                if (!density_loaded)
+                {
+                    pcout << Color::red << "Failed to load custom density, using uniform density" << Color::reset << std::endl;
+                    source_density = 1.0;
+                }
             }
         }
         else
@@ -396,42 +401,43 @@ void SemiDiscreteOT<dim, spacedim>::setup_target_finite_elements()
 
             if (target_params.density_file_format == "vtk")
             {
-                if constexpr (dim==spacedim)
+                if (constexpr dim==spacedim)
                 {
                     // Use the new VTKHandler class to load and interpolate the field
                     try
                     {
                         pcout << "Loading VTK file using VTKHandler: " << target_params.density_file_path << std::endl;
-
+    
                         // Create VTKHandler instance
                         VTKHandler<dim> vtk_handler(target_params.density_file_path);
-
+    
                         // Setup the field for interpolation using the configured field name
                         vtk_handler.setup_field(target_params.density_field_name, VTKHandler<dim>::DataLocation::PointData, 0);
-
+    
                         pcout << "Target density loaded from VTK file" << std::endl;
                         target_density.reinit(dof_handler_target.n_dofs());
                         pcout << "Target density size: " << target_density.size() << std::endl;
-
+    
                         pcout << Color::green << "Interpolating target density from VTK to target mesh" << Color::reset << std::endl;
-
+    
                         // Interpolate the field to the target mesh
                         VectorTools::interpolate(dof_handler_target, vtk_handler, target_density);
-
+    
                         pcout << "Successfully interpolated VTK field to target mesh" << std::endl;
                         pcout << "L1 norm of interpolated field: " << target_density.l1_norm() << std::endl;
                         target_density /= target_density.l1_norm();
-
+    
                         density_loaded = true;
-                    } catch (const std::exception &e)
+                    }
+                    catch (const std::exception &e)
                     {
                         pcout << Color::red << "Error loading VTK file: " << e.what() << Color::reset << std::endl;
                         density_loaded = false;
                     }
                 }
-                else
-                {
+                else {
                     pcout << Color::red << "Unsupported dim!=spacedim" << Color::reset << std::endl;
+                    throw std::runtime_error("Unsupported dimension for target mesh");
                 }
             }
             else
@@ -2079,8 +2085,8 @@ void SemiDiscreteOT<dim, spacedim>::save_discrete_measures()
     pcout << "Number of target points: " << target_points.size() << std::endl;
 }
 
-template <int dim>
-void SemiDiscreteOT<dim>::save_interpolated_fields()
+template <int dim, int spacedim>
+void SemiDiscreteOT<dim, spacedim>::save_interpolated_fields()
 {
     pcout << Color::yellow << Color::bold << "Starting field interpolation visualization..." << Color::reset << std::endl;
 
@@ -2104,7 +2110,7 @@ void SemiDiscreteOT<dim>::save_interpolated_fields()
 
     if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0)
     {
-        DataOut<dim> data_out;
+        DataOut<dim, spacedim> data_out;
         data_out.attach_dof_handler(dof_handler_source);
         data_out.add_data_vector(source_density, source_field_name);
         data_out.build_patches();
@@ -2127,7 +2133,7 @@ void SemiDiscreteOT<dim>::save_interpolated_fields()
 
     if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0)
     {
-        DataOut<dim> data_out;
+        DataOut<dim, spacedim> data_out;
         data_out.attach_dof_handler(dof_handler_target);
         data_out.add_data_vector(target_density, target_field_name);
         data_out.build_patches();
@@ -2174,7 +2180,7 @@ void SemiDiscreteOT<dim>::save_interpolated_fields()
 
                 if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0)
                 {
-                    DataOut<dim> data_out;
+                    DataOut<dim, spacedim> data_out;
                     data_out.attach_dof_handler(dof_handler_source);
                     data_out.add_data_vector(source_density, source_field_name);
                     data_out.build_patches();

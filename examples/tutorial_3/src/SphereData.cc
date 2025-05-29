@@ -305,6 +305,35 @@ namespace Applications
       output_dir, filename, 0, mpi_communicator);
   }
 
+  void
+  SphereData::output_normalized_source(LinearAlgebra::distributed::Vector<double> &source) const
+  {
+    DataOut<2, 3> data_out;
+    DataOutBase::VtkFlags flags;
+    flags.write_higher_order_cells = true;
+    data_out.set_flags(flags);
+
+    std::vector<DataComponentInterpretation::DataComponentInterpretation> interpretation(1, DataComponentInterpretation::component_is_scalar);
+
+    data_out.attach_dof_handler(dof_handler);
+
+    Vector<float> subdomain(triangulation.n_active_cells());
+    for (unsigned int i = 0; i < subdomain.size(); ++i)
+      subdomain(i) = triangulation.locally_owned_subdomain();
+    data_out.add_data_vector(subdomain, "subdomain");
+    data_out.add_data_vector(source,
+                              std::string("source"),
+                                DataOut<2, 3>::type_dof_data, interpretation);
+
+    data_out.build_patches(mapping, mapping.get_degree() + 1,
+                           DataOut<2, 3>::curved_inner_cells);
+
+    const std::string filename = "source_density";
+    std::ofstream output(filename);
+    data_out.write_vtu_with_pvtu_record(
+      output_dir, filename, 0, mpi_communicator);
+  }
+
   void SphereData::run()
   {
     pcout << "Running with PETSc on "
@@ -326,7 +355,7 @@ namespace Applications
     this->source_density.reinit(locally_owned_dofs, locally_relevant_dofs, mpi_communicator);
     for (auto idx : this->source_density.locally_owned_elements())
     {
-        this->source_density[idx] = eigenfunctions[2][idx];
+        this->source_density[idx] = std::exp(eigenfunctions[2][idx]);
     }
     this->source_density.compress(dealii::VectorOperation::insert);
     this->sot_solver->setup_source(
@@ -363,35 +392,26 @@ namespace Applications
     
     this->source_density /= global_l1_norm;
     this->source_density.update_ghost_values();
-
-    local_l1_norm = 0.0;
-    density_values.resize(quadrature->size());
-
-    for (const auto &cell : dof_handler.active_cell_iterators()) {
-        if (!cell->is_locally_owned())
-            continue;
-
-        fe_values.reinit(cell);
-        fe_values.get_function_values(this->source_density, density_values);
-
-        for (unsigned int q = 0; q < quadrature->size(); ++q) {
-            local_l1_norm += std::abs(density_values[q]) * fe_values.JxW(q);
-        }
-    }
-    global_l1_norm = Utilities::MPI::sum(local_l1_norm, mpi_communicator);
-    pcout << "Density L1 norm after normalization: " << global_l1_norm << std::endl;
+    output_normalized_source(this->source_density);
 
     // manually set up the target density
     this->target_points.clear();
     this->target_points.push_back(Point<3>(1.0, 0.0, 0.0));
     this->target_points.push_back(Point<3>(0.0, 1.0, 0.0));
     this->target_points.push_back(Point<3>(0.0, 0.0, 1.0));
+
     this->target_density.reinit(this->target_points.size());
     this->target_density = 1.0/this->target_points.size();
-    this->sot_solver->setup_target(this->target_points, this->target_density);
+    this->sot_solver->setup_target(
+      this->target_points, this->target_density);
+
+    // set distanace
+    this->sot_solver->set_distance_function("spherical");
 
     // run the LLoyd algorithm
-    this->run_lloyd();
+    const double absolute_threshold = 1e-6;
+    const unsigned int max_iterations = 100;
+    this->run_lloyd(absolute_threshold, max_iterations);
   }
 } // namespace Applications
 

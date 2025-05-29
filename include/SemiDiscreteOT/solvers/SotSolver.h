@@ -135,6 +135,17 @@ public:
         }
     };
 
+    // Copy data barycenters evaluation
+    struct CopyDataBarycenters {
+        Vector<double> barycenters_values;  // Local barycenters contribution
+
+        CopyDataBarycenters(const unsigned int n_target_points)
+            : barycenters_values(spacedim*n_target_points)
+        {
+            barycenters_values = 0;  // Initialize local barycenters to zero
+        }
+    };
+
     // Constructor
     SotSolver(const MPI_Comm& comm);
 
@@ -157,7 +168,11 @@ public:
               const SourceMeasure& source,
               const TargetMeasure& target,
               const SotParameterManager::SolverParameters& params);
-
+    
+    void evaluate_weighted_barycenters(
+        const Vector<double>& potentials,
+        std::vector<Point<spacedim>>& barycenters_out);
+    
     // Getters for solver results
     double get_last_functional_value() const { return global_functional; }
     unsigned int get_last_iteration_count() const;
@@ -204,8 +219,13 @@ public:
         const double epsilon,
         const double tolerance) const;
     
+    // distance function methods
+    void set_distance_function(const std::string &distance_name);
+
     // Distance function
     std::function<double(const Point<spacedim>&, const Point<spacedim>&)> distance_function;
+    std::function<Vector<double>(const Point<spacedim>&, const Point<spacedim>&)> distance_function_gradient;
+    std::function<Point<spacedim>(const Point<spacedim>&, const Vector<double>&)> distance_function_exponential_map;
 
     // Core evaluation method
     double evaluate_functional(const Vector<double>& potential,
@@ -321,6 +341,40 @@ private:
         double user_tolerance_for_componentwise; 
         double last_check_value = 0.0;
     };
+
+    // Cache for local assembly computations
+    struct CellCache {
+        std::vector<std::size_t> target_indices;
+        std::vector<double> precomputed_exp_terms;
+        bool is_valid;
+
+        CellCache() : is_valid(false) {}
+    };
+
+    // Core evaluation method
+    double evaluate_functional(const Vector<double>& potential,
+        Vector<double>& gradient_out);
+
+    // Local assembly methods
+    void local_assemble(const typename DoFHandler<dim, spacedim>::active_cell_iterator& cell,
+    ScratchData& scratch,
+    CopyData& copy);
+
+    // Local assembly methods for barycenters
+    void local_assemble_barycenters(
+        const typename DoFHandler<dim, spacedim>::active_cell_iterator& cell,
+        ScratchData& scratch,
+        CopyDataBarycenters& copy);
+
+    // Distance threshold and caching methods
+    void compute_distance_threshold() const;
+    void reset_distance_threshold_cache() const;
+    std::vector<std::size_t> find_nearest_target_points(const Point<spacedim>& query_point) const;
+    double estimate_cache_entry_size_mb(const std::vector<std::size_t>& target_indices, 
+                                      unsigned int n_q_points) const;
+
+    // Validation methods
+    bool validate_measures() const;
 
     // MPI and parallel related members
     MPI_Comm mpi_communicator;

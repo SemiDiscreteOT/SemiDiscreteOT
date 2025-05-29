@@ -75,6 +75,7 @@
 #include <deal.II/base/parameter_handler.h>
 
 #include <SemiDiscreteOT/core/Lloyd.h>
+#include <SemiDiscreteOT/solvers/Distance.h>
 
 namespace fs = std::filesystem;
 
@@ -108,6 +109,7 @@ namespace Applications
     unsigned int solve();
     void output_results() const;
     void output_eigenfunctions() const;
+    void output_normalized_source(LinearAlgebra::distributed::Vector<double> &source) const;
     
     MPI_Comm mpi_communicator;
     ConditionalOStream pcout;
