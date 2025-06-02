@@ -122,15 +122,11 @@ protected:
     // Epsilon scaling handler
     std::unique_ptr<EpsilonScalingHandler> epsilon_scaling_handler;
     
-    void save_results(const Vector<double>& potentials, const std::string& filename);
+    void save_results(const Vector<double>& potentials, const std::string& filename, bool add_epsilon_prefix = true);
     
     // Density normalization helper
     void normalize_density(LinearAlgebra::distributed::Vector<double>& density);
 private:
-
-    DoFHandler<spacedim> vtk_dof_handler_source;
-    Vector<double> vtk_field_source;
-    Triangulation<spacedim> vtk_tria_source;
 
     // Core functionality methods
     void mesh_generation();
@@ -158,7 +154,6 @@ private:
     void setup_finite_elements();
     void setup_target_points();
     void setup_multilevel_finite_elements();
-    void save_results(const Vector<double>& potentials, const std::string& filename, bool add_epsilon_prefix = true);
 
     // Exact SOT method (3D only)
     template <int d = dim, int s = spacedim>

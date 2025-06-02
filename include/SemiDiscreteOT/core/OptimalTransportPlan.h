@@ -164,10 +164,10 @@ protected:
  * Maps each source point to the target point that maximizes:
  * score = potential[j] - 0.5*||x-y||^2 + regularization_param * log(target_density[j])
  */
-template <int spacedim>
-class NearestNeighborStrategy : public MapApproximationStrategy<spacedim> {
-public:
-    void compute_map(
+ template <int spacedim>
+ class ModalStrategy : public MapApproximationStrategy<spacedim> {
+ public:
+     void compute_map(
         const std::function<double(const Point<spacedim>&, const Point<spacedim>&)> distance_function,
         const std::vector<Point<spacedim>>& source_points,
         const std::vector<double>& source_density,
@@ -176,9 +176,9 @@ public:
         const Vector<double>& potential,
         const double regularization_param,
         const double truncation_radius) override;
-
-    void save_results(const std::string& output_dir) const override;
-};
+ 
+     void save_results(const std::string& output_dir) const override;
+ };
 
 /**
  * Barycentric interpolation strategy for map approximation.

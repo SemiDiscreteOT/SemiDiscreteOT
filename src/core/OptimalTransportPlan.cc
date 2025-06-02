@@ -94,9 +94,9 @@ OptimalTransportPlan<spacedim>::create_strategy(const std::string& name)
         throw std::runtime_error("Unknown strategy: " + name);
 }
 
-// Implementation of NearestNeighborStrategy
+// Implementation of ModalStrategy
 template <int spacedim>
-void NearestNeighborStrategy<spacedim>::compute_map(
+void ModalStrategy<spacedim>::compute_map(
     const std::function<double(const Point<spacedim>&, const Point<spacedim>&)> distance_function,
     const std::vector<Point<spacedim>>& source_points,
     const std::vector<double>& source_density,
@@ -126,7 +126,7 @@ void NearestNeighborStrategy<spacedim>::compute_map(
     const bool use_truncation = (truncation_radius > 0.0);
 
     for (std::size_t i = 0; i < source_points.size(); ++i) {
-        const Point<dim>& x = source_points[i];
+        const Point<spacedim>& x = source_points[i];
         double max_score = -std::numeric_limits<double>::infinity();
         std::size_t best_idx = 0;
 
@@ -136,7 +136,7 @@ void NearestNeighborStrategy<spacedim>::compute_map(
         if (use_truncation) {
             // Use truncation radius to limit points to consider
             target_rtree.query(
-                boost::geometry::index::satisfies([&x, truncation_radius](const IndexedPoint& p) {
+                boost::geometry::index::satisfies([&x, &distance_function, truncation_radius](const IndexedPoint& p) {
                     return distance_function(x, p.first) < truncation_radius;
                 }),
                 std::back_inserter(candidates)
@@ -156,14 +156,11 @@ void NearestNeighborStrategy<spacedim>::compute_map(
 
         // Compute scores and find maximum
         for (const auto& candidate : candidates) {
-            const Point<dim>& y = candidate.first;
+            const Point<spacedim>& y = candidate.first;
             const std::size_t j = candidate.second;
             
             // Compute squared distance
-            double squared_dist = 0.0;
-            for (unsigned int d = 0; d < dim; ++d) {
-                double squared_dist = std::pow(distance_function(x, y), 2);
-            }
+            double squared_dist = std::pow(distance_function(x, y), 2);
 
             // Compute score: potential - c(x,y) + regularization_param * log(target_density)
             double log_term = 0.0;
@@ -188,7 +185,7 @@ void NearestNeighborStrategy<spacedim>::compute_map(
 }
 
 template <int spacedim>
-void NearestNeighborStrategy<spacedim>::save_results(const std::string& output_dir) const
+void ModalStrategy<spacedim>::save_results(const std::string& output_dir) const
 {
     // Save mapped points
     Utils::write_vector(this->mapped_points, output_dir + "/mapped_points", "txt");
@@ -241,8 +238,8 @@ void BarycentricStrategy<spacedim>::compute_map(
 
     // For each source point, compute barycentric interpolation
     for (std::size_t i = 0; i < source_points.size(); ++i) {
-        const Point<dim>& x = source_points[i];
-        Point<dim> weighted_sum;
+        const Point<spacedim>& x = source_points[i];
+        Point<spacedim> weighted_sum;
         double total_weight = 0.0;
         
         // Determine which target points to consider
@@ -251,7 +248,7 @@ void BarycentricStrategy<spacedim>::compute_map(
         if (use_truncation) {
             // Use truncation radius to limit points to consider
             target_rtree.query(
-                boost::geometry::index::satisfies([&x, truncation_radius](const IndexedPoint& p) {
+                boost::geometry::index::satisfies([&x, &distance_function, truncation_radius](const IndexedPoint& p) {
                     return distance_function(x, p.first) < truncation_radius;
                 }),
                 std::back_inserter(candidates)
@@ -260,7 +257,7 @@ void BarycentricStrategy<spacedim>::compute_map(
             // If no points within truncation radius, fall back to nearest neighbor
             if (candidates.empty()) {
                 target_rtree.query(boost::geometry::index::nearest(x, 1), std::back_inserter(candidates));
-                const Point<dim>& nearest = candidates[0].first;
+                const Point<spacedim>& nearest = candidates[0].first;
                 this->mapped_points[i] = nearest;
                 this->transport_density[i] = source_density[i];
                 continue;
@@ -275,7 +272,7 @@ void BarycentricStrategy<spacedim>::compute_map(
 
         // Compute barycentric weights and weighted sum
         for (const auto& candidate : candidates) {
-            const Point<dim>& y = candidate.first;
+            const Point<spacedim>& y = candidate.first;
             const std::size_t j = candidate.second;
             
             double squared_dist = std::pow(distance_function(x, y), 2);

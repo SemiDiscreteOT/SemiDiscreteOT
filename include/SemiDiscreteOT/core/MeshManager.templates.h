@@ -27,18 +27,15 @@ void MeshManager<dim, spacedim>::generate_mesh(TriangulationType& tria,
 
         if (grid_generator_function == "hyper_ball")
         {
-            Point<dim> center{0., 0., 0.}; 
+            Point<spacedim> center{0., 0., 0.}; 
             for (const auto &cell : serial_tria.active_cell_iterators())
                 if (center.distance(cell->center()) > cell->diameter() / 10)
                     cell->set_all_manifold_ids(0);
-                
-        if (use_tetrahedral_mesh && dim == 3 && spacedim == 3) {
-            GridGenerator::convert_hypercube_to_simplex_mesh(serial_tria, serial_tria);
         }
-
+                
         serial_tria.refine_global(n_refinements);
 
-        if (use_tetrahedral_mesh && dim == 3) {
+        if (use_tetrahedral_mesh && dim == 3 && spacedim == 3) {
             GridGenerator::convert_hypercube_to_simplex_mesh(serial_tria, serial_tria);
         }
 
@@ -63,18 +60,15 @@ void MeshManager<dim, spacedim>::generate_mesh(TriangulationType& tria,
 
         if (grid_generator_function == "hyper_ball")
         {
-            Point<dim> center{0., 0., 0.}; 
+            Point<spacedim> center{0., 0., 0.}; 
             for (const auto &cell : tria.active_cell_iterators())
                 if (center.distance(cell->center()) > cell->diameter() / 10)
                     cell->set_all_manifold_ids(0);
-                
-        if (use_tetrahedral_mesh && dim == 3 && spacedim == 3) {
-            GridGenerator::convert_hypercube_to_simplex_mesh(tria, tria);
         }
 
         tria.refine_global(n_refinements);
 
-        if (use_tetrahedral_mesh && dim == 3) {
+        if (use_tetrahedral_mesh && dim == 3 && spacedim == 3) {
             GridGenerator::convert_hypercube_to_simplex_mesh(tria, tria);
         }
     }

@@ -202,7 +202,7 @@ void SemiDiscreteOT<dim, spacedim>::setup_source_finite_elements(const bool is_m
     {
         if (source_params.density_file_format == "vtk")
         {
-            if (constexpr dim==spacedim)
+            if constexpr (dim==spacedim)
             {
                 if (is_multilevel)
                 {
@@ -293,44 +293,46 @@ void SemiDiscreteOT<dim, spacedim>::setup_source_finite_elements(const bool is_m
                     Utils::interpolate_non_conforming_nearest<dim, spacedim>(vtk_dof_handler_source,
                         vtk_field_source,
                         dof_handler_source,
-                        source_density);
-                }
-                
-                pcout << "Source density interpolated from VTK to source mesh" << std::endl;
-            }
-            else
-            {
-                pcout << "Using custom source density from file: " << source_params.density_file_path << std::endl;
-                bool density_loaded = false;
-
-                try {
-                    pcout << "Loading VTK file using VTKHandler: " << source_params.density_file_path << std::endl;
-                    
-                    // Create VTKHandler instance and store it as a member variable
-                    source_vtk_handler = std::make_unique<VTKHandler<dim, spacedim>>(source_params.density_file_path);
-                    
-                    // Setup the field for interpolation using the configured field name
-                    source_vtk_handler->setup_field(
-                        source_params.density_field_name, VTKHandler<dim, spacedim>::DataLocation::PointData, 0);
-                    
-                    pcout << "Source density loaded from VTK file" << std::endl;
-                    pcout << Color::green << "Interpolating source density from VTK to source mesh" << Color::reset << std::endl;
-                    
-                    // Interpolate the field to the source mesh
-                    VectorTools::interpolate(dof_handler_source, *source_vtk_handler, source_density);
-                    
-                    pcout << "Successfully interpolated VTK field to source mesh" << std::endl;
-                    density_loaded = true;
-                } catch (const std::exception& e) {
-                    pcout << Color::red << "Error loading VTK file: " << e.what() << Color::reset << std::endl;
-                    density_loaded = false;
-                }
-
-                if (!density_loaded)
+                        source_density);                
+                    pcout << "Source density interpolated from VTK to source mesh" << std::endl;
+                } else
                 {
-                    pcout << Color::red << "Failed to load custom density, using uniform density" << Color::reset << std::endl;
-                    source_density = 1.0;
+                    pcout << "Using custom source density from file: " << source_params.density_file_path << std::endl;
+                    bool density_loaded = false;
+
+                    try {
+                        pcout << "Loading VTK file using VTKHandler: " << source_params.density_file_path << std::endl;
+                        
+                        // Create VTKHandler instance and store it as a member variable
+                        source_vtk_handler = std::make_unique<VTKHandler<dim, spacedim>>(source_params.density_file_path);
+                        
+                        // Setup the field for interpolation using the configured field name
+                        source_vtk_handler->setup_field(
+                            source_params.density_field_name, VTKHandler<dim, spacedim>::DataLocation::PointData, 0);
+                        
+                        pcout << "Source density loaded from VTK file" << std::endl;
+                        pcout << Color::green << "Interpolating source density from VTK to source mesh" << Color::reset << std::endl;
+                        
+                        // Interpolate the field to the source mesh
+                        VectorTools::interpolate(dof_handler_source, *source_vtk_handler, source_density);
+                        
+                        pcout << "Successfully interpolated VTK field to source mesh" << std::endl;
+                        density_loaded = true;
+                    } catch (const std::exception& e) {
+                        pcout << Color::red << "Error loading VTK file: " << e.what() << Color::reset << std::endl;
+                        density_loaded = false;
+                    }
+
+                    if (!density_loaded)
+                    {
+                        pcout << Color::red << "Failed to load custom density, using uniform density" << Color::reset << std::endl;
+                        source_density = 1.0;
+                    }
                 }
+            } else
+            {
+                pcout << Color::red << "Unsupported dim!=spacedim" << Color::reset << std::endl;
+                throw std::runtime_error("Unsupported dimension for source mesh");
             }
         }
         else
@@ -401,7 +403,7 @@ void SemiDiscreteOT<dim, spacedim>::setup_target_finite_elements()
 
             if (target_params.density_file_format == "vtk")
             {
-                if (constexpr dim==spacedim)
+                if constexpr (dim==spacedim)
                 {
                     // Use the new VTKHandler class to load and interpolate the field
                     try
@@ -619,7 +621,7 @@ void SemiDiscreteOT<dim, spacedim>::run_sot()
           << " target points and " << source_density.size() << " source points" << Color::reset << std::endl;
 
     // Configure solver parameters
-    ParameterManager::SolverParameters &solver_config = solver_params;
+    SotParameterManager::SolverParameters &solver_config = solver_params;
 
     // Set up source measure
     sot_solver->setup_source(dof_handler_source,
@@ -822,7 +824,7 @@ void SemiDiscreteOT<dim, spacedim>::run_target_multilevel(
     Vector<double> level_potentials;
 
     // Configure solver parameters for this level
-    ParameterManager::SolverParameters &solver_config = solver_params;
+    SotParameterManager::SolverParameters &solver_config = solver_params;
 
     // Set up source measure (this remains constant across levels)
     sot_solver->setup_source(dof_handler_source,
@@ -1075,7 +1077,7 @@ void SemiDiscreteOT<dim, spacedim>::run_target_multilevel_for_source_level(
 }
 
 template <int dim, int spacedim>
-void SemiDiscreteOT<dim, spacedim>::run_multilevel_sot()
+void SemiDiscreteOT<dim, spacedim>::run_source_multilevel()
 {
     Timer global_timer;
     global_timer.start();
@@ -1123,9 +1125,10 @@ void SemiDiscreteOT<dim, spacedim>::run_multilevel_sot()
 
     // Lambda to encapsulate the epsilon scaling and solver call.
     auto process_epsilon_scaling_for_source_multilevel =
-        [this, &original_regularization, &epsilon_distribution](Vector<double> &potentials,
-                                                                const unsigned int level_idx, // 0 to num_levels-1
-                                                                const std::string &level_output_dir) {
+        [this, &original_regularization, &epsilon_distribution](
+            Vector<double> &potentials,
+            const unsigned int level_idx, // 0 to num_levels-1
+            const std::string &level_output_dir) {
         if (solver_params.use_epsilon_scaling && epsilon_scaling_handler && !epsilon_distribution.empty())
         {
             const auto &level_epsilons = epsilon_scaling_handler->get_epsilon_values_for_level(level_idx);

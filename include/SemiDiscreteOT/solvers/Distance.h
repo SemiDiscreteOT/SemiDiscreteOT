@@ -5,6 +5,8 @@
 
 using namespace dealii;
 
+// TODO implement factory
+
 template <int spacedim>
 double euclidean_distance(
     const Point<spacedim> a, const Point<spacedim> b) {
@@ -29,17 +31,19 @@ double spherical_distance(
     return std::acos(cosine);
 }
 
-// distance gradients
+// distance gradients: grad of d^2
+
 template <int spacedim>
 Vector<double> euclidean_distance_gradient(
     const Point<spacedim> a, const Point<spacedim> b) {
     Vector<double> gradient(spacedim);
     for (unsigned int i = 0; i < spacedim; ++i) {
-        gradient[i] = (a[i] - b[i]) / (a-b).norm();
+        gradient[i] = (a[i] - b[i]);
     }
     return gradient;
 }
 
+// it is actually the log map and grad of d^2, mind the order, x is the evaluation point
 template <int spacedim>
 Vector<double> spherical_distance_gradient(
     const Point<spacedim> a, const Point<spacedim> b) {
@@ -68,6 +72,7 @@ Point<spacedim> euclidean_distance_exp_map(
     return b;
 }
 
+// v must be different form 0, a perpendicular to v
 template <int spacedim>
 Point<spacedim> spherical_distance_exp_map(
     const Point<spacedim> a, const Vector<double> v) {

@@ -19,15 +19,15 @@ SotSolver<dim, spacedim>::SotSolver(const MPI_Comm& comm)
     , current_cache_size_mb(0.0)
     , cache_limit_reached(false)
     , C_global(0.0)
-{}
 {
     distance_function = [](const Point<spacedim> x, const Point<spacedim> y) { return euclidean_distance<spacedim>(x, y); };
 }
 
 template <int dim, int spacedim>
 void SotSolver<dim, spacedim>::set_distance_function(
-    const std::string &distance_name)
+    const std::string &distance_name_)
 {
+    distance_name = distance_name_;
     if (distance_name == "euclidean") {
         distance_function = [](const Point<spacedim> x, const Point<spacedim> y) { return euclidean_distance<spacedim>(x, y); };
         distance_function_gradient = [](const Point<spacedim> x, const Point<spacedim> y) { return euclidean_distance_gradient<spacedim>(x, y); };
@@ -722,8 +722,8 @@ void SotSolver<dim, spacedim>::compute_distance_threshold() const
     }
 }
 
-template <int dim>
-double SotSolver<dim>::compute_covering_radius() const
+template <int dim, int spacedim>
+double SotSolver<dim, spacedim>::compute_covering_radius() const
 {
     namespace bgi = boost::geometry::index;
     
@@ -734,7 +734,7 @@ double SotSolver<dim>::compute_covering_radius() const
     double max_min_distance = 0.0;
     
     // Iterate through all locally owned cells in source domain
-    FilteredIterator<typename DoFHandler<dim>::active_cell_iterator>
+    FilteredIterator<typename DoFHandler<dim, spacedim>::active_cell_iterator>
         begin_filtered(IteratorFilters::LocallyOwnedCell(),
                       source_measure.dof_handler->begin_active()),
         end_filtered(IteratorFilters::LocallyOwnedCell(),
@@ -744,14 +744,14 @@ double SotSolver<dim>::compute_covering_radius() const
     
     // For each cell, find the minimum distance to any target point
     for (auto cell = begin_filtered; cell != end_filtered; ++cell) {
-        const Point<dim>& cell_center = cell->center();
+        const Point<spacedim>& cell_center = cell->center();
         
         // Use rtree to find the nearest target point - fixed to match container type
         std::vector<IndexedPoint> nearest_results;
         target_measure.rtree.query(bgi::nearest(cell_center, 1), std::back_inserter(nearest_results));
         
         if (!nearest_results.empty()) {
-            const Point<dim>& nearest_point = nearest_results[0].first;
+            const Point<spacedim>& nearest_point = nearest_results[0].first;
             const double distance = (nearest_point - cell_center).norm();
             local_min_distances.push_back(distance);
         }
@@ -766,8 +766,8 @@ double SotSolver<dim>::compute_covering_radius() const
     return Utilities::MPI::max(max_min_distance, mpi_communicator);
 }
 
-template <int dim>
-double SotSolver<dim>::compute_integral_radius_bound(
+template <int dim, int spacedim>
+double SotSolver<dim, spacedim>::compute_integral_radius_bound(
     const Vector<double>& potentials,
     double lambda,      // Regularization parameter (epsilon in formula)
     double tolerance,   // Tolerance for relative error (tau in formula)
@@ -800,8 +800,8 @@ double SotSolver<dim>::compute_integral_radius_bound(
     return std::sqrt(std::max(0.0, radius_squared));
 }
 
-template <int dim>
-double SotSolver<dim>::compute_geometric_radius_bound(
+template <int dim, int spacedim>
+double SotSolver<dim, spacedim>::compute_geometric_radius_bound(
     const Vector<double>& potentials,
     const double epsilon,
     const double tolerance) const
@@ -909,8 +909,8 @@ bool SotSolver<dim, spacedim>::get_convergence_status() const
 }
 
 template <int dim, int spacedim>
-void SotSolver<dim, spacedim>::parition_of_unity_barycenters(
-    Vector<double>& potentials,
+void SotSolver<dim, spacedim>::evaluate_weighted_barycenters(
+    const Vector<double>& potentials,
     std::vector<Point<spacedim>>& barycenters_out,
     const SotParameterManager::SolverParameters& params)
 {
@@ -918,53 +918,72 @@ void SotSolver<dim, spacedim>::parition_of_unity_barycenters(
         throw std::runtime_error("Invalid measures configuration");
     }
 
-    double solver_tolerance = 1e-6;
-    unsigned int max_iterations = 100;
+    // Barycenter evaluation parameters
+    double solver_tolerance = params.tolerance;
+    unsigned int max_iterations = params.max_iterations;
 
-    // Create solver control with verbose output
-    solver_control = std::make_unique<VerboseSolverControl>(
-        max_iterations,
-        solver_tolerance,
-        pcout
-    );
+    bool use_componentwise = (params.solver_control_type == "componentwise");
 
-    if (!params.verbose_output) {
-        solver_control->log_history(false);
-        solver_control->log_result(false);
-    }
+    try
+    {
+        unsigned int n_iter = 0;
 
-    barycenters_gradients.reinit(spacedim*target_measure.points.size());
-
-    // Set the gradient in the VerboseSolverControl
-    dynamic_cast<VerboseSolverControl*>(solver_control.get())->set_gradient(barycenters_gradients);
-
-    try {
         Timer timer;
         timer.start();
-
         current_potential = &potentials;
 
-        // evaluate barycenters_gradients
-        evaluate_weighted_barycenters_non_euclidean(
-            barycenters_out);
-        
+        if (distance_name == "euclidean") {
+            compute_weighted_barycenters_euclidean(
+                *current_potential, barycenters_out);
+                
+        } else if (distance_name == "spherical")
+        {
+            for (n_iter = 0; n_iter < max_iterations; ++n_iter)
+            {
+                // evaluate barycenters_gradients
+                // Initialize barycenters_grads with the correct size
+                barycenters_grads = std::vector<Vector<double>>(target_measure.points.size(), Vector<double>(spacedim));
+                
+                // Compute weighted barycenters using non-Euclidean distance
+                compute_weighted_barycenters_non_euclidean(
+                    *current_potential, barycenters_grads, barycenters_out);
+                
+                // evaluated inside `compute_weighted_barycenters_non_euclidean`
+                double l2_norm = barycenters_gradients.l2_norm();
+
+                if (l2_norm < solver_tolerance) {
+                    pcout << "Iteration " << CYAN << n_iter + 1 << RESET
+                      << " - L-2 gradient norm: " << Color::green << l2_norm << " < " << solver_tolerance << RESET << std::endl;
+                    break;
+                } else {
+
+                    pcout << "Iteration " << CYAN << n_iter + 1 << RESET
+                      << " - L-2 gradient norm: " << Color::yellow << l2_norm << " > " << solver_tolerance << RESET << std::endl;
+
+                    for (unsigned int i=0; i<target_measure.points.size();++i)
+                    {
+                        barycenters_out[i] = distance_function_exponential_map(barycenters_out[i], barycenters_grads[i]);
+                    }
+                }
+            } 
+        }
 
         timer.stop();
-
+        
         pcout << Color::green << Color::bold << "Optimization completed:" << std::endl
-              << "  Time taken: " << timer.wall_time() << " seconds" << std::endl
-              << "  Iterations: " << solver_control->last_step() << std::endl
-              << "  Final function value: " << solver_control->last_value() << Color::reset << std::endl;
-
+        << "  Time taken: " << timer.wall_time() << " seconds" << std::endl
+        << "  Iterations: " << n_iter+1 << std::endl
+        << "  Distance type: " << distance_name << std::endl << Color::reset;
+        
         if (params.use_caching) {
             pcout << "  Final cache size: " << get_cache_size_mb() << " MB" << std::endl
-                  << "  Cached cells: " << cell_caches.size() << std::endl;
+            << "  Cached cells: " << cell_caches.size() << std::endl;
         }
 
     } catch (SolverControl::NoConvergence& exc) {
         pcout << "Warning: Barycenters evaluation did not converge" << std::endl
-              << "  Iterations: " << exc.last_step << std::endl
-              << "  Residual: " << exc.last_residual << std::endl;
+        << "  Iterations: " << exc.last_step << std::endl
+        << "  Residual: " << exc.last_residual << std::endl;
         throw;
     }
 
@@ -973,13 +992,17 @@ void SotSolver<dim, spacedim>::parition_of_unity_barycenters(
 }
 
 template <int dim, int spacedim>
-void SotSolver<dim,spacedim>::evaluate_weighted_barycenters_non_euclidean(
-    std::vector<Point<spacedim>>& barycenters_out,
+void SotSolver<dim,spacedim>::compute_weighted_barycenters_non_euclidean(
+    const Vector<double>& potentials,
+    std::vector<Vector<double>>& barycenters_gradients_out,
+    std::vector<Point<spacedim>>& barycenters_out
 )
 {
     // Store current potentials for use in local assembly
+    current_potential = &potentials;
     current_lambda = current_params.regularization_param;
 
+    barycenters_gradients.reinit(spacedim*target_measure.points.size());
     Vector<double> local_process_barycenters(spacedim*target_measure.points.size());
 
     // Update distance threshold for target point search
@@ -1018,10 +1041,10 @@ void SotSolver<dim,spacedim>::evaluate_weighted_barycenters_non_euclidean(
         WorkStream::run(
             begin_filtered,
             end_filtered,
-            [this](const typename DoFHandler<dim, spacedim>::active_cell_iterator& cell,
+            [this, &barycenters_out](const typename DoFHandler<dim, spacedim>::active_cell_iterator& cell,
                    ScratchData& scratch,
                    CopyDataBarycenters& copy) {
-                this->local_assemble_barycenters_non_euclidean(cell, scratch, copy);
+                this->local_assemble_barycenters_non_euclidean(cell, scratch, copy, barycenters_out);
             },
             [this, &local_process_barycenters](const CopyDataBarycenters& copy) {
                 std::lock_guard<std::mutex> lock(cache_mutex);
@@ -1031,14 +1054,15 @@ void SotSolver<dim,spacedim>::evaluate_weighted_barycenters_non_euclidean(
             copy_data);
 
         // Synchronize across MPI processes
-        Utilities::MPI::sum(local_process_barycenters, mpi_communicator, barycenters);
+        Utilities::MPI::sum(local_process_barycenters, mpi_communicator, barycenters_gradients);
 
-        // Copy result to output barycenters TODO why do I need this?
-        // Resize output vector and fill with barycenters data
-        barycenters_out.resize(target_measure.points.size());
+        // Copy result to output barycenters_gradients TODO why do I need this?
+        // Resize output vector and fill with barycenters_gradients data
+        barycenters_gradients_out.resize(target_measure.points.size());
         for (unsigned int i = 0; i < target_measure.points.size(); ++i) {
             for (unsigned int d = 0; d < spacedim; ++d) {
-                barycenters_out[i][d] = barycenters[spacedim * i + d];
+                // - for gradient descent
+                barycenters_gradients_out[i][d] = -barycenters_gradients[spacedim * i + d];
             }
         }
 
@@ -1062,7 +1086,8 @@ template <int dim, int spacedim>
 void SotSolver<dim, spacedim>::local_assemble_barycenters_non_euclidean(
     const typename DoFHandler<dim, spacedim>::active_cell_iterator& cell,
     ScratchData& scratch,
-    CopyDataBarycenters& copy)
+    CopyDataBarycenters& copy,
+    std::vector<Point<spacedim>>& barycenters_out)
 {
     if (!cell->is_locally_owned())
         return;
@@ -1075,6 +1100,7 @@ void SotSolver<dim, spacedim>::local_assemble_barycenters_non_euclidean(
 
     const unsigned int n_q_points = q_points.size();
     const double lambda_inv = 1.0 / current_lambda;
+    const bool use_log_sum_exp = current_params.use_log_sum_exp_trick;
 
     if (current_params.use_caching && is_caching_active) {
         // Caching path
@@ -1127,7 +1153,7 @@ void SotSolver<dim, spacedim>::local_assemble_barycenters_non_euclidean(
                 CellCache& cell_cache = cell_caches[cell_id];
                 cell_cache_ptr = &cell_cache;
                 cell_cache.target_indices = cell_target_indices;
-                cell_cache.precomputed_exp_terms.resize(n_q_points * cell_target_indices.size());
+                cell_cache.precomputed_distance_terms.resize(n_q_points * cell_target_indices.size());
                 current_cache_size_mb.store(current_cache_size_mb.load() + entry_size_mb);
             }
         }
@@ -1154,6 +1180,7 @@ void SotSolver<dim, spacedim>::local_assemble_barycenters_non_euclidean(
             const double JxW = scratch.fe_values.JxW(q);
 
             double total_sum_exp = 0.0;
+            double max_exponent = -std::numeric_limits<double>::max();
             std::vector<double> active_exp_terms(n_target_points, 0.0);
 
             const unsigned int base_idx = q * n_target_points;
@@ -1164,35 +1191,94 @@ void SotSolver<dim, spacedim>::local_assemble_barycenters_non_euclidean(
                         continue;
                     }
                     const double local_dist2 = std::pow(distance_function(x, target_positions[i]), 2);
-                    const double precomputed_term = target_densities[i] *
-                        std::exp(-0.5 * local_dist2 * lambda_inv);
-                    cell_cache_ptr->precomputed_exp_terms[base_idx + i] = precomputed_term;
-                    active_exp_terms[i] = precomputed_term * std::exp(potential_values[i] * lambda_inv);
-                    total_sum_exp += active_exp_terms[i];
-                }
-            } else {
-                #pragma omp simd reduction(+:total_sum_exp)
-                for (size_t i = 0; i < n_target_points; ++i) {
-                    if (cell_target_indices[i] >= target_measure.points.size()) {
-                        continue;
+                    const double distance_term = -0.5 * local_dist2;
+                    cell_cache_ptr->precomputed_distance_terms[base_idx + i] = distance_term;
+                    
+                    if (use_log_sum_exp) {
+                        const double exponent = (potential_values[i] + distance_term) * lambda_inv;
+                        max_exponent = std::max(max_exponent, exponent);
                     }
-                    const double cached_term = cell_cache_ptr->precomputed_exp_terms[base_idx + i];
-                    active_exp_terms[i] = cached_term * std::exp(potential_values[i] * lambda_inv);
-                    total_sum_exp += active_exp_terms[i];
+                }
+
+                // Second pass: compute exponentials
+                if (use_log_sum_exp) {
+                    #pragma omp simd reduction(+:total_sum_exp)
+                    for (size_t i = 0; i < n_target_points; ++i) {
+                        if (cell_target_indices[i] >= target_measure.points.size()) {
+                            continue;
+                        }
+                        const double distance_term = cell_cache_ptr->precomputed_distance_terms[base_idx + i];
+                        const double shifted_exp = std::exp((potential_values[i] + distance_term) * lambda_inv - max_exponent);
+                        active_exp_terms[i] = target_densities[i] * shifted_exp;
+                        total_sum_exp += active_exp_terms[i];
+                    }
+                } else {
+                    // Original computation method
+                    #pragma omp simd reduction(+:total_sum_exp)
+                    for (size_t i = 0; i < n_target_points; ++i) {
+                        if (cell_target_indices[i] >= target_measure.points.size()) {
+                            continue;
+                        }
+                        const double distance_term = cell_cache_ptr->precomputed_distance_terms[base_idx + i];
+                        const double exp_term = std::exp((potential_values[i] + distance_term) * lambda_inv);
+                        active_exp_terms[i] = target_densities[i] * exp_term;
+                        total_sum_exp += active_exp_terms[i];
+                    }
+                }
+
+            } else {
+                // Using existing cache
+                if (use_log_sum_exp) {
+                    // First pass: find maximum exponent
+                    #pragma omp simd reduction(max:max_exponent)
+                    for (size_t i = 0; i < n_target_points; ++i) {
+                        if (cell_target_indices[i] >= target_measure.points.size()) {
+                            continue;
+                        }
+                        const double distance_term = cell_cache_ptr->precomputed_distance_terms[base_idx + i];
+                        const double exponent = (potential_values[i] + distance_term) * lambda_inv;
+                        max_exponent = std::max(max_exponent, exponent);
+                    }
+                    
+                    // Second pass: compute shifted exponentials
+                    #pragma omp simd reduction(+:total_sum_exp)
+                    for (size_t i = 0; i < n_target_points; ++i) {
+                        if (cell_target_indices[i] >= target_measure.points.size()) {
+                            continue;
+                        }
+                        const double distance_term = cell_cache_ptr->precomputed_distance_terms[base_idx + i];
+                        const double shifted_exp = std::exp((potential_values[i] + distance_term) * lambda_inv - max_exponent);
+                        active_exp_terms[i] = target_densities[i] * shifted_exp;
+                        total_sum_exp += active_exp_terms[i];
+                    }
+                } else {
+                    // Original computation method
+                    #pragma omp simd reduction(+:total_sum_exp)
+                    for (size_t i = 0; i < n_target_points; ++i) {
+                        if (cell_target_indices[i] >= target_measure.points.size()) {
+                            continue;
+                        }
+                        const double distance_term = cell_cache_ptr->precomputed_distance_terms[base_idx + i];
+                        const double exp_term = std::exp((potential_values[i] + distance_term) * lambda_inv);
+                        active_exp_terms[i] = target_densities[i] * exp_term;
+                        total_sum_exp += active_exp_terms[i];
+                    }
                 }
             }
 
             if (total_sum_exp <= 0.0) continue;
 
             const double scale = density_value * JxW / total_sum_exp;
+
             #pragma omp simd
             for (size_t i = 0; i < n_target_points; ++i) {
                 if (cell_target_indices[i] >= target_measure.points.size()) {
                     continue;
                 }
                 if (active_exp_terms[i] > 0.0) {
+                    auto v = distance_function_gradient(barycenters_out[cell_target_indices[i]], x);
                     for (unsigned int d = 0; d < spacedim; ++d) {
-                        copy.barycenters_values[spacedim*cell_target_indices[i] + d] += scale * active_exp_terms[i] * x[d];
+                        copy.barycenters_values[spacedim*cell_target_indices[i] + d] += scale * active_exp_terms[i] * v[d];
                     }
                 }
             }
@@ -1229,14 +1315,35 @@ direct_computation:
         const double JxW = scratch.fe_values.JxW(q);
 
         double total_sum_exp = 0.0;
+        double max_exponent = -std::numeric_limits<double>::max();
         std::vector<double> exp_terms(n_target_points);
 
-        #pragma omp simd reduction(+:total_sum_exp)
-        for (size_t i = 0; i < n_target_points; ++i) {
-            const double local_dist2 = std::pow(distance_function(x, target_positions[i]), 2);
-            exp_terms[i] = target_densities[i] *
-                std::exp((potential_values[i] - 0.5 * local_dist2) * lambda_inv);
-            total_sum_exp += exp_terms[i];
+        if (use_log_sum_exp) {
+            // First pass: find maximum exponent
+            #pragma omp simd reduction(max:max_exponent)
+            for (size_t i = 0; i < n_target_points; ++i) {
+                const double local_dist2 = std::pow(distance_function(x, target_positions[i]), 2);
+                const double exponent = (potential_values[i] - 0.5 * local_dist2) * lambda_inv;
+                max_exponent = std::max(max_exponent, exponent);
+            }
+            
+            // Second pass: compute shifted exponentials
+            #pragma omp simd reduction(+:total_sum_exp)
+            for (size_t i = 0; i < n_target_points; ++i) {
+                const double local_dist2 = std::pow(distance_function(x, target_positions[i]), 2);
+                const double shifted_exp = std::exp((potential_values[i] - 0.5 * local_dist2) * lambda_inv - max_exponent);
+                exp_terms[i] = target_densities[i] * shifted_exp;
+                total_sum_exp += exp_terms[i];
+            }
+        } else {
+            // Original computation method
+            #pragma omp simd reduction(+:total_sum_exp)
+            for (size_t i = 0; i < n_target_points; ++i) {
+                const double local_dist2 = std::pow(distance_function(x, target_positions[i]), 2);
+                exp_terms[i] = target_densities[i] *
+                    std::exp((potential_values[i] - 0.5 * local_dist2) * lambda_inv);
+                total_sum_exp += exp_terms[i];
+            }
         }
 
         if (total_sum_exp <= 0.0) continue;
@@ -1245,8 +1352,9 @@ direct_computation:
         #pragma omp simd
         for (size_t i = 0; i < n_target_points; ++i) {
             if (exp_terms[i] > 0.0) {
+                auto v = distance_function_gradient(barycenters_out[cell_target_indices[i]], x);
                 for (unsigned int d = 0; d < spacedim; ++d) {
-                    copy.barycenters_values[spacedim*cell_target_indices[i] + d] += scale * exp_terms[i] * x[d];
+                    copy.barycenters_values[spacedim*cell_target_indices[i] + d] += scale * exp_terms[i] * v[d];
                 }
             }
         }
@@ -1254,7 +1362,7 @@ direct_computation:
 }
 
 template <int dim, int spacedim>
-void SotSolver<dim, spacedim>::evaluate_weighted_barycenters_euclidean(
+void SotSolver<dim, spacedim>::compute_weighted_barycenters_euclidean(
     const Vector<double>& potentials,
     std::vector<Point<spacedim>>& barycenters_out)
 {
@@ -1358,6 +1466,7 @@ void SotSolver<dim, spacedim>::local_assemble_barycenters_euclidean(
 
     const unsigned int n_q_points = q_points.size();
     const double lambda_inv = 1.0 / current_lambda;
+    const bool use_log_sum_exp = current_params.use_log_sum_exp_trick;
 
     if (current_params.use_caching && is_caching_active) {
         // Caching path
@@ -1410,7 +1519,7 @@ void SotSolver<dim, spacedim>::local_assemble_barycenters_euclidean(
                 CellCache& cell_cache = cell_caches[cell_id];
                 cell_cache_ptr = &cell_cache;
                 cell_cache.target_indices = cell_target_indices;
-                cell_cache.precomputed_exp_terms.resize(n_q_points * cell_target_indices.size());
+                cell_cache.precomputed_distance_terms.resize(n_q_points * cell_target_indices.size());
                 current_cache_size_mb.store(current_cache_size_mb.load() + entry_size_mb);
             }
         }
@@ -1437,6 +1546,7 @@ void SotSolver<dim, spacedim>::local_assemble_barycenters_euclidean(
             const double JxW = scratch.fe_values.JxW(q);
 
             double total_sum_exp = 0.0;
+            double max_exponent = -std::numeric_limits<double>::max();
             std::vector<double> active_exp_terms(n_target_points, 0.0);
 
             const unsigned int base_idx = q * n_target_points;
@@ -1447,27 +1557,85 @@ void SotSolver<dim, spacedim>::local_assemble_barycenters_euclidean(
                         continue;
                     }
                     const double local_dist2 = std::pow(distance_function(x, target_positions[i]), 2);
-                    const double precomputed_term = target_densities[i] *
-                        std::exp(-0.5 * local_dist2 * lambda_inv);
-                    cell_cache_ptr->precomputed_exp_terms[base_idx + i] = precomputed_term;
-                    active_exp_terms[i] = precomputed_term * std::exp(potential_values[i] * lambda_inv);
-                    total_sum_exp += active_exp_terms[i];
-                }
-            } else {
-                #pragma omp simd reduction(+:total_sum_exp)
-                for (size_t i = 0; i < n_target_points; ++i) {
-                    if (cell_target_indices[i] >= target_measure.points.size()) {
-                        continue;
+                    const double distance_term = -0.5 * local_dist2;
+                    cell_cache_ptr->precomputed_distance_terms[base_idx + i] = distance_term;
+                    
+                    if (use_log_sum_exp) {
+                        const double exponent = (potential_values[i] + distance_term) * lambda_inv;
+                        max_exponent = std::max(max_exponent, exponent);
                     }
-                    const double cached_term = cell_cache_ptr->precomputed_exp_terms[base_idx + i];
-                    active_exp_terms[i] = cached_term * std::exp(potential_values[i] * lambda_inv);
-                    total_sum_exp += active_exp_terms[i];
+                }
+
+                // Second pass: compute exponentials
+                if (use_log_sum_exp) {
+                    #pragma omp simd reduction(+:total_sum_exp)
+                    for (size_t i = 0; i < n_target_points; ++i) {
+                        if (cell_target_indices[i] >= target_measure.points.size()) {
+                            continue;
+                        }
+                        const double distance_term = cell_cache_ptr->precomputed_distance_terms[base_idx + i];
+                        const double shifted_exp = std::exp((potential_values[i] + distance_term) * lambda_inv - max_exponent);
+                        active_exp_terms[i] = target_densities[i] * shifted_exp;
+                        total_sum_exp += active_exp_terms[i];
+                    }
+                } else {
+                    // Original computation method
+                    #pragma omp simd reduction(+:total_sum_exp)
+                    for (size_t i = 0; i < n_target_points; ++i) {
+                        if (cell_target_indices[i] >= target_measure.points.size()) {
+                            continue;
+                        }
+                        const double distance_term = cell_cache_ptr->precomputed_distance_terms[base_idx + i];
+                        const double exp_term = std::exp((potential_values[i] + distance_term) * lambda_inv);
+                        active_exp_terms[i] = target_densities[i] * exp_term;
+                        total_sum_exp += active_exp_terms[i];
+                    }
+                }
+
+            } else {
+                // Using existing cache
+                if (use_log_sum_exp) {
+                    // First pass: find maximum exponent
+                    #pragma omp simd reduction(max:max_exponent)
+                    for (size_t i = 0; i < n_target_points; ++i) {
+                        if (cell_target_indices[i] >= target_measure.points.size()) {
+                            continue;
+                        }
+                        const double distance_term = cell_cache_ptr->precomputed_distance_terms[base_idx + i];
+                        const double exponent = (potential_values[i] + distance_term) * lambda_inv;
+                        max_exponent = std::max(max_exponent, exponent);
+                    }
+                    
+                    // Second pass: compute shifted exponentials
+                    #pragma omp simd reduction(+:total_sum_exp)
+                    for (size_t i = 0; i < n_target_points; ++i) {
+                        if (cell_target_indices[i] >= target_measure.points.size()) {
+                            continue;
+                        }
+                        const double distance_term = cell_cache_ptr->precomputed_distance_terms[base_idx + i];
+                        const double shifted_exp = std::exp((potential_values[i] + distance_term) * lambda_inv - max_exponent);
+                        active_exp_terms[i] = target_densities[i] * shifted_exp;
+                        total_sum_exp += active_exp_terms[i];
+                    }
+                } else {
+                    // Original computation method
+                    #pragma omp simd reduction(+:total_sum_exp)
+                    for (size_t i = 0; i < n_target_points; ++i) {
+                        if (cell_target_indices[i] >= target_measure.points.size()) {
+                            continue;
+                        }
+                        const double distance_term = cell_cache_ptr->precomputed_distance_terms[base_idx + i];
+                        const double exp_term = std::exp((potential_values[i] + distance_term) * lambda_inv);
+                        active_exp_terms[i] = target_densities[i] * exp_term;
+                        total_sum_exp += active_exp_terms[i];
+                    }
                 }
             }
 
             if (total_sum_exp <= 0.0) continue;
 
             const double scale = density_value * JxW / total_sum_exp;
+
             #pragma omp simd
             for (size_t i = 0; i < n_target_points; ++i) {
                 if (cell_target_indices[i] >= target_measure.points.size()) {
@@ -1512,14 +1680,35 @@ direct_computation:
         const double JxW = scratch.fe_values.JxW(q);
 
         double total_sum_exp = 0.0;
+        double max_exponent = -std::numeric_limits<double>::max();
         std::vector<double> exp_terms(n_target_points);
 
-        #pragma omp simd reduction(+:total_sum_exp)
-        for (size_t i = 0; i < n_target_points; ++i) {
-            const double local_dist2 = std::pow(distance_function(x, target_positions[i]), 2);
-            exp_terms[i] = target_densities[i] *
-                std::exp((potential_values[i] - 0.5 * local_dist2) * lambda_inv);
-            total_sum_exp += exp_terms[i];
+        if (use_log_sum_exp) {
+            // First pass: find maximum exponent
+            #pragma omp simd reduction(max:max_exponent)
+            for (size_t i = 0; i < n_target_points; ++i) {
+                const double local_dist2 = std::pow(distance_function(x, target_positions[i]), 2);
+                const double exponent = (potential_values[i] - 0.5 * local_dist2) * lambda_inv;
+                max_exponent = std::max(max_exponent, exponent);
+            }
+            
+            // Second pass: compute shifted exponentials
+            #pragma omp simd reduction(+:total_sum_exp)
+            for (size_t i = 0; i < n_target_points; ++i) {
+                const double local_dist2 = std::pow(distance_function(x, target_positions[i]), 2);
+                const double shifted_exp = std::exp((potential_values[i] - 0.5 * local_dist2) * lambda_inv - max_exponent);
+                exp_terms[i] = target_densities[i] * shifted_exp;
+                total_sum_exp += exp_terms[i];
+            }
+        } else {
+            // Original computation method
+            #pragma omp simd reduction(+:total_sum_exp)
+            for (size_t i = 0; i < n_target_points; ++i) {
+                const double local_dist2 = std::pow(distance_function(x, target_positions[i]), 2);
+                exp_terms[i] = target_densities[i] *
+                    std::exp((potential_values[i] - 0.5 * local_dist2) * lambda_inv);
+                total_sum_exp += exp_terms[i];
+            }
         }
 
         if (total_sum_exp <= 0.0) continue;

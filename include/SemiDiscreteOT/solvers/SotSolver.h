@@ -53,6 +53,7 @@ public:
 
     // Source measure data structure
     struct SourceMeasure {
+        bool initialized = false; // Flag to check if source measure is set up
         SmartPointer<const DoFHandler<dim, spacedim>> dof_handler;
         SmartPointer<const Mapping<dim, spacedim>> mapping;
         SmartPointer<const FiniteElement<dim, spacedim>> fe;
@@ -65,7 +66,8 @@ public:
                      const FiniteElement<dim, spacedim>& fe_,
                      const LinearAlgebra::distributed::Vector<double, MemorySpace::Host>& density_,
                      const unsigned int quadrature_order_)
-            : dof_handler(&dof_handler_)
+            : initialized(true)
+            , dof_handler(&dof_handler_)
             , mapping(&mapping_)
             , fe(&fe_)
             , density(&density_)
@@ -75,6 +77,7 @@ public:
 
     // Target measure data structure
     struct TargetMeasure {
+        bool initialized = false; // Flag to check if target measure is set up
         std::vector<Point<spacedim>> points;
         Vector<double> density;
         RTree rtree;
@@ -82,7 +85,8 @@ public:
         TargetMeasure() = default;
         TargetMeasure(const std::vector<Point<spacedim>>& points_,
                      const Vector<double>& density_)
-            : points(points_)
+            : initialized(true)
+            , points(points_)
             , density(density_) 
         {
             AssertThrow(points.size() == density.size(),
@@ -171,7 +175,8 @@ public:
     
     void evaluate_weighted_barycenters(
         const Vector<double>& potentials,
-        std::vector<Point<spacedim>>& barycenters_out);
+        std::vector<Point<spacedim>>& barycenters_out,
+        const SotParameterManager::SolverParameters& params);
     
     // Getters for solver results
     double get_last_functional_value() const { return global_functional; }
@@ -223,6 +228,7 @@ public:
     void set_distance_function(const std::string &distance_name);
 
     // Distance function
+    std::string distance_name;
     std::function<double(const Point<spacedim>&, const Point<spacedim>&)> distance_function;
     std::function<Vector<double>(const Point<spacedim>&, const Point<spacedim>&)> distance_function_gradient;
     std::function<Point<spacedim>(const Point<spacedim>&, const Vector<double>&)> distance_function_exponential_map;
@@ -236,10 +242,6 @@ public:
                         LAPACKFullMatrix<double>& hessian_out);
 
 private:
-    // Local assembly methods
-    void local_assemble(const typename DoFHandler<dim, spacedim>::active_cell_iterator& cell,
-                       ScratchData& scratch,
-                       CopyData& copy);
 
     class VerboseSolverControl : public SolverControl
     {
@@ -345,15 +347,11 @@ private:
     // Cache for local assembly computations
     struct CellCache {
         std::vector<std::size_t> target_indices;
-        std::vector<double> precomputed_exp_terms;
+        std::vector<double> precomputed_distance_terms;
         bool is_valid;
 
         CellCache() : is_valid(false) {}
     };
-
-    // Core evaluation method
-    double evaluate_functional(const Vector<double>& potential,
-        Vector<double>& gradient_out);
 
     // Local assembly methods
     void local_assemble(const typename DoFHandler<dim, spacedim>::active_cell_iterator& cell,
@@ -365,16 +363,42 @@ private:
         const typename DoFHandler<dim, spacedim>::active_cell_iterator& cell,
         ScratchData& scratch,
         CopyDataBarycenters& copy);
-
+    
     // Distance threshold and caching methods
     void compute_distance_threshold() const;
     void reset_distance_threshold_cache() const;
     std::vector<std::size_t> find_nearest_target_points(const Point<spacedim>& query_point) const;
     double estimate_cache_entry_size_mb(const std::vector<std::size_t>& target_indices, 
                                       unsigned int n_q_points) const;
+    double compute_integral_radius_bound(
+        const Vector<double>& potentials,
+        double lambda,
+        double tolerance,
+        double C_value,
+        double current_functional_val) const;
 
     // Validation methods
     bool validate_measures() const;
+
+    // Barycenters computation methods
+    void compute_weighted_barycenters_non_euclidean(
+        const Vector<double>& potentials,
+        std::vector<Vector<double>>& barycenters_gradients_out,
+        std::vector<Point<spacedim>>& barycenters_out
+    );
+    void local_assemble_barycenters_non_euclidean(
+        const typename DoFHandler<dim, spacedim>::active_cell_iterator& cell,
+        ScratchData& scratch,
+        CopyDataBarycenters& copy,
+        std::vector<Point<spacedim>>& barycenters_out);
+
+    void compute_weighted_barycenters_euclidean(
+        const Vector<double>& potentials,
+        std::vector<Point<spacedim>>& barycenters_out);
+    void local_assemble_barycenters_euclidean(
+        const typename DoFHandler<dim, spacedim>::active_cell_iterator& cell,
+        ScratchData& scratch,
+        CopyDataBarycenters& copy);
 
     // MPI and parallel related members
     MPI_Comm mpi_communicator;
@@ -399,15 +423,6 @@ private:
     double min_target_density;       
     double C_global = 0.0; // Sum of all scale terms
 
-    // Cache for local assembly computations
-    struct CellCache {
-        std::vector<std::size_t> target_indices;
-        std::vector<double> precomputed_distance_terms;
-        bool is_valid;
-
-        CellCache() : is_valid(false) {}
-    };
-
     mutable std::unordered_map<std::string, CellCache> cell_caches;
     mutable std::mutex cache_mutex;
     std::atomic<size_t> total_target_points{0};
@@ -417,21 +432,15 @@ private:
     // Current solver parameters
     SotParameterManager::SolverParameters current_params;
 
-    // Distance threshold and caching methods
-    void compute_distance_threshold() const;
-    void reset_distance_threshold_cache() const;
-    std::vector<std::size_t> find_nearest_target_points(const Point<spacedim>& query_point) const;
-    double estimate_cache_entry_size_mb(const std::vector<std::size_t>& target_indices, 
-                                      unsigned int n_q_points) const;
-    double compute_integral_radius_bound(
-        const Vector<double>& potentials,
-        double lambda,
-        double tolerance,
-        double C_value,
-        double current_functional_val) const;
+    // weighted truncated barycenters evaluation
 
-    // Validation methods
-    bool validate_measures() const;
+    // Barycenters evaluation data
+    Vector<double> barycenters;
+    Vector<double> barycenters_gradients;
+
+    // Barycenters points and gradients
+    std::vector<Point<spacedim>> barycenters_points;
+    std::vector<Vector<double>> barycenters_grads;
 };
 
 #endif // SOT_SOLVER_H

@@ -25,6 +25,7 @@ public:
     
     LloydParameterManager param_manager_lloyd;
     std::vector<Point<spacedim>> barycenters;
+    std::vector<Point<spacedim>> barycenters_prev;
     Vector<double> potential;
 };
 

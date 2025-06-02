@@ -19,6 +19,7 @@ namespace Applications
         mapping(1)
   {
     add_parameter("number of refinements", n_refinements);
+    add_parameter("number of eigenfunctions", n_evecs);
 
     // Create output directory structure
     if (!std::filesystem::exists("output"))
@@ -103,7 +104,7 @@ namespace Applications
                           dsp,
                           mpi_communicator);
     
-    eigenfunctions.resize(n_evecs); // TODO change n eigenvecs
+    eigenfunctions.resize(n_evecs);
     for (unsigned int i = 0; i < eigenfunctions.size(); ++i)
       eigenfunctions[i].reinit(locally_owned_dofs, mpi_communicator);
     eigenvalues.resize(eigenfunctions.size());
@@ -355,7 +356,7 @@ namespace Applications
     this->source_density.reinit(locally_owned_dofs, locally_relevant_dofs, mpi_communicator);
     for (auto idx : this->source_density.locally_owned_elements())
     {
-        this->source_density[idx] = std::exp(eigenfunctions[2][idx]);
+        this->source_density[idx] = std::exp(eigenfunctions[n_evecs-1][idx]);
     }
     this->source_density.compress(dealii::VectorOperation::insert);
     this->sot_solver->setup_source(
@@ -396,9 +397,34 @@ namespace Applications
 
     // manually set up the target density
     this->target_points.clear();
-    this->target_points.push_back(Point<3>(1.0, 0.0, 0.0));
-    this->target_points.push_back(Point<3>(0.0, 1.0, 0.0));
-    this->target_points.push_back(Point<3>(0.0, 0.0, 1.0));
+    for (unsigned int i = 0; i < n_evecs-1; ++i)
+    {
+      Point<3> point;
+
+      // sample random target points on the sphere
+      for (unsigned int d = 0; d < 3; ++d)
+        point[d] = 0.57;//2.0 * (static_cast<double>(rand()) / RAND_MAX) - 1.0;
+
+      if (i==1)
+      {
+        point[0] *=-1;
+        point[2] *=-1;
+      } else if (i==2)
+      {
+        point[0] *= -1;
+        point[1] *= -1;
+      } else if (i==3)
+      {
+        point[1] *= -1;
+        point[2] *= -1;
+      }
+
+      double norm = point.norm();
+      for (unsigned int d = 0; d < 3; ++d)
+        point[d] /= norm;
+
+      this->target_points.push_back(point);
+    }
 
     this->target_density.reinit(this->target_points.size());
     this->target_density = 1.0/this->target_points.size();
