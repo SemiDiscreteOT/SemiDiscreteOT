@@ -1,11 +1,6 @@
 CMAKE_MINIMUM_REQUIRED(VERSION 3.13.0)
 
-SET(CMAKE_CXX_COMPILER g++)
-SET(CMAKE_C_COMPILER gcc)
-
 PROJECT(SemiDiscreteOT VERSION 1.0.0 LANGUAGES CXX C)
-ADD_COMPILE_DEFINITIONS(HX=HX HY=HY HZ=HZ)
-
 
 # Check Deal.II
 MESSAGE("Deal.II installation path: $ENV{DEAL_II_DIR}")
@@ -22,11 +17,9 @@ ENDIF()
 # Add compiler flags for Release build
 SET(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -DNDEBUG")
 
-SET(DEAL_II_DIR "/scratch/mkhamlic/spack/opt/spack/linux-rocky8-x86_64_v4/gcc-12.2.0/dealii-9.5.0-nbal44n4aoskliqi4yri5icwmcgumyxt")
-
 # Deal.II setup first
 FIND_PACKAGE(deal.II 9.5.0 QUIET
-  HINTS ${deal.II_DIR} ${DEAL_II_DIR} ../ ../../ ${DEAL_II_DIR}
+  HINTS ${deal.II_DIR} ${DEAL_II_DIR} ../ ../../ $ENV{DEAL_II_DIR}
 )
 
 IF(NOT ${deal.II_FOUND})
@@ -35,8 +28,6 @@ IF(NOT ${deal.II_FOUND})
     "Set -DDEAL_II_DIR=/path/to/deal.II or environment variable DEAL_II_DIR"
   )
 ENDIF()
-
-FIND_PACKAGE(VTK QUIET)
 
 # Add custom release target
 ADD_CUSTOM_TARGET(release
@@ -119,6 +110,7 @@ ADD_CUSTOM_COMMAND(
 )
 
 # Installation rules
+MESSAGE("SemiDiscreteOT config path: ${DESTINATION}/lib/cmake/SemiDiscreteOT")
 INSTALL(TARGETS SemiDiscreteOT
     EXPORT SemiDiscreteOTTargets
     LIBRARY DESTINATION lib
