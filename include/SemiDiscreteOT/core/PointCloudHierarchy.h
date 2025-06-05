@@ -37,9 +37,9 @@ public:
      * @return Number of levels generated
      * @throws std::runtime_error if processing fails
      */
-    template <int dim>
+    template <int spacedim>
     int generateHierarchy(
-        const std::vector<Point<dim>>& input_points,
+        const std::vector<Point<spacedim>>& input_points,
         const std::vector<double>& input_density,
         const std::string& output_dir);
 
@@ -111,10 +111,10 @@ private:
      *         - aggregated densities for parents
      *         - assignments (mapping of each child to its parent cluster)
      */
-    template <int dim>
-    std::tuple<std::vector<std::array<double, dim>>, std::vector<double>, std::vector<int>>
+    template <int spacedim>
+    std::tuple<std::vector<std::array<double, spacedim>>, std::vector<double>, std::vector<int>>
     kmeansClustering(
-        const std::vector<std::array<double, dim>>& points,
+        const std::vector<std::array<double, spacedim>>& points,
         const std::vector<double>& densities,
         size_t k);
 };

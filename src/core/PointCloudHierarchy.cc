@@ -75,14 +75,14 @@ int PointCloudHierarchyManager::getPointsForLevel(int base_points, int level) co
     return std::max(points, min_points_);
 }
 
-template <int dim>
-std::tuple<std::vector<std::array<double, dim>>, std::vector<double>, std::vector<int>> 
+template <int spacedim>
+std::tuple<std::vector<std::array<double, spacedim>>, std::vector<double>, std::vector<int>> 
 PointCloudHierarchyManager::kmeansClustering(
-    const std::vector<std::array<double, dim>>& points,
+    const std::vector<std::array<double, spacedim>>& points,
     const std::vector<double>& densities,
     size_t k) {
 
-    const size_t n_points = points.size();
+    // const size_t n_points = points.size();
     
     if (points.size() <= k) {
         // If fewer points than clusters, return original points
@@ -99,7 +99,7 @@ PointCloudHierarchyManager::kmeansClustering(
     auto start = std::chrono::high_resolution_clock::now();
     
     // Run parallel k-means clustering
-    std::vector<std::array<double, dim>> centers;
+    std::vector<std::array<double, spacedim>> centers;
     std::vector<uint32_t> cluster_assignments;
     std::tie(centers, cluster_assignments) = dkm::kmeans_lloyd_parallel(points, k);
     
@@ -123,9 +123,9 @@ PointCloudHierarchyManager::kmeansClustering(
     return {centers, cluster_densities, assignments};
 }
 
-template <int dim>
+template <int spacedim>
 int PointCloudHierarchyManager::generateHierarchy(
-    const std::vector<Point<dim>>& input_points,
+    const std::vector<Point<spacedim>>& input_points,
     const std::vector<double>& input_densities,
     const std::string& output_dir) {
     
@@ -172,15 +172,15 @@ int PointCloudHierarchyManager::generateHierarchy(
     child_indices_.resize(num_levels_ - 1);
     
     // Convert input points to std::array format
-    std::vector<std::array<double, dim>> points_array(input_points.size());
+    std::vector<std::array<double, spacedim>> points_array(input_points.size());
     for (size_t i = 0; i < input_points.size(); ++i) {
-        for (int d = 0; d < dim; ++d) {
+        for (int d = 0; d < spacedim; ++d) {
             points_array[i][d] = input_points[i][d];
         }
     }
     
     // Store all point clouds for each level
-    std::vector<std::vector<std::array<double, dim>>> level_points_vec(num_levels_);
+    std::vector<std::vector<std::array<double, spacedim>>> level_points_vec(num_levels_);
     std::vector<std::vector<double>> level_densities_vec(num_levels_);
     
     // Level 0 is always the original point cloud
@@ -196,11 +196,11 @@ int PointCloudHierarchyManager::generateHierarchy(
         std::cout << "Level " << level << ": targeting " << points_for_level << " points" << std::endl;
         
         // Use k-means clustering to create coarser point cloud with parent-child tracking
-        std::vector<std::array<double, dim>> coarse_points;
+        std::vector<std::array<double, spacedim>> coarse_points;
         std::vector<double> coarse_densities;
         std::vector<int> assignments;
         
-        std::tie(coarse_points, coarse_densities, assignments) = kmeansClustering<dim>(
+        std::tie(coarse_points, coarse_densities, assignments) = kmeansClustering<spacedim>(
             level_points_vec[level-1], level_densities_vec[level-1], points_for_level);
         
         level_points_vec[level] = coarse_points;
@@ -246,8 +246,8 @@ int PointCloudHierarchyManager::generateHierarchy(
         
         // Write points and densities
         for (size_t i = 0; i < level_points_vec[level].size(); ++i) {
-            for (int d = 0; d < dim; ++d) {
-                points_out << level_points_vec[level][i][d] << (d < dim - 1 ? " " : "");
+            for (int d = 0; d < spacedim; ++d) {
+                points_out << level_points_vec[level][i][d] << (d < spacedim - 1 ? " " : "");
             }
             points_out << std::endl;
             

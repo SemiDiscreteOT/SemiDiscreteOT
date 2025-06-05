@@ -1,6 +1,13 @@
 #ifndef SOT_SOLVER_H
 #define SOT_SOLVER_H
 
+#include <boost/geometry.hpp>
+#include <boost/geometry/index/rtree.hpp>
+#include <memory>
+#include <map>
+#include <mutex>
+#include <atomic>
+
 #include <deal.II/base/conditional_ostream.h>
 #include <deal.II/lac/vector.h>
 #include <deal.II/lac/la_parallel_vector.h>
@@ -17,40 +24,50 @@
 #include <deal.II/base/mpi.h>
 #include <deal.II/base/utilities.h>
 #include <deal.II/base/multithread_info.h>
-#include <boost/geometry.hpp>
-#include <boost/geometry/index/rtree.hpp>
-#include <memory>
-#include <map>
-#include <mutex>
-#include <atomic>
+#include <deal.II/optimization/solver_bfgs.h>
+#include <deal.II/base/utilities.h>
+#include <deal.II/base/multithread_info.h>
+#include <deal.II/base/timer.h>
+#include <deal.II/fe/fe_values.h>
+#include <deal.II/base/work_stream.h>
+#include <deal.II/dofs/dof_tools.h>
+#include <deal.II/fe/fe_simplex_p.h>
+#include <deal.II/fe/fe_q.h>
+#include <deal.II/fe/mapping_fe.h>
+#include <deal.II/fe/mapping_q1.h>
+
 #include "SemiDiscreteOT/utils/ParameterManager.h"
 #include "SemiDiscreteOT/utils/ColorDefinitions.h"
+#include "SemiDiscreteOT/solvers/Distance.h"
 
 using namespace dealii;
 
-template <int dim>
+template <int dim, int spacedim=dim>
 class SotSolver {
 public:
+
     // Type definitions for RTree
-    using IndexedPoint = std::pair<Point<dim>, std::size_t>;
+    using IndexedPoint = std::pair<Point<spacedim>, std::size_t>;
     using RTreeParams = boost::geometry::index::rstar<8>;
     using RTree = boost::geometry::index::rtree<IndexedPoint, RTreeParams>;
 
     // Source measure data structure
     struct SourceMeasure {
-        SmartPointer<const DoFHandler<dim>> dof_handler;
-        SmartPointer<const Mapping<dim>> mapping;
-        SmartPointer<const FiniteElement<dim>> fe;
+        bool initialized = false; // Flag to check if source measure is set up
+        SmartPointer<const DoFHandler<dim, spacedim>> dof_handler;
+        SmartPointer<const Mapping<dim, spacedim>> mapping;
+        SmartPointer<const FiniteElement<dim, spacedim>> fe;
         SmartPointer<const LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> density;
         unsigned int quadrature_order;
         
         SourceMeasure() = default;
-        SourceMeasure(const DoFHandler<dim>& dof_handler_,
-                     const Mapping<dim>& mapping_,
-                     const FiniteElement<dim>& fe_,
+        SourceMeasure(const DoFHandler<dim, spacedim>& dof_handler_,
+                     const Mapping<dim, spacedim>& mapping_,
+                     const FiniteElement<dim, spacedim>& fe_,
                      const LinearAlgebra::distributed::Vector<double, MemorySpace::Host>& density_,
                      const unsigned int quadrature_order_)
-            : dof_handler(&dof_handler_)
+            : initialized(true)
+            , dof_handler(&dof_handler_)
             , mapping(&mapping_)
             , fe(&fe_)
             , density(&density_)
@@ -60,14 +77,16 @@ public:
 
     // Target measure data structure
     struct TargetMeasure {
-        std::vector<Point<dim>> points;
+        bool initialized = false; // Flag to check if target measure is set up
+        std::vector<Point<spacedim>> points;
         Vector<double> density;
         RTree rtree;
         
         TargetMeasure() = default;
-        TargetMeasure(const std::vector<Point<dim>>& points_,
+        TargetMeasure(const std::vector<Point<spacedim>>& points_,
                      const Vector<double>& density_)
-            : points(points_)
+            : initialized(true)
+            , points(points_)
             , density(density_) 
         {
             AssertThrow(points.size() == density.size(),
@@ -87,8 +106,8 @@ public:
 
     // Per-cell scratch data for parallel assembly
     struct ScratchData {
-        ScratchData(const FiniteElement<dim>& fe,
-                   const Mapping<dim>& mapping,
+        ScratchData(const FiniteElement<dim, spacedim>& fe,
+                   const Mapping<dim, spacedim>& mapping,
                    const Quadrature<dim>& quadrature)
             : fe_values(mapping, fe, quadrature,
                        update_values | update_quadrature_points | update_JxW_values)
@@ -101,7 +120,7 @@ public:
                        update_values | update_quadrature_points | update_JxW_values)
             , density_values(other.density_values) {}
 
-        FEValues<dim> fe_values;
+        FEValues<dim, spacedim> fe_values;
         std::vector<double> density_values;
     };
 
@@ -120,29 +139,45 @@ public:
         }
     };
 
+    // Copy data barycenters evaluation
+    struct CopyDataBarycenters {
+        Vector<double> barycenters_values;  // Local barycenters contribution
+
+        CopyDataBarycenters(const unsigned int n_target_points)
+            : barycenters_values(spacedim*n_target_points)
+        {
+            barycenters_values = 0;  // Initialize local barycenters to zero
+        }
+    };
+
     // Constructor
     SotSolver(const MPI_Comm& comm);
 
     // Setup methods
-    void setup_source(const DoFHandler<dim>& dof_handler,
-                     const Mapping<dim>& mapping,
-                     const FiniteElement<dim>& fe,
+    void setup_source(const DoFHandler<dim, spacedim>& dof_handler,
+                     const Mapping<dim, spacedim>& mapping,
+                     const FiniteElement<dim, spacedim>& fe,
                      const LinearAlgebra::distributed::Vector<double, MemorySpace::Host>& source_density,
                      const unsigned int quadrature_order);
 
-    void setup_target(const std::vector<Point<dim>>& target_points,
+    void setup_target(const std::vector<Point<spacedim>>& target_points,
                      const Vector<double>& target_density);
 
     // Main solver interface
     void solve(Vector<double>& potential,
-              const ParameterManager::SolverParameters& params);
+              const SotParameterManager::SolverParameters& params);
 
     // Alternative solve interface if measures not set up beforehand
     void solve(Vector<double>& potential,
               const SourceMeasure& source,
               const TargetMeasure& target,
-              const ParameterManager::SolverParameters& params);
-
+              const SotParameterManager::SolverParameters& params);
+    
+    void evaluate_weighted_barycenters(
+        const Vector<double>& potentials,
+        std::vector<Point<spacedim>>& barycenters_out,
+        const SotParameterManager::SolverParameters& params);
+    
     // Getters for solver results
     double get_last_functional_value() const { return global_functional; }
     unsigned int get_last_iteration_count() const;
@@ -188,6 +223,15 @@ public:
         const Vector<double>& potentials,
         const double epsilon,
         const double tolerance) const;
+    
+    // distance function methods
+    void set_distance_function(const std::string &distance_name);
+
+    // Distance function
+    std::string distance_name;
+    std::function<double(const Point<spacedim>&, const Point<spacedim>&)> distance_function;
+    std::function<Vector<double>(const Point<spacedim>&, const Point<spacedim>&)> distance_function_gradient;
+    std::function<Point<spacedim>(const Point<spacedim>&, const Vector<double>&)> distance_function_exponential_map;
 
     // Core evaluation method
     double evaluate_functional(const Vector<double>& potential,
@@ -198,10 +242,6 @@ public:
                         LAPACKFullMatrix<double>& hessian_out);
 
 private:
-    // Local assembly methods
-    void local_assemble(const typename DoFHandler<dim>::active_cell_iterator& cell,
-                       ScratchData& scratch,
-                       CopyData& copy);
 
     class VerboseSolverControl : public SolverControl
     {
@@ -304,12 +344,68 @@ private:
         double last_check_value = 0.0;
     };
 
+    // Cache for local assembly computations
+    struct CellCache {
+        std::vector<std::size_t> target_indices;
+        std::vector<double> precomputed_distance_terms;
+        bool is_valid;
+
+        CellCache() : is_valid(false) {}
+    };
+
+    // Local assembly methods
+    void local_assemble(const typename DoFHandler<dim, spacedim>::active_cell_iterator& cell,
+    ScratchData& scratch,
+    CopyData& copy);
+
+    // Local assembly methods for barycenters
+    void local_assemble_barycenters(
+        const typename DoFHandler<dim, spacedim>::active_cell_iterator& cell,
+        ScratchData& scratch,
+        CopyDataBarycenters& copy);
+    
+    // Distance threshold and caching methods
+    void compute_distance_threshold() const;
+    void reset_distance_threshold_cache() const;
+    std::vector<std::size_t> find_nearest_target_points(const Point<spacedim>& query_point) const;
+    double estimate_cache_entry_size_mb(const std::vector<std::size_t>& target_indices, 
+                                      unsigned int n_q_points) const;
+    double compute_integral_radius_bound(
+        const Vector<double>& potentials,
+        double lambda,
+        double tolerance,
+        double C_value,
+        double current_functional_val) const;
+
+    // Validation methods
+    bool validate_measures() const;
+
+    // Barycenters computation methods
+    void compute_weighted_barycenters_non_euclidean(
+        const Vector<double>& potentials,
+        std::vector<Vector<double>>& barycenters_gradients_out,
+        std::vector<Point<spacedim>>& barycenters_out
+    );
+    void local_assemble_barycenters_non_euclidean(
+        const typename DoFHandler<dim, spacedim>::active_cell_iterator& cell,
+        ScratchData& scratch,
+        CopyDataBarycenters& copy,
+        std::vector<Point<spacedim>>& barycenters_out);
+
+    void compute_weighted_barycenters_euclidean(
+        const Vector<double>& potentials,
+        std::vector<Point<spacedim>>& barycenters_out);
+    void local_assemble_barycenters_euclidean(
+        const typename DoFHandler<dim, spacedim>::active_cell_iterator& cell,
+        ScratchData& scratch,
+        CopyDataBarycenters& copy);
+
     // MPI and parallel related members
     MPI_Comm mpi_communicator;
     const unsigned int n_mpi_processes;
     const unsigned int this_mpi_process;
     ConditionalOStream pcout;
-
+    
     // Source and target measures
     SourceMeasure source_measure;
     TargetMeasure target_measure;
@@ -327,15 +423,6 @@ private:
     double min_target_density;       
     double C_global = 0.0; // Sum of all scale terms
 
-    // Cache for local assembly computations
-    struct CellCache {
-        std::vector<std::size_t> target_indices;
-        std::vector<double> precomputed_distance_terms;
-        bool is_valid;
-
-        CellCache() : is_valid(false) {}
-    };
-
     mutable std::unordered_map<std::string, CellCache> cell_caches;
     mutable std::mutex cache_mutex;
     std::atomic<size_t> total_target_points{0};
@@ -343,23 +430,17 @@ private:
     mutable bool cache_limit_reached{false};                  ///< Flag indicating if cache limit was reached
 
     // Current solver parameters
-    ParameterManager::SolverParameters current_params;
+    SotParameterManager::SolverParameters current_params;
 
-    // Distance threshold and caching methods
-    void compute_distance_threshold() const;
-    void reset_distance_threshold_cache() const;
-    std::vector<std::size_t> find_nearest_target_points(const Point<dim>& query_point) const;
-    double estimate_cache_entry_size_mb(const std::vector<std::size_t>& target_indices, 
-                                      unsigned int n_q_points) const;
-    double compute_integral_radius_bound(
-        const Vector<double>& potentials,
-        double lambda,
-        double tolerance,
-        double C_value,
-        double current_functional_val) const;
+    // weighted truncated barycenters evaluation
 
-    // Validation methods
-    bool validate_measures() const;
+    // Barycenters evaluation data
+    Vector<double> barycenters;
+    Vector<double> barycenters_gradients;
+
+    // Barycenters points and gradients
+    std::vector<Point<spacedim>> barycenters_points;
+    std::vector<Vector<double>> barycenters_grads;
 };
 
 #endif // SOT_SOLVER_H

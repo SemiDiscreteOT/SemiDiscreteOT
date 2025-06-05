@@ -1,8 +1,8 @@
 #include "SemiDiscreteOT/utils/ParameterManager.h"
 #include <iomanip>  
 
-ParameterManager::ParameterManager(const MPI_Comm &comm)
-    : ParameterAcceptor("ParameterManager")
+SotParameterManager::SotParameterManager(const MPI_Comm &comm)
+    : ParameterAcceptor("SotParameterManager")
     , source_params(source_params_storage)
     , target_params(target_params_storage)
     , solver_params(solver_params_storage)
@@ -152,7 +152,7 @@ ParameterManager::ParameterManager(const MPI_Comm &comm)
 }
 
 
-void ParameterManager::print_logo() const
+void SotParameterManager::print_logo() const
 {
     std::string logo = R"(
  ▗▄▄▖▗▄▄▄▖▗▖  ▗▖▗▄▄▄▖▗▄▄▄ ▗▄▄▄▖ ▗▄▄▖ ▗▄▄▖▗▄▄▖ ▗▄▄▄▖▗▄▄▄▖▗▄▄▄▖ ▗▄▖▗▄▄▄▖
@@ -182,7 +182,7 @@ void ParameterManager::print_logo() const
 }
 
 
-void ParameterManager::print_parameters() const
+void SotParameterManager::print_parameters() const
 {
     print_logo();
     print_task_information();
@@ -231,13 +231,13 @@ void ParameterManager::print_parameters() const
     pcout << std::endl;
 }
 
-void ParameterManager::print_section_header(const std::string& section_name) const
+void SotParameterManager::print_section_header(const std::string& section_name) const
 {
     pcout << MAGENTA << section_name << RESET << std::endl;
     pcout << std::string(section_name.length(), '-') << std::endl;
 }
 
-void ParameterManager::print_task_information() const
+void SotParameterManager::print_task_information() const
 {
     pcout << YELLOW << "\n=== AVAILABLE TASKS ===" << RESET << std::endl;
     pcout << std::string(80, '-') << std::endl;
@@ -276,7 +276,7 @@ void ParameterManager::print_task_information() const
     pcout << std::endl;
 }
 
-void ParameterManager::print_mesh_parameters() const
+void SotParameterManager::print_mesh_parameters() const
 {
     // Source mesh parameters
     pcout << CYAN << "  Source Mesh:" << RESET << std::endl;
@@ -295,7 +295,7 @@ void ParameterManager::print_mesh_parameters() const
     pcout << std::endl;
 }
 
-void ParameterManager::print_solver_parameters() const
+void SotParameterManager::print_solver_parameters() const
 {
     pcout << CYAN << "  Solver Configuration:" << RESET << std::endl;
     pcout << "    Solver Type: " << BOLD << solver_params.solver_type << RESET << std::endl;
@@ -331,7 +331,7 @@ void ParameterManager::print_solver_parameters() const
     pcout << std::endl;
 }
 
-void ParameterManager::print_multilevel_parameters() const
+void SotParameterManager::print_multilevel_parameters() const
 {
     // Source multilevel parameters
     pcout << CYAN << "  Source Multilevel:" << RESET << std::endl;
@@ -367,17 +367,111 @@ void ParameterManager::print_multilevel_parameters() const
 }
 
 
-void ParameterManager::print_power_diagram_parameters() const
+void SotParameterManager::print_power_diagram_parameters() const
 {
     pcout << CYAN << "  Power Diagram Computation:" << RESET << std::endl;
     pcout << "    Implementation: " << BOLD << power_diagram_params.implementation << RESET << std::endl;
     pcout << std::endl;
 }
 
-void ParameterManager::print_transport_map_parameters() const
+void SotParameterManager::print_transport_map_parameters() const
 {
     pcout << CYAN << "  Transport Map Settings:" << RESET << std::endl;
     pcout << "    Truncation Radius: " << BOLD << (transport_map_params.truncation_radius < 0 ? "disabled" : 
                                                  std::to_string(transport_map_params.truncation_radius)) << RESET << std::endl;
     pcout << std::endl;
 } 
+
+LloydParameterManager::LloydParameterManager(const MPI_Comm &comm)
+    : SotParameterManager(comm)
+    , lloyd_params(lloyd_params_storage)
+{
+    enter_subsection("lloyd parameters");
+    {
+        add_parameter("max iterations", lloyd_params.max_iterations);
+        add_parameter("relative tolerance", lloyd_params.relative_tolerance);
+    }
+    leave_subsection();
+}
+
+void LloydParameterManager::print_task_information() const
+{
+    pcout << YELLOW << "\n=== AVAILABLE TASKS ===" << RESET << std::endl;
+    pcout << std::string(80, '-') << std::endl;
+    
+    // Define task descriptions
+    struct TaskInfo {
+        std::string name;
+        std::string description;
+    };
+    
+    std::vector<TaskInfo> tasks = {
+        {"lloyd", "Run Lloyd algorithm with regularized SOT"},
+    };
+    
+    // Print each task with proper formatting
+    for (const auto& task : tasks) {
+        // Highlight the currently selected task
+        if (task.name == selected_task) {
+            pcout << CYAN << BOLD;
+        }
+        
+        // Print task name and description
+        pcout << std::setw(30) << std::left << task.name 
+              << task.description << RESET << std::endl;
+    }
+    
+    pcout << std::string(80, '-') << std::endl;
+    pcout << std::endl;
+}
+
+void LloydParameterManager::print_lloyd_parameters() const
+{
+    // Lloyd parameters
+    pcout << CYAN << "  Lloyd:" << RESET << std::endl;
+    pcout << "    Number of max iterations: " << BOLD << lloyd_params.max_iterations << RESET << std::endl;
+    pcout << "    Relative tolerance: " << BOLD << lloyd_params.relative_tolerance << RESET << std::endl;
+    pcout << std::endl;
+}
+
+void LloydParameterManager::print_parameters() const
+{
+    print_logo();
+    print_task_information();
+    
+    // Print a visually appealing header for the selected task
+    pcout << YELLOW << "\nCONFIGURATION FOR: " << BOLD << selected_task << RESET << std::endl;
+    pcout << std::string(80, '-') << std::endl;
+    
+    pcout << "I/O Format: " << BOLD << io_coding << RESET << "\n" << std::endl;
+
+    // Print relevant parameters based on selected task
+    if (selected_task == "generate_mesh" || selected_task == "lloyd" || 
+        selected_task == "load_meshes")
+    {
+        print_section_header("MESH PARAMETERS");
+        print_mesh_parameters();
+    }
+
+    if (selected_task == "lloyd")
+    {
+        print_section_header("SOLVER PARAMETERS");
+        print_lloyd_parameters();
+        print_solver_parameters();
+    }
+
+    if (selected_task == "power_diagram")
+    {
+        print_section_header("POWER DIAGRAM PARAMETERS");
+        print_power_diagram_parameters();
+    }
+
+    if (selected_task == "map")
+    {
+        print_section_header("TRANSPORT MAP PARAMETERS");
+        print_transport_map_parameters();
+    }
+
+    pcout << std::string(80, '-') << std::endl;
+    pcout << std::endl;
+}
