@@ -29,6 +29,9 @@ IF(NOT ${deal.II_FOUND})
   )
 ENDIF()
 
+# Find vtk
+FIND_PACKAGE(VTK QUIET)
+
 # Add custom release target
 ADD_CUSTOM_TARGET(release
     COMMAND ${CMAKE_COMMAND} -DCMAKE_BUILD_TYPE=Release ${CMAKE_SOURCE_DIR}
