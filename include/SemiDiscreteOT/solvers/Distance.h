@@ -38,7 +38,7 @@ Vector<double> euclidean_distance_gradient(
     const Point<spacedim> a, const Point<spacedim> b) {
     Vector<double> gradient(spacedim);
     for (unsigned int i = 0; i < spacedim; ++i) {
-        gradient[i] = (a[i] - b[i]);
+        gradient[i] = 2*(a[i] - b[i]);
     }
     return gradient;
 }

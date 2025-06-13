@@ -150,6 +150,19 @@ public:
         }
     };
 
+    struct CopyDataWassersteinBarycenters {
+        Vector<double> grad_support_points;
+        Vector<double> grad_measure;
+
+        CopyDataWassersteinBarycenters(const unsigned int n_target_points)
+            : grad_support_points(spacedim*n_target_points),
+            grad_measure(n_target_points)
+        {
+            grad_support_points = 0;
+            grad_measure = 0;
+        }
+    };
+
     // Constructor
     SotSolver(const MPI_Comm& comm);
 
@@ -240,7 +253,14 @@ public:
     // Compute Hessian matrix for Newton solver
     void compute_hessian(const Vector<double>& potential,
                         LAPACKFullMatrix<double>& hessian_out);
-
+       
+    // Compute gradients with respect to target support points and measure
+    void compute_grad_target(
+        std::vector<std::pair<Vector<double>, double>> &target_gradients_out,
+        const Vector<double>& potentials,
+        const std::vector<std::pair<Point<spacedim>, double>> &target,
+        const SotParameterManager::SolverParameters& params
+    );
 private:
 
     class VerboseSolverControl : public SolverControl
@@ -364,6 +384,12 @@ private:
         ScratchData& scratch,
         CopyDataBarycenters& copy);
     
+    void local_assemble_grad_target(
+        const typename DoFHandler<dim, spacedim>::active_cell_iterator& cell,
+        ScratchData& scratch,
+        CopyDataWassersteinBarycenters& copy,
+        const std::vector<std::pair<Point<spacedim>, double>>& current_barycenters);
+    
     // Distance threshold and caching methods
     void compute_distance_threshold() const;
     void reset_distance_threshold_cache() const;
@@ -432,8 +458,6 @@ private:
     // Current solver parameters
     SotParameterManager::SolverParameters current_params;
 
-    // weighted truncated barycenters evaluation
-
     // Barycenters evaluation data
     Vector<double> barycenters;
     Vector<double> barycenters_gradients;
@@ -441,6 +465,10 @@ private:
     // Barycenters points and gradients
     std::vector<Point<spacedim>> barycenters_points;
     std::vector<Vector<double>> barycenters_grads;
+
+    // Data for Wasserstein barycenters
+    Vector<double> tmp_grad_support_points;
+    Vector<double> tmp_grad_measure;
 };
 
 #endif // SOT_SOLVER_H

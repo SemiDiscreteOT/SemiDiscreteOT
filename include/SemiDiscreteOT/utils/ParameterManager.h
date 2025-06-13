@@ -172,13 +172,10 @@ private:
 };
 
 /**
- * A class to manage all parameters for the RSOT solver.
- * This class handles parameter declaration, storage, and access for all components
- * of the solver, including mesh generation, solver settings, and multilevel methods.
- * It inherits from ParameterAcceptor to integrate with deal.II's parameter handling system.
- */
- class LloydParameterManager : public SotParameterManager
- {
+* A class to manage parameters specifically for the Lloyd algorithm.
+*/
+class LloydParameterManager : public SotParameterManager
+{
  public:
     /**
     * Constructor.
@@ -211,6 +208,45 @@ private:
     
     // Storage for parameters
     LloydParameters lloyd_params_storage;
- };
+};
+
+/**
+* A class to manage parameters specifically for the Lloyd algorithm.
+*/
+class WassersteinBarycentersParameterManager : public SotParameterManager
+{
+ public:
+    /**
+    * Constructor.
+    * @param comm MPI communicator for parallel execution
+    */
+    WassersteinBarycentersParameterManager(const MPI_Comm &comm);
+
+    /**
+    * Parameters for WassersteinBarycenters algorithm.
+    */
+    struct WassersteinBarycentersParameters {
+        unsigned int max_iterations = 1000;          ///< Number of max iterations
+        double relative_tolerance = 1e-8;            ///< Convergence tolerance
+    };
+    
+    const WassersteinBarycentersParameters& get_wasserstein_barycenters_params() const { return wasserstein_barycenters_params; }
+
+    // Direct access to parameters through references
+    WassersteinBarycentersParameters& wasserstein_barycenters_params;
+    
+    /**
+     * Print all relevant parameters based on the selected task.
+     * This provides a comprehensive view of the current parameter settings.
+     */
+    virtual void print_parameters() const override;
+ private:
+    // Helper methods for printing specific parameter groups
+    void print_wasserstein_barycenters_parameters() const;
+    void print_task_information() const;
+    
+    // Storage for parameters
+    WassersteinBarycentersParameters wasserstein_barycenters_params_storage;
+};
 
 #endif 

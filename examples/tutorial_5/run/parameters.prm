@@ -1,0 +1,46 @@
+subsection Tutorial 3
+  subsection WassersteinBarycentersFixedDomain
+    set number of refinements = 3
+  end
+
+  subsection SotParameterManager
+    set selected_task = wasserstein barycenters
+    set io_coding = txt
+
+    subsection wasserstein barycenters parameters
+      set max iterations = 100
+      set relative tolerance = 0
+    end
+
+    subsection mesh_generation
+      subsection source
+        set number of refinements = 6
+        set use custom density = true
+      end
+
+      subsection target
+        set number of refinements = 2
+        set use custom density = true
+      end
+
+    end
+
+    subsection rsot_solver
+      set max_iterations = 10000
+      set tolerance = 1e-3
+      set regularization_parameter = 2e-2
+      set epsilon = 1e-20
+      set tau = 1e-4  # Truncation error tolerance for integral radius bound
+      set verbose_output = false
+      set solver_type = BFGS
+      set quadrature_order = 3
+      set number_of_threads = 0
+      set use_epsilon_scaling = true
+      set epsilon_scaling_factor = 10
+      set epsilon_scaling_steps = 5
+      set use_caching = false
+      set max_cache_size_mb = 20000
+    end
+  end
+end
+

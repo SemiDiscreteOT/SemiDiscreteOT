@@ -74,6 +74,7 @@ SET(LIB_SRC
   src/utils/ParameterManager.cc
   src/utils/VtkHandler.cc
   src/core/Lloyd.cc
+  src/core/WassersteinBarycenters.cc
 )
 
 # Create the library

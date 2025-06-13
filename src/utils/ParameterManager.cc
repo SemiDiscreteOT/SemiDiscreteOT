@@ -475,3 +475,97 @@ void LloydParameterManager::print_parameters() const
     pcout << std::string(80, '-') << std::endl;
     pcout << std::endl;
 }
+
+WassersteinBarycentersParameterManager::WassersteinBarycentersParameterManager(const MPI_Comm &comm)
+    : SotParameterManager(comm)
+    , wasserstein_barycenters_params(wasserstein_barycenters_params_storage)
+{
+    enter_subsection("wasserstein barycenters parameters");
+    {
+        add_parameter("max iterations", wasserstein_barycenters_params.max_iterations);
+        add_parameter("relative tolerance", wasserstein_barycenters_params.relative_tolerance);
+    }
+    leave_subsection();
+}
+
+void WassersteinBarycentersParameterManager::print_task_information() const
+{
+    pcout << YELLOW << "\n=== AVAILABLE TASKS ===" << RESET << std::endl;
+    pcout << std::string(80, '-') << std::endl;
+    
+    // Define task descriptions
+    struct TaskInfo {
+        std::string name;
+        std::string description;
+    };
+    
+    std::vector<TaskInfo> tasks = {
+        {"wasserstein barycenters", "Run WassersteinBarycenters algorithm"},
+    };
+    
+    // Print each task with proper formatting
+    for (const auto& task : tasks) {
+        // Highlight the currently selected task
+        if (task.name == selected_task) {
+            pcout << CYAN << BOLD;
+        }
+        
+        // Print task name and description
+        pcout << std::setw(30) << std::left << task.name 
+              << task.description << RESET << std::endl;
+    }
+    
+    pcout << std::string(80, '-') << std::endl;
+    pcout << std::endl;
+}
+
+void WassersteinBarycentersParameterManager::print_wasserstein_barycenters_parameters() const
+{
+    // WassersteinBarycenters parameters
+    pcout << CYAN << "  WassersteinBarycenters:" << RESET << std::endl;
+    pcout << "    Number of max iterations: " << BOLD << wasserstein_barycenters_params.max_iterations << RESET << std::endl;
+    pcout << "    Relative tolerance: " << BOLD << wasserstein_barycenters_params.relative_tolerance << RESET << std::endl;
+    pcout << std::endl;
+}
+
+void WassersteinBarycentersParameterManager::print_parameters() const
+{
+    print_logo();
+    print_task_information();
+    
+    // Print a visually appealing header for the selected task
+    pcout << YELLOW << "\nCONFIGURATION FOR: " << BOLD << selected_task << RESET << std::endl;
+    pcout << std::string(80, '-') << std::endl;
+    
+    pcout << "I/O Format: " << BOLD << io_coding << RESET << "\n" << std::endl;
+
+    // Print relevant parameters based on selected task
+    if (selected_task == "generate_mesh" || selected_task == "wasserstein barycenters" || 
+        selected_task == "load_meshes")
+    {
+        print_section_header("MESH PARAMETERS");
+        print_mesh_parameters();
+    }
+
+    if (selected_task == "wasserstein barycenters")
+    {
+        print_section_header("SOLVER PARAMETERS");
+        print_wasserstein_barycenters_parameters();
+        print_solver_parameters();
+    }
+
+    if (selected_task == "power_diagram")
+    {
+        print_section_header("POWER DIAGRAM PARAMETERS");
+        print_power_diagram_parameters();
+    }
+
+    if (selected_task == "map")
+    {
+        print_section_header("TRANSPORT MAP PARAMETERS");
+        print_transport_map_parameters();
+    }
+
+    pcout << std::string(80, '-') << std::endl;
+    pcout << std::endl;
+}

@@ -922,8 +922,6 @@ void SotSolver<dim, spacedim>::evaluate_weighted_barycenters(
     double solver_tolerance = params.tolerance;
     unsigned int max_iterations = params.max_iterations;
 
-    bool use_componentwise = (params.solver_control_type == "componentwise");
-
     try
     {
         unsigned int n_iter = 0;
@@ -1720,6 +1718,403 @@ direct_computation:
                 for (unsigned int d = 0; d < spacedim; ++d) {
                     copy.barycenters_values[spacedim*cell_target_indices[i] + d] += scale * exp_terms[i] * x[d];
                 }
+            }
+        }
+    }
+}
+
+// utilities for Wasserstein Barycenters evaluation
+template <int dim, int spacedim>
+void SotSolver<dim, spacedim>::compute_grad_target(
+    std::vector<std::pair<Vector<double>, double>> &target_gradients_out,
+    const Vector<double>& potential,
+    const std::vector<std::pair<Point<spacedim>, double>> &target,
+    const SotParameterManager::SolverParameters& params
+){
+    if (!validate_measures()) {
+        throw std::runtime_error("Invalid measures configuration");
+    }
+
+    // Store current potential for use in local assembly
+    current_potential = &potential;
+    current_lambda = current_params.regularization_param;
+
+    tmp_grad_support_points.reinit(spacedim*target_measure.points.size());
+    tmp_grad_measure.reinit(target_measure.points.size());
+    Vector<double> local_grad_support_points(spacedim*target_measure.points.size());
+    Vector<double> local_grad_measure(target_measure.points.size());
+
+    // Update distance threshold for target point search
+    compute_distance_threshold();
+    if (current_params.verbose_output) {
+        pcout << "Using distance threshold: " << current_distance_threshold
+              << " (Effective: " << effective_distance_threshold << ")" << std::endl;
+    }
+
+    try {
+        // Determine if we're using simplex elements
+        bool use_simplex = (dynamic_cast<const FE_SimplexP<dim>*>(&*source_measure.fe) != nullptr);
+
+        // Create appropriate quadrature rule
+        std::unique_ptr<Quadrature<dim>> quadrature;
+        if (use_simplex) {
+            quadrature = std::make_unique<QGaussSimplex<dim>>(source_measure.quadrature_order);
+        } else {
+            quadrature = std::make_unique<QGauss<dim>>(source_measure.quadrature_order);
+        }
+
+        // Create scratch and copy data
+        ScratchData scratch_data(*source_measure.fe,
+                               *source_measure.mapping,
+                               *quadrature);
+        CopyDataWassersteinBarycenters copy_data(target_measure.points.size());
+
+        // Create filtered iterators for locally owned cells
+        FilteredIterator<typename DoFHandler<dim, spacedim>::active_cell_iterator>
+            begin_filtered(IteratorFilters::LocallyOwnedCell(),
+                          source_measure.dof_handler->begin_active()),
+            end_filtered(IteratorFilters::LocallyOwnedCell(),
+                        source_measure.dof_handler->end());
+
+        // Parallel assembly using WorkStream
+        WorkStream::run(
+            begin_filtered,
+            end_filtered,
+            [this, &target](const typename DoFHandler<dim, spacedim>::active_cell_iterator& cell,
+                   ScratchData& scratch,
+                   CopyDataWassersteinBarycenters& copy) {
+                this->local_assemble_grad_target(
+                    cell, scratch, copy, target);
+            },
+            [this, &local_grad_support_points, &local_grad_measure](const CopyDataWassersteinBarycenters& copy) {
+                std::lock_guard<std::mutex> lock(cache_mutex);
+                local_grad_support_points += copy.grad_support_points;
+                local_grad_measure += copy.grad_measure;
+            },
+            scratch_data,
+            copy_data);
+
+        // Synchronize across MPI processes
+        Utilities::MPI::sum(
+            local_grad_support_points,
+            mpi_communicator,
+            tmp_grad_support_points);
+        Utilities::MPI::sum(
+            local_grad_measure,
+            mpi_communicator,
+            tmp_grad_measure);
+
+        // Add linear term (only on root process to avoid duplication)
+        if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+            for (unsigned int i = 0; i < target_measure.points.size(); ++i) {
+                tmp_grad_measure[i] -= potential[i];
+            }
+        }
+        tmp_grad_measure = Utilities::MPI::broadcast(mpi_communicator, tmp_grad_measure, 0);
+
+        // Copy result to output barycenters TODO why do I need this?
+        // Resize and initialize the target_gradients_out vector
+        target_gradients_out.resize(target_measure.points.size());
+        for (unsigned int i = 0; i < target_measure.points.size(); ++i) {
+            target_gradients_out[i].first.reinit(spacedim);
+            target_gradients_out[i].second = 0.0;
+        }
+        for (unsigned int i = 0; i < target_measure.points.size(); ++i) {
+            for (unsigned int d = 0; d < spacedim; ++d) {
+                target_gradients_out[i].first[d] =
+                    tmp_grad_support_points[spacedim * i + d];
+            }
+            target_gradients_out[i].second = tmp_grad_measure[i];
+        }
+
+    } catch (const std::exception& e) {
+        pcout << "Error in functional evaluation: " << e.what() << std::endl;
+        throw;
+    }
+
+    // Reset solver state
+    current_potential = nullptr;
+}
+
+template <int dim, int spacedim>
+void SotSolver<dim, spacedim>::local_assemble_grad_target(
+    const typename DoFHandler<dim, spacedim>::active_cell_iterator& cell,
+    ScratchData& scratch,
+    CopyDataWassersteinBarycenters& copy,
+    const std::vector<std::pair<Point<spacedim>, double>>& current_target)
+{
+    if (!cell->is_locally_owned())
+        return;
+
+    scratch.fe_values.reinit(cell);
+    const std::vector<Point<spacedim>>& q_points = scratch.fe_values.get_quadrature_points();
+    scratch.fe_values.get_function_values(
+        *source_measure.density, scratch.density_values);
+
+    copy.grad_support_points = 0;
+    copy.grad_measure = 0;
+
+    const unsigned int n_q_points = q_points.size();
+    const double lambda_inv = 1.0 / current_lambda;
+    const bool use_log_sum_exp = current_params.use_log_sum_exp_trick;
+
+    if (current_params.use_caching && is_caching_active) {
+        // Caching path
+        std::string cell_id = cell->id().to_string();
+        CellCache* cell_cache_ptr = nullptr;
+        std::vector<std::size_t> cell_target_indices;
+        bool need_computation = true;
+        bool cache_entry_exists = false;
+
+        {
+            std::lock_guard<std::mutex> lock(cache_mutex);
+            auto it = cell_caches.find(cell_id);
+            cache_entry_exists = (it != cell_caches.end());
+
+            if (cache_entry_exists) {
+                cell_cache_ptr = &it->second;
+                cell_target_indices = cell_cache_ptr->target_indices;
+                need_computation = !cell_cache_ptr->is_valid;
+            }
+        }
+
+        if (!cache_entry_exists) {
+            // If cache limit is already reached, skip directly to direct computation
+            if (cache_limit_reached) {
+                goto direct_computation;
+            }
+
+            // Need to find target points and check if cache size would be exceeded
+            cell_target_indices = find_nearest_target_points(cell->center());
+            if (cell_target_indices.empty()) return;
+
+            double entry_size_mb = estimate_cache_entry_size_mb(cell_target_indices, n_q_points);
+            double projected_size = current_cache_size_mb.load() + entry_size_mb;
+
+            if (current_params.max_cache_size_mb > 0 && projected_size > current_params.max_cache_size_mb) {
+                // Cache limit would be exceeded, don't add new entry but continue with direct computation
+                {
+                    std::lock_guard<std::mutex> lock(cache_mutex);
+                    if (!cache_limit_reached) {
+                        cache_limit_reached = true;
+                        pcout << "\n\033[1;31mWARNING: Cache size limit (" << current_params.max_cache_size_mb
+                              << " MB) reached. Using existing cache entries but not adding new ones.\033[0m" << std::endl;
+                    }
+                }
+                // Continue with direct computation for this cell
+                goto direct_computation;
+            } else {
+                // Create new cache entry
+                std::lock_guard<std::mutex> lock(cache_mutex);
+                CellCache& cell_cache = cell_caches[cell_id];
+                cell_cache_ptr = &cell_cache;
+                cell_cache.target_indices = cell_target_indices;
+                cell_cache.precomputed_distance_terms.resize(n_q_points * cell_target_indices.size());
+                current_cache_size_mb.store(current_cache_size_mb.load() + entry_size_mb);
+            }
+        }
+
+        // Proceed with cached or newly created entry
+        const unsigned int n_target_points = cell_target_indices.size();
+
+        // Preload target data for vectorization
+        std::vector<Point<spacedim>> target_positions(n_target_points);
+        std::vector<double> target_densities(n_target_points);
+        std::vector<double> potential_values(n_target_points);
+
+        for (size_t i = 0; i < n_target_points; ++i) {
+            const size_t idx = cell_target_indices[i];
+            target_positions[i] = target_measure.points[idx];
+            target_densities[i] = target_measure.density[idx];
+            potential_values[i] = (*current_potential)[idx];
+        }
+
+        // Process quadrature points
+        for (unsigned int q = 0; q < n_q_points; ++q) {
+            const Point<spacedim>& x = q_points[q];
+            const double density_value = scratch.density_values[q];
+            const double JxW = scratch.fe_values.JxW(q);
+
+            double total_sum_exp = 0.0;
+            double max_exponent = -std::numeric_limits<double>::max();
+            std::vector<double> active_exp_terms(n_target_points, 0.0);
+
+            const unsigned int base_idx = q * n_target_points;
+            if (need_computation) {
+                #pragma omp simd reduction(+:total_sum_exp)
+                for (size_t i = 0; i < n_target_points; ++i) {
+                    if (cell_target_indices[i] >= target_measure.points.size()) {
+                        continue;
+                    }
+                    const double local_dist2 = std::pow(distance_function(x, target_positions[i]), 2);
+                    const double distance_term = -0.5 * local_dist2;
+                    cell_cache_ptr->precomputed_distance_terms[base_idx + i] = distance_term;
+                    
+                    if (use_log_sum_exp) {
+                        const double exponent = (potential_values[i] + distance_term) * lambda_inv;
+                        max_exponent = std::max(max_exponent, exponent);
+                    }
+                }
+
+                // Second pass: compute exponentials
+                if (use_log_sum_exp) {
+                    #pragma omp simd reduction(+:total_sum_exp)
+                    for (size_t i = 0; i < n_target_points; ++i) {
+                        if (cell_target_indices[i] >= target_measure.points.size()) {
+                            continue;
+                        }
+                        const double distance_term = cell_cache_ptr->precomputed_distance_terms[base_idx + i];
+                        const double shifted_exp = std::exp((potential_values[i] + distance_term) * lambda_inv - max_exponent);
+                        active_exp_terms[i] = target_densities[i] * shifted_exp;
+                        total_sum_exp += active_exp_terms[i];
+                    }
+                } else {
+                    // Original computation method
+                    #pragma omp simd reduction(+:total_sum_exp)
+                    for (size_t i = 0; i < n_target_points; ++i) {
+                        if (cell_target_indices[i] >= target_measure.points.size()) {
+                            continue;
+                        }
+                        const double distance_term = cell_cache_ptr->precomputed_distance_terms[base_idx + i];
+                        const double exp_term = std::exp((potential_values[i] + distance_term) * lambda_inv);
+                        active_exp_terms[i] = target_densities[i] * exp_term;
+                        total_sum_exp += active_exp_terms[i];
+                    }
+                }
+
+            } else {
+                // Using existing cache
+                if (use_log_sum_exp) {
+                    // First pass: find maximum exponent
+                    #pragma omp simd reduction(max:max_exponent)
+                    for (size_t i = 0; i < n_target_points; ++i) {
+                        if (cell_target_indices[i] >= target_measure.points.size()) {
+                            continue;
+                        }
+                        const double distance_term = cell_cache_ptr->precomputed_distance_terms[base_idx + i];
+                        const double exponent = (potential_values[i] + distance_term) * lambda_inv;
+                        max_exponent = std::max(max_exponent, exponent);
+                    }
+                    
+                    // Second pass: compute shifted exponentials
+                    #pragma omp simd reduction(+:total_sum_exp)
+                    for (size_t i = 0; i < n_target_points; ++i) {
+                        if (cell_target_indices[i] >= target_measure.points.size()) {
+                            continue;
+                        }
+                        const double distance_term = cell_cache_ptr->precomputed_distance_terms[base_idx + i];
+                        const double shifted_exp = std::exp((potential_values[i] + distance_term) * lambda_inv - max_exponent);
+                        active_exp_terms[i] = target_densities[i] * shifted_exp;
+                        total_sum_exp += active_exp_terms[i];
+                    }
+                } else {
+                    // Original computation method
+                    #pragma omp simd reduction(+:total_sum_exp)
+                    for (size_t i = 0; i < n_target_points; ++i) {
+                        if (cell_target_indices[i] >= target_measure.points.size()) {
+                            continue;
+                        }
+                        const double distance_term = cell_cache_ptr->precomputed_distance_terms[base_idx + i];
+                        const double exp_term = std::exp((potential_values[i] + distance_term) * lambda_inv);
+                        active_exp_terms[i] = target_densities[i] * exp_term;
+                        total_sum_exp += active_exp_terms[i];
+                    }
+                }
+            }
+
+            if (total_sum_exp <= 0.0) continue;
+
+            const double scale = density_value * JxW / total_sum_exp;
+
+            #pragma omp simd
+            for (size_t i = 0; i < n_target_points; ++i) {
+                if (cell_target_indices[i] >= target_measure.points.size()) {
+                    continue;
+                }
+                if (active_exp_terms[i] > 0.0) {
+                    auto v = distance_function_gradient(current_target[cell_target_indices[i]].first, x);
+                    for (unsigned int d = 0; d < spacedim; ++d) {
+                        copy.grad_support_points[spacedim*cell_target_indices[i] + d] -= target_densities[i] * scale * active_exp_terms[i] * 0.5 * v[d];
+                    }
+                    copy.grad_measure[cell_target_indices[i]] += current_lambda * scale * active_exp_terms[i];
+                }
+            }
+        }
+
+        if (need_computation && cell_cache_ptr) {
+            cell_cache_ptr->is_valid = true;
+        }
+
+        return; // Skip the direct computation path
+    }
+
+direct_computation:
+    // Direct computation path
+    std::vector<std::size_t> cell_target_indices = find_nearest_target_points(cell->center());
+    if (cell_target_indices.empty()) return;
+
+    const unsigned int n_target_points = cell_target_indices.size();
+
+    std::vector<Point<spacedim>> target_positions(n_target_points);
+    std::vector<double> target_densities(n_target_points);
+    std::vector<double> potential_values(n_target_points);
+
+    for (size_t i = 0; i < n_target_points; ++i) {
+        const size_t idx = cell_target_indices[i];
+        target_positions[i] = target_measure.points[idx];
+        target_densities[i] = target_measure.density[idx];
+        potential_values[i] = (*current_potential)[idx];
+    }
+
+    for (unsigned int q = 0; q < n_q_points; ++q) {
+        const Point<spacedim>& x = q_points[q];
+        const double density_value = scratch.density_values[q];
+        const double JxW = scratch.fe_values.JxW(q);
+
+        double total_sum_exp = 0.0;
+        double max_exponent = -std::numeric_limits<double>::max();
+        std::vector<double> exp_terms(n_target_points);
+
+        if (use_log_sum_exp) {
+            // First pass: find maximum exponent
+            #pragma omp simd reduction(max:max_exponent)
+            for (size_t i = 0; i < n_target_points; ++i) {
+                const double local_dist2 = std::pow(distance_function(x, target_positions[i]), 2);
+                const double exponent = (potential_values[i] - 0.5 * local_dist2) * lambda_inv;
+                max_exponent = std::max(max_exponent, exponent);
+            }
+            
+            // Second pass: compute shifted exponentials
+            #pragma omp simd reduction(+:total_sum_exp)
+            for (size_t i = 0; i < n_target_points; ++i) {
+                const double local_dist2 = std::pow(distance_function(x, target_positions[i]), 2);
+                const double shifted_exp = std::exp((potential_values[i] - 0.5 * local_dist2) * lambda_inv - max_exponent);
+                exp_terms[i] = target_densities[i] * shifted_exp;
+                total_sum_exp += exp_terms[i];
+            }
+        } else {
+            // Original computation method
+            #pragma omp simd reduction(+:total_sum_exp)
+            for (size_t i = 0; i < n_target_points; ++i) {
+                const double local_dist2 = std::pow(distance_function(x, target_positions[i]), 2);
+                exp_terms[i] = target_densities[i] *
+                    std::exp((potential_values[i] - 0.5 * local_dist2) * lambda_inv);
+                total_sum_exp += exp_terms[i];
+            }
+        }
+
+        if (total_sum_exp <= 0.0) continue;
+
+        const double scale = density_value * JxW / total_sum_exp;
+        #pragma omp simd
+        for (size_t i = 0; i < n_target_points; ++i) {
+            if (exp_terms[i] > 0.0) {
+                auto v = distance_function_gradient(
+                    current_target[cell_target_indices[i]].first, x);
+                for (unsigned int d = 0; d < spacedim; ++d) {
+                    copy.grad_support_points[spacedim*cell_target_indices[i] + d] -= target_densities[i] * scale * exp_terms[i] * 0.5 * v[d];
+                }
+                copy.grad_measure[cell_target_indices[i]] += current_lambda * scale * exp_terms[i];
             }
         }
     }

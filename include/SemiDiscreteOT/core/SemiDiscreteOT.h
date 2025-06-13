@@ -75,12 +75,13 @@ public:
             sot_solver->distance_function = dist;
         }
         
-        ConditionalOStream pcout;
-protected:
     // MPI-related members
     MPI_Comm mpi_communicator;
     const unsigned int n_mpi_processes;
     const unsigned int this_mpi_process;
+    ConditionalOStream pcout;
+
+    std::string& selected_task;
 
     // Solver member
     std::unique_ptr<SotSolver<dim, spacedim>> sot_solver;
@@ -93,7 +94,17 @@ protected:
     SotParameterManager::MultilevelParameters& multilevel_params;
     SotParameterManager::PowerDiagramParameters& power_diagram_params;
     SotParameterManager::TransportMapParameters& transport_map_params;
-    std::string& selected_task;
+
+    LinearAlgebra::distributed::Vector<double> source_density;
+    Vector<double> target_density;
+    std::vector<Point<spacedim>> target_points;
+    std::vector<Point<spacedim>> source_points;
+    // Epsilon scaling handler
+    std::unique_ptr<EpsilonScalingHandler> epsilon_scaling_handler;
+
+    void save_results(const Vector<double>& potentials, const std::string& filename, bool add_epsilon_prefix = true);
+
+protected:
     std::string& io_coding;
 
     // Mesh and DoF handler members
@@ -111,18 +122,9 @@ protected:
     std::unique_ptr<Mapping<dim, spacedim>> mapping;
     std::unique_ptr<FiniteElement<dim, spacedim>> fe_system_target;
     std::unique_ptr<Mapping<dim, spacedim>> mapping_target;
-    LinearAlgebra::distributed::Vector<double> source_density;
-    Vector<double> target_density;
-    std::vector<Point<spacedim>> target_points;
-    std::vector<Point<spacedim>> source_points;
 
     // Mesh manager
     std::unique_ptr<MeshManager<dim, spacedim>> mesh_manager;
-    
-    // Epsilon scaling handler
-    std::unique_ptr<EpsilonScalingHandler> epsilon_scaling_handler;
-    
-    void save_results(const Vector<double>& potentials, const std::string& filename, bool add_epsilon_prefix = true);
     
     // Density normalization helper
     void normalize_density(LinearAlgebra::distributed::Vector<double>& density);
