@@ -67,6 +67,7 @@ class SemiDiscreteOT {
 public:
     SemiDiscreteOT(const MPI_Comm &mpi_communicator);
     void run();
+    void run_solve();
     void save_discrete_measures();
     
     void set_distance_function(
@@ -95,10 +96,21 @@ public:
     SotParameterManager::PowerDiagramParameters& power_diagram_params;
     SotParameterManager::TransportMapParameters& transport_map_params;
 
+    // Mesh and DoF handler members
+    parallel::fullydistributed::Triangulation<dim, spacedim> source_mesh;
+    DoFHandler<dim, spacedim> dof_handler_source;
+    std::unique_ptr<FiniteElement<dim, spacedim>> fe_system;
+    std::unique_ptr<Mapping<dim, spacedim>> mapping;
     LinearAlgebra::distributed::Vector<double> source_density;
+    std::vector<Point<spacedim>> source_points;
+
+    Triangulation<dim, spacedim> target_mesh;
+    DoFHandler<dim, spacedim> dof_handler_target;
+    std::unique_ptr<FiniteElement<dim, spacedim>> fe_system_target;
+    std::unique_ptr<Mapping<dim, spacedim>> mapping_target;
     Vector<double> target_density;
     std::vector<Point<spacedim>> target_points;
-    std::vector<Point<spacedim>> source_points;
+
     // Epsilon scaling handler
     std::unique_ptr<EpsilonScalingHandler> epsilon_scaling_handler;
 
@@ -107,21 +119,15 @@ public:
 protected:
     std::string& io_coding;
 
-    // Mesh and DoF handler members
-    parallel::fullydistributed::Triangulation<dim, spacedim> source_mesh;
-    Triangulation<dim, spacedim> target_mesh;
-    DoFHandler<dim, spacedim> dof_handler_source;
-    DoFHandler<dim, spacedim> dof_handler_target;
-
     std::unique_ptr<VTKHandler<dim>> source_vtk_handler;
     DoFHandler<dim> vtk_dof_handler_source;
     Vector<double> vtk_field_source;
     Triangulation<dim> vtk_tria_source;
     // Finite element and mapping members
-    std::unique_ptr<FiniteElement<dim, spacedim>> fe_system;
-    std::unique_ptr<Mapping<dim, spacedim>> mapping;
-    std::unique_ptr<FiniteElement<dim, spacedim>> fe_system_target;
-    std::unique_ptr<Mapping<dim, spacedim>> mapping_target;
+
+    // If multilevels need to be set up
+    bool prepare_source_multilevel{true};
+    bool prepare_target_multilevel{true};
 
     // Mesh manager
     std::unique_ptr<MeshManager<dim, spacedim>> mesh_manager;

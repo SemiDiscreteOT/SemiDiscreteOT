@@ -284,7 +284,6 @@ double SotSolver<dim, spacedim>::evaluate_functional(
 
         // Synchronize across MPI processes
         global_functional = Utilities::MPI::sum(local_process_functional, mpi_communicator);
-        gradient = 0;  // Reset gradient
         Utilities::MPI::sum(local_process_gradient, mpi_communicator, gradient);
         C_global = Utilities::MPI::sum(local_process_C_sum, mpi_communicator); // Sum C_global across processes
 
@@ -2087,7 +2086,8 @@ direct_computation:
             // Second pass: compute shifted exponentials
             #pragma omp simd reduction(+:total_sum_exp)
             for (size_t i = 0; i < n_target_points; ++i) {
-                const double local_dist2 = std::pow(distance_function(x, target_positions[i]), 2);
+                const double local_dist2 = std::pow(
+                    distance_function(x, target_positions[i]), 2);
                 const double shifted_exp = std::exp((potential_values[i] - 0.5 * local_dist2) * lambda_inv - max_exponent);
                 exp_terms[i] = target_densities[i] * shifted_exp;
                 total_sum_exp += exp_terms[i];
@@ -2096,7 +2096,8 @@ direct_computation:
             // Original computation method
             #pragma omp simd reduction(+:total_sum_exp)
             for (size_t i = 0; i < n_target_points; ++i) {
-                const double local_dist2 = std::pow(distance_function(x, target_positions[i]), 2);
+                const double local_dist2 = std::pow(
+                    distance_function(x, target_positions[i]), 2);
                 exp_terms[i] = target_densities[i] *
                     std::exp((potential_values[i] - 0.5 * local_dist2) * lambda_inv);
                 total_sum_exp += exp_terms[i];

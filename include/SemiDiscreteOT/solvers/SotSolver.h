@@ -261,6 +261,11 @@ public:
         const std::vector<std::pair<Point<spacedim>, double>> &target,
         const SotParameterManager::SolverParameters& params
     );
+
+    // Source and target measures
+    SourceMeasure source_measure;
+    TargetMeasure target_measure;
+    
 private:
 
     class VerboseSolverControl : public SolverControl
@@ -431,10 +436,6 @@ private:
     const unsigned int n_mpi_processes;
     const unsigned int this_mpi_process;
     ConditionalOStream pcout;
-    
-    // Source and target measures
-    SourceMeasure source_measure;
-    TargetMeasure target_measure;
 
     // Solver state
     std::unique_ptr<SolverControl> solver_control;

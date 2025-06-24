@@ -184,9 +184,9 @@ void Lloyd<dim, spacedim>::run_sot_iteration(
           << " target points and " << this->source_density.size() << " source points" << Color::reset << std::endl;
 
     // Source and target measures must be set
-    Assert(this->source_measure.initialized,
+    Assert(this->sot_solver->source_measure.initialized,
         ExcMessage("Source measure must be set before running SOT iteration"));
-    Assert(this->target_measure.initialized,
+    Assert(this->sot_solver->target_measure.initialized,
         ExcMessage("Target points must be set before running SOT iteration"));
 
     Timer timer;

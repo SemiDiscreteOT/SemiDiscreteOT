@@ -286,11 +286,11 @@ void WassersteinBarycenters<dim, spacedim>::run_optimize_barycenters(
             {
                 for (unsigned int j = 0; j < spacedim; ++j)
                 {
-                    barycenters_gradients[k].first*=alpha*weights[i];
-                    barycenters[k].first = sot_solvers[i]->sot_solver->distance_function_exponential_map(
-                        barycenters[k].first, barycenters_gradients[k].first
-                    );
-                    // barycenters[k].first[j] += alpha*weights[i]*barycenters_gradients[k].first[j];                    
+                    // barycenters_gradients[k].first*=alpha*weights[i];
+                    // barycenters[k].first = sot_solvers[i]->sot_solver->distance_function_exponential_map(
+                    //     barycenters[k].first, barycenters_gradients[k].first
+                    // );
+                    barycenters[k].first[j] += alpha*weights[i]*barycenters_gradients[k].first[j];                    
                 }
             }          
         }
@@ -326,7 +326,9 @@ void WassersteinBarycenters<dim, spacedim>::run_optimize_barycenters(
                     );
                     // barycenters[k].first[j] += alpha*weights[i]*barycenters_gradients[k].first[j];
                 }
-                barycenters[k].second -= weights[i]*barycenters_gradients[k].second;
+                barycenters[k].second = barycenters[k].second*(std::exp(alpha*barycenters_gradients[k].second*barycenters[k].second));
+                total_mass += std::abs(barycenters[k].second);
+                // barycenters[k].second -= weights[i]*barycenters_gradients[k].second;
                 total_mass += std::abs(barycenters[k].second);
             }    
             
@@ -401,9 +403,9 @@ void WassersteinBarycenters<dim, spacedim>::run_sot_iterations(
               << " target points and " << sot_solvers[i]->source_density.size() << " source dofs" << Color::reset << std::endl;
     
         // Source and target measures must be set
-        Assert(sot_solvers[i]->source_measure.initialized,
+        Assert(sot_solvers[i]->sot_solver->source_measure.initialized,
             ExcMessage("Source measure must be set before running SOT iteration"));
-        Assert(sot_solvers[i]->target_measure.initialized,
+        Assert(sot_solvers[i]->sot_solver->target_measure.initialized,
             ExcMessage("Target points must be set before running SOT iteration"));
     
     

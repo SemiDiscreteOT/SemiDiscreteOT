@@ -110,20 +110,19 @@ namespace Applications
   private:
     void setup_system();
     
-    MPI_Comm mpi_communicator;
+    MPI_Comm comm;
     ConditionalOStream pcout;
 
     const std::string vtk_folder = "vtk";
     const std::string output_dir = "output/density_field/";
 
-    parallel::distributed::Triangulation<2, 3> tria_1;
-    parallel::distributed::Triangulation<2, 3> tria_2;
-    parallel::distributed::Triangulation<3, 3> volume;
+    parallel::fullydistributed::Triangulation<2, 3> tria_1;
+    parallel::fullydistributed::Triangulation<2, 3> tria_2;
 
     DoFHandler<2, 3> dof_handler_1;
     DoFHandler<2, 3> dof_handler_2;
-    FE_Q<2, 3> fe;
-    MappingQ<2, 3> mapping;
+    FE_SimplexP<2, 3> fe;
+    MappingFE<2, 3> mapping;
 
     AffineConstraints<double> constraints;
 
@@ -134,6 +133,11 @@ namespace Applications
     IndexSet locally_relevant_dofs_2;
 
     unsigned int n_refinements;
+    std::string filename_mesh_1 = "../src/cube.msh";
+    std::string filename_mesh_2 = "../src/cube.msh";
+    double alpha = 10000;
+    unsigned int max_iterations = 100;
+    double absolute_threshold = 1e-6;
   };
 
 }

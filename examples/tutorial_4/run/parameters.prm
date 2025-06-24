@@ -1,6 +1,11 @@
 subsection Tutorial 3
   subsection WassersteinBarycentersUniform
     set number of refinements = 3
+    set first mesh filename = ../src/yjunction_surface_0_processed.msh
+    set second mesh filename = ../src/yjunction_surface_8_processed.msh
+    set learning rate = 10000.0
+    set number of iterations = 100
+    set absolute threshold = 1e-6
   end
 
   subsection SotParameterManager
@@ -25,19 +30,43 @@ subsection Tutorial 3
 
     end
 
+    subsection multilevel_parameters
+      # Source mesh hierarchy parameters
+      set source_enabled = true            # Whether to use source multilevel approach
+      set source_min_vertices = 100      # Minimum vertices for coarsest source level
+      set source_max_vertices = 10000     # Maximum vertices for finest source level
+      set source_hierarchy_dir = output/data_multilevel/source_multilevel  # Source hierarchy directory
+
+      # Target point cloud hierahrchy parameters
+      set target_enabled = true          # Whether to use target multilevel approach
+      set target_min_points = 100        # Minimum points for coarsest target level
+      set target_max_points = 50000       # Maximum points for finest target level
+      set target_hierarchy_dir = output/data_multilevel/target_multilevel  # Target hierarchy directory
+      set use_softmax_potential_transfer = true  # Use softmax for potential transfer
+
+      set use_python_clustering = true      # Whether to use Python scripts for clustering
+      set python_script_name = multilevel_clustering_faiss_gpu.py # Name of the Python script to use
+
+      # Common parameters
+      set output_prefix = output/multilevel/sot  # Output directory prefix
+    end
+
     subsection rsot_solver
       set max_iterations = 10000
-      set tolerance = 1e-3
       set regularization_parameter = 2e-2
-      set epsilon = 1e-20
-      set tau = 1e-4  # Truncation error tolerance for integral radius bound
+      set epsilon = 1e-4
+      set tau = 1e-6  # Truncation error tolerance for integral radius bound
+      set tolerance = 1e-3
+      set distance_threshold_type = geometric
+      set solver_control_type = l1norm
       set verbose_output = false
       set solver_type = BFGS
-      set quadrature_order = 3
+      set quadrature_order = 2
       set number_of_threads = 0
+      set use_log_sum_exp_trick = true
       set use_epsilon_scaling = true
       set epsilon_scaling_factor = 10
-      set epsilon_scaling_steps = 5
+      set epsilon_scaling_steps = 3
       set use_caching = false
       set max_cache_size_mb = 20000
     end

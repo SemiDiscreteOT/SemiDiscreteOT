@@ -95,7 +95,8 @@ int MeshHierarchyManager::getPointsForLevel(int base_points, int level) const {
     return std::max(points, min_vertices_);
 }
 
-int MeshHierarchyManager::generateHierarchyFromFile(const std::string& input_mesh_file, const std::string& output_dir) {
+int MeshHierarchyManager::generateHierarchyFromFile(
+    const std::string& input_mesh_file, const std::string& output_dir) {
     // Initialize Geogram if needed
     initializeGeogram();
 

@@ -195,14 +195,13 @@ void SemiDiscreteOT<dim, spacedim>::setup_source_finite_elements(const bool is_m
     DoFTools::extract_locally_relevant_dofs(dof_handler_source, locally_relevant_dofs);
 
     // Initialize source density.
-    source_density.reinit(locally_owned_dofs, locally_relevant_dofs, mpi_communicator);
+    source_density.reinit(locally_owned_dofs, mpi_communicator);
 
-    // Handle custom density if enabled.
     if (source_params.use_custom_density)
     {
         if (source_params.density_file_format == "vtk")
         {
-            if constexpr (dim==spacedim)
+            if constexpr (dim == spacedim)
             {
                 if (is_multilevel)
                 {
@@ -218,83 +217,11 @@ void SemiDiscreteOT<dim, spacedim>::setup_source_finite_elements(const bool is_m
                     {
                         // Fallback to non-conforming nearest neighbor interpolation if VTKHandler not available
                         pcout << "VTKHandler not available, using non-conforming nearest neighbor interpolation" << std::endl;
-                        Utils::interpolate_non_conforming_nearest(vtk_dof_handler_source,
-                                                                  vtk_field_source,
-                                                                  dof_handler_source,
-                                                                  source_density);
+                        Utils::interpolate_non_conforming_nearest<dim, spacedim>(vtk_dof_handler_source,
+                            vtk_field_source,
+                            dof_handler_source,
+                            source_density);
                     }
-    
-                    pcout << "Source density interpolated from VTK to source mesh" << std::endl;
-                }
-                else
-                {
-                    pcout << "Using custom source density from file: " << source_params.density_file_path << std::endl;
-                    bool density_loaded = false;
-    
-                    try
-                    {
-                        pcout << "Loading VTK file using VTKHandler: " << source_params.density_file_path << std::endl;
-    
-                        // Create VTKHandler instance and store it as a member variable
-                        source_vtk_handler = std::make_unique<VTKHandler<dim>>(source_params.density_file_path);
-    
-                        // Setup the field for interpolation using the configured field name
-                        source_vtk_handler->setup_field(source_params.density_field_name, VTKHandler<dim>::DataLocation::PointData, 0);
-    
-                        pcout << "Source density loaded from VTK file" << std::endl;
-                        pcout << Color::green << "Interpolating source density from VTK to source mesh" << Color::reset << std::endl;
-    
-                        // Interpolate the field to the source mesh
-                        VectorTools::interpolate(dof_handler_source, *source_vtk_handler, source_density);
-    
-                        pcout << "Successfully interpolated VTK field to source mesh" << std::endl;
-                        density_loaded = true;
-                    }
-                    catch (const std::exception &e)
-                    {
-                        pcout << Color::red << "Error loading VTK file: " << e.what() << Color::reset << std::endl;
-                        density_loaded = false;
-                    }
-    
-                    if (!density_loaded)
-                    {
-                        pcout << Color::red << "Failed to load custom density, using uniform density" << Color::reset << std::endl;
-                        source_density = 1.0;
-                    }
-                }
-
-            } else {
-                pcout << Color::red << "Unsupported dim!=spacedim" << Color::reset << std::endl;
-                throw std::runtime_error("Unsupported dimension for source mesh");
-            }
-        }
-        else
-        {
-            pcout << Color::red << "Unsupported density file format, using uniform density" << Color::reset << std::endl;
-            source_density = 1.0;
-        }
-    }
-    else
-    {
-        pcout << Color::green << "Using uniform source density" << Color::reset << std::endl;
-        source_density = 1.0;
-    }
-
-    if (source_params.use_custom_density)
-    {
-        if (source_params.density_file_format == "vtk")
-        {
-            if constexpr (dim == spacedim)
-            {
-                if (is_multilevel)
-                {
-                    pcout << Color::green << "Interpolating source density from VTK to source mesh" << Color::reset << std::endl;
-                    // For multilevel, use non-conforming nearest neighbor interpolation.
-                    Utils::interpolate_non_conforming_nearest<dim, spacedim>(vtk_dof_handler_source,
-                        vtk_field_source,
-                        dof_handler_source,
-                        source_density);                
-                    pcout << "Source density interpolated from VTK to source mesh" << std::endl;
                 } else
                 {
                     pcout << "Using custom source density from file: " << source_params.density_file_path << std::endl;
@@ -347,7 +274,6 @@ void SemiDiscreteOT<dim, spacedim>::setup_source_finite_elements(const bool is_m
         source_density = 1.0;
     }
 
-    source_density.update_ghost_values();
     normalize_density(source_density);
 
     unsigned int n_locally_owned = 0;
@@ -1175,7 +1101,7 @@ void SemiDiscreteOT<dim, spacedim>::run_source_multilevel()
     Vector<double> previous_source_potentials;
 
     mesh_manager->load_source_mesh(source_mesh);                                
-    setup_source_finite_elements();     
+    setup_source_finite_elements(false);     
     setup_target_points(); 
 
     for (size_t source_level_idx = 0; source_level_idx < source_mesh_files.size(); ++source_level_idx)
@@ -1632,7 +1558,8 @@ typename std::enable_if<d == 3 && s == 3>::type SemiDiscreteOT<dim, spacedim>::r
 }
 
 template <int dim, int spacedim>
-void SemiDiscreteOT<dim, spacedim>::prepare_source_multilevel()
+void SemiDiscreteOT<dim, spacedim>::prepare_source_multilevel(
+    )
 {
     pcout << "Preparing multilevel mesh hierarchy..." << std::endl;
 
@@ -1640,7 +1567,7 @@ void SemiDiscreteOT<dim, spacedim>::prepare_source_multilevel()
     MeshHierarchy::MeshHierarchyManager hierarchy_manager(
         multilevel_params.source_min_vertices,
         multilevel_params.source_max_vertices);
-
+    
     // Ensure source mesh exists
     const std::string source_mesh_file = "output/data_mesh/source.msh";
     if (!std::filesystem::exists(source_mesh_file))
@@ -2203,6 +2130,49 @@ void SemiDiscreteOT<dim, spacedim>::save_interpolated_fields()
           << Color::green << Color::bold
           << "Field interpolation visualization completed!" << Color::reset << std::endl;
     pcout << "Results saved in: " << output_dir << std::endl;
+}
+
+template <int dim, int spacedim>
+void SemiDiscreteOT<dim, spacedim>::run_solve()
+{
+    if (prepare_source_multilevel && selected_task == "prepare_source_multilevel")
+    {
+        prepare_source_multilevel();
+        prepare_source_multilevel = false;
+    }
+    else if (prepare_target_multilevel && selected_task == "prepare_target_multilevel")
+    {
+        mesh_manager->load_target_mesh(target_mesh);
+        prepare_target_multilevel();
+        prepare_target_multilevel = false;
+    }
+    else if (prepare_multilevel && selected_task == "prepare_multilevel")
+    {
+        if (prepare_source_multilevel && multilevel_params.source_enabled)
+        {
+            prepare_source_multilevel();
+            prepare_source_multilevel = false;
+        }
+        if (prepare_target_multilevel && multilevel_params.target_enabled)
+        {
+            mesh_manager->load_target_mesh(target_mesh);
+            prepare_target_multilevel();
+            prepare_target_multilevel = false;
+        }
+    }
+
+    if (selected_task == "target_multilevel")
+    {
+        run_target_multilevel();
+    }
+    else if (selected_task == "source_multilevel")
+    {
+        run_source_multilevel();
+    }
+    else if (selected_task == "multilevel")
+    {
+        run_multilevel();
+    }
 }
 
 template <int dim, int spacedim>

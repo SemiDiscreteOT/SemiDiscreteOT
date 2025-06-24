@@ -10,29 +10,21 @@ namespace Applications
     const MPI_Comm &comm)
       : WassersteinBarycenters<2, 3>(n_measures, weights, comm),
         ParameterAcceptor("/Tutorial 3/WassersteinBarycentersUniform"), 
-        mpi_communicator(MPI_COMM_WORLD), 
-        pcout(std::cout, (Utilities::MPI::this_mpi_process(mpi_communicator) == 0)),
-        tria_1(
-            mpi_communicator,
-            typename Triangulation<2, 3>::MeshSmoothing(
-                Triangulation<2, 3>::smoothing_on_refinement |
-                Triangulation<2, 3>::smoothing_on_coarsening)),
-        tria_2(
-          mpi_communicator,
-          typename Triangulation<2, 3>::MeshSmoothing(
-              Triangulation<2, 3>::smoothing_on_refinement |
-              Triangulation<2, 3>::smoothing_on_coarsening)),
-        volume(
-          mpi_communicator,
-          typename Triangulation<3, 3>::MeshSmoothing(
-              Triangulation<3, 3>::smoothing_on_refinement |
-              Triangulation<3, 3>::smoothing_on_coarsening)),
+        comm(MPI_COMM_WORLD), 
+        pcout(std::cout, (Utilities::MPI::this_mpi_process(comm) == 0)),
+        tria_1(comm),
+        tria_2(comm),
         dof_handler_1(tria_1), 
         dof_handler_2(tria_2),
         fe(1), 
-        mapping(1)
+        mapping(fe)
   {
     add_parameter("number of refinements", n_refinements);
+    add_parameter("first mesh filename", filename_mesh_1);
+    add_parameter("second mesh filename", filename_mesh_2);
+    add_parameter("learning rate", alpha);
+    add_parameter("number of iterations", max_iterations);
+    add_parameter("absolute threshold", absolute_threshold);
 
     // Create output directory structure
     if (!std::filesystem::exists("output"))
@@ -51,43 +43,68 @@ namespace Applications
 
   void WassersteinBarycentersUniform::setup_system()
   {
-    std::string name_1 = "sphere";
-    std::string name_2 = "cylinder";
+    std::string name_1 = "mesh_1";
+    std::string name_2 = "mesh_2";
 
+    auto partition_mesh = [](::dealii::Triangulation<2, 3> &tria,
+      const MPI_Comm               &mpi_comm,
+      const unsigned int /*group_size*/) {
+        GridTools::partition_triangulation(
+        Utilities::MPI::n_mpi_processes(mpi_comm), tria);
+      };
 
-    GridGenerator::hyper_sphere(tria_1);
-    tria_1.refine_global(n_refinements);
+    auto generate_mesh_lambda_1 =
+      [this](::dealii::Triangulation<2, 3> &tria) {
+        GridIn<2, 3> gridin;
+        gridin.attach_triangulation(tria);
+        std::ifstream file(filename_mesh_1);
+        gridin.read_msh(file);
+    };
+
+    auto construction_data_1 = TriangulationDescription::Utilities::
+    create_description_from_triangulation_in_groups<2, 3>(
+      generate_mesh_lambda_1,
+      partition_mesh,
+      comm,
+      Utilities::MPI::n_mpi_processes(comm));
+
+    tria_1.create_triangulation(construction_data_1);
 
     dof_handler_1.distribute_dofs(fe);
 
     pcout << "Tria 1\n"
           << "  Number of active cells: "
-          << tria_1.n_active_cells()
+          << tria_1.n_cells()
           << std::endl
-          << "  Total number of cells: " << tria_1.n_cells()
+          << "  Total number of cells: " << tria_1.n_global_active_cells()
           << std::endl
           << "  Number of degrees of freedom: " << dof_handler_1.n_dofs() <<  std::endl;
+      
+    auto generate_mesh_lambda_2 =
+      [this](::dealii::Triangulation<2, 3> &tria) {
+        GridIn<2, 3> gridin;
+        gridin.attach_triangulation(tria);
+        std::ifstream file(filename_mesh_2);
+        gridin.read_msh(file);
+    };
 
-    const double length = 0.5;
-    const double width = 0.5;
-    const double height = 4.0;
-    std::vector<unsigned int> repetitions = {1, 1, 4};
-    GridGenerator::subdivided_hyper_rectangle(
-      volume,
-      repetitions,
-      Point<3>(-length/2, -width/2, -height/2),
-      Point<3>(length/2, width/2, height/2),
-      true);
-    GridGenerator::extract_boundary_mesh(volume, tria_2);
-    tria_2.refine_global(n_refinements);
+    auto construction_data_2 = TriangulationDescription::Utilities::
+    create_description_from_triangulation_in_groups<2, 3>(
+      generate_mesh_lambda_2,
+      partition_mesh,
+      comm,
+      Utilities::MPI::n_mpi_processes(comm));
+
+    tria_2.create_triangulation(construction_data_2);
+    
     dof_handler_2.reinit(tria_2);
     dof_handler_2.distribute_dofs(fe);
 
     pcout << "Tria 2\n"
           << "  Number of active cells: "
-          << tria_2.n_active_cells()
+          << tria_2.n_cells()
           << std::endl
-          << "  Total number of cells: " << tria_2.n_cells()
+          << "  Total number of cells: " << tria_2.n_global_active_cells()
           << std::endl
           << "  Number of degrees of freedom: " << dof_handler_2.n_dofs() <<  std::endl;
     pcout << std::endl;
@@ -102,7 +119,7 @@ namespace Applications
                          DataOut<2, 3>::curved_inner_cells);
     std::string output = "output/data_mesh/";
     data_out_1.write_vtu_with_pvtu_record(
-    output, name_1, 0, mpi_communicator);
+    output, name_1, 0, comm);
 
     DataOut<2, 3> data_out_2;
     data_out_2.attach_dof_handler(dof_handler_2);
@@ -113,7 +130,7 @@ namespace Applications
     data_out_2.build_patches(mapping, mapping.get_degree(),
                          DataOut<2, 3>::curved_inner_cells);
     data_out_2.write_vtu_with_pvtu_record(
-    output, name_2, 0, mpi_communicator);
+    output, name_2, 0, comm);
 
     // init dofs
     locally_owned_dofs_1 = dof_handler_1.locally_owned_dofs();
@@ -122,12 +139,13 @@ namespace Applications
     locally_owned_dofs_2 = dof_handler_2.locally_owned_dofs();
     locally_relevant_dofs_2 =
         DoFTools::extract_locally_relevant_dofs(dof_handler_2);
+
   }
 
   void WassersteinBarycentersUniform::run()
   {
     pcout << "Running with PETSc on "
-          << Utilities::MPI::n_mpi_processes(mpi_communicator)
+          << Utilities::MPI::n_mpi_processes(comm)
           << " MPI rank(s)..." << std::endl;
     pcout << "n threads: " << dealii::MultithreadInfo::n_threads() << std::endl;
     
@@ -139,7 +157,7 @@ namespace Applications
     // manually set up the first source density
     {
       this->sot_solvers[0]->source_density.reinit(
-        locally_owned_dofs_1, locally_relevant_dofs_1, mpi_communicator);
+        locally_owned_dofs_1, locally_relevant_dofs_1, comm);
       for (auto idx : this->sot_solvers[0]->source_density.locally_owned_elements())
         this->sot_solvers[0]->source_density[idx] = 1;
       this->sot_solvers[0]->source_density.compress(dealii::VectorOperation::insert);
@@ -151,6 +169,7 @@ namespace Applications
         this->sot_solvers[0]->solver_params.quadrature_order
       );
       this->sot_solvers[0]->source_density.update_ghost_values();
+      pcout << "Init source 1\n";
 
       // normalize source
       auto quadrature_1 = Utils::create_quadrature_for_mesh<2, 3>(
@@ -176,19 +195,19 @@ namespace Applications
           }
       }
       double global_l1_norm = Utilities::MPI::sum(
-        local_l1_norm, mpi_communicator);
+        local_l1_norm, comm);
       pcout << "Density L1 norm before normalization tria_1: " << global_l1_norm << std::endl;
 
       this->sot_solvers[0]->source_density /= global_l1_norm;
       this->sot_solvers[0]->source_density.update_ghost_values();
 
-      pcout << "  source measure dofs: " << this->sot_solvers[0]->source_density.size() << "; target measure: " << this->sot_solvers[0]->target_density.size() << std::endl;
+      pcout << "  source measure dofs: " << this->sot_solvers[0]->source_density.size()  << std::endl;
     }
 
     // manually set up the second source density
     {
       this->sot_solvers[1]->source_density.reinit(
-        locally_owned_dofs_2, locally_relevant_dofs_2, mpi_communicator);
+        locally_owned_dofs_2, locally_relevant_dofs_2, comm);
       for (auto idx : this->sot_solvers[1]->source_density.locally_owned_elements())
         this->sot_solvers[1]->source_density[idx] = 1;
       this->sot_solvers[1]->source_density.compress(dealii::VectorOperation::insert);
@@ -200,6 +219,7 @@ namespace Applications
         this->sot_solvers[1]->solver_params.quadrature_order
       );
       this->sot_solvers[1]->source_density.update_ghost_values();
+      pcout << "Init source 2\n";
   
       // normalize source
       auto quadrature_2 = Utils::create_quadrature_for_mesh<2, 3>(
@@ -225,32 +245,62 @@ namespace Applications
           }
       }
       double global_l1_norm = Utilities::MPI::sum(
-        local_l1_norm, mpi_communicator);
+        local_l1_norm, comm);
       pcout << "Density L1 norm before normalization tria_2: " << global_l1_norm << std::endl;
 
       this->sot_solvers[1]->source_density /= global_l1_norm;
       this->sot_solvers[1]->source_density.update_ghost_values();
 
-      pcout << "  source measure dofs: " << this->sot_solvers[1]->source_density.size() << "; target measure: " << this->sot_solvers[1]->target_density.size() << std::endl;
+      pcout << "  source measure dofs: " << this->sot_solvers[1]->source_density.size() << std::endl;
     }
 
-    // get support points from first tria
-    std::vector<Point<3>> support_points;
-    DoFTools::map_dofs_to_support_points(
-      mapping, dof_handler_1, support_points);
-    unsigned int n_support_points = support_points.size();
-    std::vector<double> loc_sp(n_support_points * 3);
-    for (auto idx: locally_owned_dofs_1)
-      for (unsigned int d = 0; d < 3; ++d)
-        loc_sp[idx * 3 + d] = support_points[idx][d];
-    std::vector<double> global_sp(n_support_points * 3);
+    // get support points from first tria    
+    unsigned int local_n_cells{0};
+    for (const auto &cell : tria_1.active_cell_iterators()) {
+      if (cell->is_locally_owned())
+        local_n_cells +=1;
+    }
+
+    std::vector<unsigned int> n_cells_per_rank(
+      Utilities::MPI::n_mpi_processes(comm));
+    MPI_Allgather(&local_n_cells, 1, MPI_UNSIGNED, 
+      n_cells_per_rank.data(), 1, MPI_UNSIGNED, comm);
+      
+    // Calculate the accumulated number of cells
+    std::vector<unsigned int> left(Utilities::MPI::n_mpi_processes(comm));
+    std::vector<unsigned int> right(Utilities::MPI::n_mpi_processes(comm));
+    left[0] = 0;
+    right[0] = n_cells_per_rank[0];
+    for (unsigned int i = 1; i < Utilities::MPI::n_mpi_processes(comm); ++i) {
+      left[i] = left[i-1] + n_cells_per_rank[i-1]*3;
+      right[i] = right[i-1] + n_cells_per_rank[i]*3;
+    }
+        
+    const unsigned int n_global_cells = right[Utilities::MPI::n_mpi_processes(comm)-1]/3;
+    pcout << "Total number of global cells: " << n_global_cells << std::endl;
+    std::vector<double> loc_sp(n_global_cells * 3, 0);
+    unsigned int shift = left[Utilities::MPI::this_mpi_process(comm)];
+    unsigned int cell_index = 0;
+
+    for (const auto &cell : tria_1.active_cell_iterators())
+    {
+      if (cell->is_locally_owned()) {
+        for (unsigned int d = 0; d < 3; ++d)
+          loc_sp[shift + cell_index * 3 + d] = cell->center()[d];
+        cell_index+=1;
+      }
+    }
+
+    std::vector<double> global_sp(n_global_cells * 3, 0);
     MPI_Allreduce(
       loc_sp.data(), global_sp.data(),
-      n_support_points * 3, MPI_DOUBLE, MPI_SUM, mpi_communicator);
-    support_points.clear();
-    for (unsigned int i = 0; i < n_support_points; ++i) {
+      n_global_cells * 3, MPI_DOUBLE, MPI_SUM, comm);
+
+    std::vector<Point<3>> support_points;
+    unsigned int factor = 1;
+    for (unsigned int i = 0; i < int(n_global_cells/factor); ++i) {
       support_points.emplace_back(
-        global_sp[i * 3 + 0], global_sp[i * 3 + 1], global_sp[i * 3 + 2]);
+        global_sp[i*3*factor + 0], global_sp[i*3*factor + 1], global_sp[i*3*factor + 2]);
     }
     pcout << "Number of support points: " << support_points.size() << std::endl;
 
@@ -271,9 +321,6 @@ namespace Applications
     }
 
     // run the LLoyd algorithm
-    const double absolute_threshold = 1e-8;
-    const unsigned int max_iterations = 100;
-    const double alpha = 10000; // step
     this->run_wasserstein_barycenters(
       absolute_threshold, absolute_threshold, max_iterations, alpha);
   }
@@ -290,8 +337,8 @@ int main(int argc, char *argv[])
     deallog.depth_console(2);
 
     Utilities::MPI::MPI_InitFinalize mpi_initialization(argc, argv);
-    MPI_Comm mpi_communicator = MPI_COMM_WORLD;
-    const unsigned int this_mpi_process = Utilities::MPI::this_mpi_process(mpi_communicator);
+    MPI_Comm comm = MPI_COMM_WORLD;
+    const unsigned int this_mpi_process = Utilities::MPI::this_mpi_process(comm);
 
     // Create conditional output stream
     ConditionalOStream pcout(std::cout, this_mpi_process == 0);
@@ -299,7 +346,7 @@ int main(int argc, char *argv[])
     unsigned int n_measures = 2;
     std::vector<double> weights(n_measures, 1.0 / n_measures);
     WassersteinBarycentersUniform wasserstein_barycenters_uniform(
-      n_measures, weights, mpi_communicator);
+      n_measures, weights, comm);
     
     // Use command line argument if provided, otherwise use default
     std::string param_file = (argc > 1) ? argv[1] : "parameters.prm";
