@@ -97,7 +97,7 @@ void Lloyd<dim, spacedim>::run_centroid_iteration(
 
         if (solver_config.use_epsilon_scaling && this->epsilon_scaling_handler) {
             this->pcout << "Using epsilon scaling with EpsilonScalingHandler:" << std::endl
-                << "  Initial epsilon: " << solver_config.regularization_param << std::endl
+                << "  Initial epsilon: " << solver_config.epsilon << std::endl
                 << "  Scaling factor: " << solver_config.epsilon_scaling_factor << std::endl
                 << "  Number of steps: " << solver_config.epsilon_scaling_steps << std::endl;
             // Compute epsilon distribution for a single level
@@ -112,7 +112,7 @@ void Lloyd<dim, spacedim>::run_centroid_iteration(
                     this->pcout << "\nEpsilon scaling step " << i + 1 << "/" << epsilon_sequence.size()
                         << " (λ = " << epsilon_sequence[i] << ")" << std::endl;
 
-                    solver_config.regularization_param = epsilon_sequence[i];
+                    solver_config.epsilon = epsilon_sequence[i];
 
                     try {
                         this->sot_solver->evaluate_weighted_barycenters(
@@ -184,9 +184,9 @@ void Lloyd<dim, spacedim>::run_sot_iteration(
           << " target points and " << this->source_density.size() << " source points" << Color::reset << std::endl;
 
     // Source and target measures must be set
-    Assert(this->source_measure.initialized,
+    Assert(this->sot_solver->source_measure.initialized,
         ExcMessage("Source measure must be set before running SOT iteration"));
-    Assert(this->target_measure.initialized,
+    Assert(this->sot_solver->target_measure.initialized,
         ExcMessage("Target points must be set before running SOT iteration"));
 
     Timer timer;
@@ -201,7 +201,7 @@ void Lloyd<dim, spacedim>::run_sot_iteration(
         if (solver_config.use_epsilon_scaling && this->epsilon_scaling_handler)
         {
             this->pcout << "Using epsilon scaling with EpsilonScalingHandler:" << std::endl
-                  << "  Initial epsilon: " << solver_config.regularization_param << std::endl
+                  << "  Initial epsilon: " << solver_config.epsilon << std::endl
                   << "  Scaling factor: " << solver_config.epsilon_scaling_factor << std::endl
                   << "  Number of steps: " << solver_config.epsilon_scaling_steps << std::endl;
             // Compute epsilon distribution for a single level
@@ -218,7 +218,7 @@ void Lloyd<dim, spacedim>::run_sot_iteration(
                     this->pcout << "\nEpsilon scaling step " << i + 1 << "/" << epsilon_sequence.size()
                           << " (λ = " << epsilon_sequence[i] << ")" << std::endl;
 
-                    solver_config.regularization_param = epsilon_sequence[i];
+                    solver_config.epsilon = epsilon_sequence[i];
 
                     try
                     {
@@ -269,10 +269,10 @@ void Lloyd<dim, spacedim>::run_sot_iteration(
           
     // Save convergence info
     if (Utilities::MPI::this_mpi_process(this->mpi_communicator) == 0) {
-        std::string eps_dir = "output/epsilon_" + Utils::to_scientific_string(solver_config.regularization_param);
+        std::string eps_dir = "output/epsilon_" + Utils::to_scientific_string(solver_config.epsilon);
         fs::create_directories(eps_dir);
         std::ofstream conv_info(eps_dir + "/convergence_info.txt");
-        conv_info << "Regularization parameter (λ): " << solver_config.regularization_param << "\n";
+        conv_info << "Regularization parameter (λ): " << solver_config.epsilon << "\n";
         conv_info << "Number of iterations: " << this->sot_solver->get_last_iteration_count() << "\n";
         conv_info << "Final function value: " << this->sot_solver->get_last_functional_value() << "\n";
         conv_info << "Last threshold value: " << this->sot_solver->get_last_distance_threshold() << "\n";
@@ -289,7 +289,7 @@ void Lloyd<dim, spacedim>::run()
     if (this->solver_params.use_epsilon_scaling) {
         this->epsilon_scaling_handler = std::make_unique<EpsilonScalingHandler>(
             this->mpi_communicator,
-            this->solver_params.regularization_param,
+            this->solver_params.epsilon,
             this->solver_params.epsilon_scaling_factor,
             this->solver_params.epsilon_scaling_steps
         );

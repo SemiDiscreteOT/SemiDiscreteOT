@@ -35,10 +35,24 @@
 #include <deal.II/fe/fe_q.h>
 #include <deal.II/fe/mapping_fe.h>
 #include <deal.II/fe/mapping_q1.h>
+#include <deal.II/lac/generic_linear_algebra.h>
 
 #include "SemiDiscreteOT/utils/ParameterManager.h"
 #include "SemiDiscreteOT/utils/ColorDefinitions.h"
 #include "SemiDiscreteOT/solvers/Distance.h"
+
+namespace LA
+{
+#if defined(DEAL_II_WITH_PETSC)
+  using namespace dealii::LinearAlgebraPETSc;
+#define USE_PETSC_LA
+#elif defined(DEAL_II_WITH_TRILINOS)
+  using namespace dealii::LinearAlgebraTrilinos;
+#define USE_TRILINOS_LA
+#else
+#error DEAL_II_WITH_PETSC or DEAL_II_WITH_TRILINOS required
+#endif
+} // namespace LA
 
 using namespace dealii;
 
@@ -131,21 +145,14 @@ public:
         Vector<double> potential_values;  // For softmax refinement
         double local_C_sum = 0.0; // Sum of scale terms for this cell
 
+        Vector<double> barycenters_values; // Needed for LLoyd
+
         CopyData(const unsigned int n_target_points)
             : gradient_values(n_target_points),
-              potential_values(n_target_points) 
+              potential_values(n_target_points),
+              barycenters_values(spacedim*n_target_points)
         {
             gradient_values = 0;  // Initialize local gradient to zero
-        }
-    };
-
-    // Copy data barycenters evaluation
-    struct CopyDataBarycenters {
-        Vector<double> barycenters_values;  // Local barycenters contribution
-
-        CopyDataBarycenters(const unsigned int n_target_points)
-            : barycenters_values(spacedim*n_target_points)
-        {
             barycenters_values = 0;  // Initialize local barycenters to zero
         }
     };
@@ -182,9 +189,7 @@ public:
     double get_last_functional_value() const { return global_functional; }
     unsigned int get_last_iteration_count() const;
     bool get_convergence_status() const;
-    double get_cache_size_mb() const;
     double get_last_distance_threshold() const { return current_distance_threshold; }
-    bool get_cache_limit_reached() const { return cache_limit_reached; }
     double get_C_global() const { return C_global; }
 
     /**
@@ -227,6 +232,14 @@ public:
     // distance function methods
     void set_distance_function(const std::string &distance_name);
 
+    void get_potential_conditioned_density(
+        const DoFHandler<dim, spacedim> &dof_handler,
+        const Mapping<dim, spacedim> &mapping,
+        const Vector<double> &potential,
+        const std::vector<unsigned int> &potential_indices,
+        std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> &conditioned_densities,
+        LinearAlgebra::distributed::Vector<double, MemorySpace::Host> &number_of_non_thresholded_targets);
+
     // Distance function
     std::string distance_name;
     std::function<double(const Point<spacedim>&, const Point<spacedim>&)> distance_function;
@@ -240,6 +253,10 @@ public:
     // Compute Hessian matrix for Newton solver
     void compute_hessian(const Vector<double>& potential,
                         LAPACKFullMatrix<double>& hessian_out);
+
+    // Source and target measures
+    SourceMeasure source_measure;
+    TargetMeasure target_measure;
 
 private:
 
@@ -344,35 +361,28 @@ private:
         double last_check_value = 0.0;
     };
 
-    // Cache for local assembly computations
-    struct CellCache {
-        std::vector<std::size_t> target_indices;
-        std::vector<double> precomputed_distance_terms;
-        bool is_valid;
-
-        CellCache() : is_valid(false) {}
-    };
-
-    // Local assembly methods
-    void local_assemble(const typename DoFHandler<dim, spacedim>::active_cell_iterator& cell,
-    ScratchData& scratch,
-    CopyData& copy);
-
-    // Local assembly methods for barycenters
-    void local_assemble_barycenters(
+    // Local assembly methods        
+    void local_assemble(
         const typename DoFHandler<dim, spacedim>::active_cell_iterator& cell,
         ScratchData& scratch,
-        CopyDataBarycenters& copy);
+        CopyData& copy,
+        std::function<void(CopyData&,
+                           const Point<spacedim>&,
+                           const std::vector<std::size_t>&,
+                           const std::vector<double>&,
+                           const std::vector<double>&,
+                           const double&,
+                           const double&,
+                           const double&,
+                           const double&,
+                           const double&)> function_call);
     
     // Distance threshold and caching methods
     void compute_distance_threshold() const;
-    void reset_distance_threshold_cache() const;
     std::vector<std::size_t> find_nearest_target_points(const Point<spacedim>& query_point) const;
-    double estimate_cache_entry_size_mb(const std::vector<std::size_t>& target_indices, 
-                                      unsigned int n_q_points) const;
     double compute_integral_radius_bound(
         const Vector<double>& potentials,
-        double lambda,
+        double epsilon,
         double tolerance,
         double C_value,
         double current_functional_val) const;
@@ -386,48 +396,27 @@ private:
         std::vector<Vector<double>>& barycenters_gradients_out,
         std::vector<Point<spacedim>>& barycenters_out
     );
-    void local_assemble_barycenters_non_euclidean(
-        const typename DoFHandler<dim, spacedim>::active_cell_iterator& cell,
-        ScratchData& scratch,
-        CopyDataBarycenters& copy,
-        std::vector<Point<spacedim>>& barycenters_out);
-
     void compute_weighted_barycenters_euclidean(
         const Vector<double>& potentials,
         std::vector<Point<spacedim>>& barycenters_out);
-    void local_assemble_barycenters_euclidean(
-        const typename DoFHandler<dim, spacedim>::active_cell_iterator& cell,
-        ScratchData& scratch,
-        CopyDataBarycenters& copy);
 
     // MPI and parallel related members
     MPI_Comm mpi_communicator;
     const unsigned int n_mpi_processes;
     const unsigned int this_mpi_process;
     ConditionalOStream pcout;
-    
-    // Source and target measures
-    SourceMeasure source_measure;
-    TargetMeasure target_measure;
 
     // Solver state
     std::unique_ptr<SolverControl> solver_control;
     mutable double current_distance_threshold;
     mutable double effective_distance_threshold;
-    mutable bool is_caching_active;
     const Vector<double>* current_potential;
-    double current_lambda;
+    double current_epsilon;
     mutable double global_functional;
     Vector<double> gradient;  
     double covering_radius;           
     double min_target_density;       
     double C_global = 0.0; // Sum of all scale terms
-
-    mutable std::unordered_map<std::string, CellCache> cell_caches;
-    mutable std::mutex cache_mutex;
-    std::atomic<size_t> total_target_points{0};
-    mutable std::atomic<double> current_cache_size_mb{0.0};   ///< Current cache size in MB
-    mutable bool cache_limit_reached{false};                  ///< Flag indicating if cache limit was reached
 
     // Current solver parameters
     SotParameterManager::SolverParameters current_params;

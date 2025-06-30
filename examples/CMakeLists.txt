@@ -9,6 +9,9 @@ DEAL_II_INITIALIZE_CACHED_VARIABLES()
 ADD_SUBDIRECTORY(tutorial_1)
 
 # Add all example subdirectories
+ADD_SUBDIRECTORY(tutorial_2)
+
+# Add all example subdirectories
 ADD_SUBDIRECTORY(tutorial_3)
 
 # Common settings for all examples
