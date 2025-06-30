@@ -675,7 +675,7 @@ void SemiDiscreteOT<dim, spacedim>::assign_potentials_by_hierarchy(
             target_points_coarse,  // target_points_coarse
             target_density_coarse, // target_density_coarse
             prev_potentials,       // potentials_coarse
-            solver_params.regularization_param,
+            solver_params.epsilon,
             fine_level,
             child_indices_);
 
@@ -744,7 +744,7 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_sot()
         if (solver_config.use_epsilon_scaling && epsilon_scaling_handler)
         {
             pcout << "Using epsilon scaling with EpsilonScalingHandler:" << std::endl
-                  << "  Initial epsilon: " << solver_config.regularization_param << std::endl
+                  << "  Initial epsilon: " << solver_config.epsilon << std::endl
                   << "  Scaling factor: " << solver_config.epsilon_scaling_factor << std::endl
                   << "  Number of steps: " << solver_config.epsilon_scaling_steps << std::endl;
             // Compute epsilon distribution for a single level
@@ -761,7 +761,7 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_sot()
                     pcout << "\nEpsilon scaling step " << i + 1 << "/" << epsilon_sequence.size()
                           << " (λ = " << epsilon_sequence[i] << ")" << std::endl;
 
-                    solver_config.regularization_param = epsilon_sequence[i];
+                    solver_config.epsilon = epsilon_sequence[i];
 
                     try
                     {
@@ -814,10 +814,10 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_sot()
           
     // Save convergence info
     if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
-        std::string eps_dir = "output/epsilon_" + Utils::to_scientific_string(solver_config.regularization_param);
+        std::string eps_dir = "output/epsilon_" + Utils::to_scientific_string(solver_config.epsilon);
         fs::create_directories(eps_dir);
         std::ofstream conv_info(eps_dir + "/convergence_info.txt");
-        conv_info << "Regularization parameter (λ): " << solver_config.regularization_param << "\n";
+        conv_info << "Regularization parameter (λ): " << solver_config.epsilon << "\n";
         conv_info << "Number of iterations: " << sot_solver->get_last_iteration_count() << "\n";
         conv_info << "Final function value: " << sot_solver->get_last_functional_value() << "\n";
         conv_info << "Last threshold value: " << sot_solver->get_last_distance_threshold() << "\n";
@@ -889,7 +889,7 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_target_multilevel()
     // Store original solver parameters
     const unsigned int original_max_iterations = solver_params.max_iterations;
     const double original_tolerance = solver_params.tolerance;
-    const double original_regularization = solver_params.regularization_param;
+    const double original_regularization = solver_params.epsilon;
 
     // Create output directory
     std::string eps_dir = "output/epsilon_" + Utils::to_scientific_string(original_regularization);
@@ -1013,7 +1013,7 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_target_multilevel()
                           << " (λ = " << current_epsilon << ")" << std::endl;
 
                     // Update regularization parameter
-                    solver_config.regularization_param = current_epsilon;
+                    solver_config.epsilon = current_epsilon;
 
                     try
                     {
@@ -1044,7 +1044,7 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_target_multilevel()
             else
             {
                 // If no epsilon values for this level, use the smallest epsilon from the sequence
-                solver_config.regularization_param = original_regularization;
+                solver_config.epsilon = original_regularization;
 
                 try
                 {
@@ -1105,7 +1105,7 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_target_multilevel()
         if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0)
         {
             std::ofstream conv_info(level_output_dir + "/convergence_info.txt");
-            conv_info << "Regularization parameter (λ): " << solver_params.regularization_param << "\n";
+            conv_info << "Regularization parameter (λ): " << solver_params.epsilon << "\n";
             conv_info << "Number of iterations: " << sot_solver->get_last_iteration_count() << "\n";
             conv_info << "Final function value: " << sot_solver->get_last_functional_value() << "\n";
             conv_info << "Convergence achieved: " << sot_solver->get_convergence_status() << "\n";
@@ -1128,7 +1128,7 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_target_multilevel()
     // Restore original parameters
     solver_params.tolerance = original_tolerance;
     solver_params.max_iterations = original_max_iterations;
-    solver_params.regularization_param = original_regularization;
+    solver_params.epsilon = original_regularization;
 
     global_timer.stop();
     const double total_time = global_timer.wall_time();
@@ -1182,7 +1182,7 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_source_multilevel()
     // Backup original solver parameters.
     const unsigned int original_max_iterations = solver_params.max_iterations;
     const double original_tolerance = solver_params.tolerance;
-    const double original_regularization = solver_params.regularization_param;
+    const double original_regularization = solver_params.epsilon;
 
     // Create output directory structure.
     std::string eps_dir = "output/epsilon_" + Utils::to_scientific_string(original_regularization);
@@ -1226,7 +1226,7 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_source_multilevel()
                     double current_epsilon = level_epsilons[eps_idx];
                     pcout << "  Epsilon scaling step " << eps_idx + 1 << "/" << level_epsilons.size()
                           << " (λ = " << current_epsilon << ")" << std::endl;
-                    solver_params.regularization_param = current_epsilon;
+                    solver_params.epsilon = current_epsilon;
 
                     try
                     {
@@ -1253,7 +1253,7 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_source_multilevel()
             }
         }
         // If no epsilon scaling is applied or no epsilon values exist for this level.
-        solver_params.regularization_param = original_regularization;
+        solver_params.epsilon = original_regularization;
         sot_solver->solve(potentials, solver_params);
     };
 
@@ -1344,7 +1344,7 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_source_multilevel()
 
     solver_params.max_iterations = original_max_iterations;
     solver_params.tolerance = original_tolerance;
-    solver_params.regularization_param = original_regularization;
+    solver_params.epsilon = original_regularization;
 
     global_timer.stop();
     const double total_time = global_timer.wall_time();
@@ -1402,7 +1402,7 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_combined_multilevel()
     // Backup original solver parameters
     const unsigned int original_max_iterations = solver_params.max_iterations;
     const double original_tolerance = solver_params.tolerance;
-    const double original_regularization = solver_params.regularization_param;
+    const double original_regularization = solver_params.epsilon;
 
     // Create output directory
     std::string eps_dir = "output/epsilon_" + Utils::to_scientific_string(original_regularization);
@@ -1551,7 +1551,7 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_combined_multilevel()
             const auto& level_epsilons = epsilon_scaling_handler->get_epsilon_values_for_level(combined_iter);
             if (!level_epsilons.empty()) {
                 for (size_t eps_idx = 0; eps_idx < level_epsilons.size(); ++eps_idx) {
-                    solver_params.regularization_param = level_epsilons[eps_idx];
+                    solver_params.epsilon = level_epsilons[eps_idx];
                     try {
                         sot_solver->solve(potentials_for_this_level, solver_params);
                         if (eps_idx < level_epsilons.size() - 1) {
@@ -1562,7 +1562,7 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_combined_multilevel()
                     }
                 }
             } else {
-                solver_params.regularization_param = original_regularization;
+                solver_params.epsilon = original_regularization;
                 try {
                     sot_solver->solve(potentials_for_this_level, solver_params);
                 } catch (const SolverControl::NoConvergence& exc) {
@@ -1570,7 +1570,7 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_combined_multilevel()
                 }
             }
         } else {
-            solver_params.regularization_param = original_regularization;
+            solver_params.epsilon = original_regularization;
             try {
                 sot_solver->solve(potentials_for_this_level, solver_params);
             } catch (const SolverControl::NoConvergence& exc) {
@@ -1617,7 +1617,7 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_combined_multilevel()
     // Restore original parameters
     solver_params.max_iterations = original_max_iterations;
     solver_params.tolerance = original_tolerance;
-    solver_params.regularization_param = original_regularization;
+    solver_params.epsilon = original_regularization;
 
     global_timer.stop();
     const double total_time = global_timer.wall_time();
@@ -1881,7 +1881,7 @@ void SemiDiscreteOT<dim, spacedim>::save_results(const Vector<double> &potential
         if (add_epsilon_prefix)
         {
             // Create epsilon-specific directory
-            std::string eps_dir = "output/epsilon_" + Utils::to_scientific_string(solver_params.regularization_param);
+            std::string eps_dir = "output/epsilon_" + Utils::to_scientific_string(solver_params.epsilon);
             fs::create_directories(eps_dir);
             full_path = eps_dir + "/" + filename;
         }
@@ -1980,7 +1980,7 @@ void SemiDiscreteOT<dim, spacedim>::compute_transport_map()
 
         // Extract regularization parameter from folder name
         std::string eps_str = selected_folder.substr(selected_folder.find("epsilon_") + 8);
-        double regularization_param = std::stod(eps_str);
+        double epsilon = std::stod(eps_str);
 
         // Create output directory
         const std::string output_dir = "output/" + selected_folder + "/transport_map";
@@ -1993,7 +1993,7 @@ void SemiDiscreteOT<dim, spacedim>::compute_transport_map()
         // Set up the transport plan
         transport_plan.set_source_measure(source_points, source_density_vec);
         transport_plan.set_target_measure(target_points, target_density_vec);
-        transport_plan.set_potential(potentials_dealii, regularization_param);
+        transport_plan.set_potential(potentials_dealii, epsilon);
         transport_plan.set_truncation_radius(transport_map_params.truncation_radius);
 
         // Try different strategies and save results
@@ -2327,7 +2327,7 @@ void SemiDiscreteOT<dim, spacedim>::run()
     {
         epsilon_scaling_handler = std::make_unique<EpsilonScalingHandler>(
             mpi_communicator,
-            solver_params.regularization_param,
+            solver_params.epsilon,
             solver_params.epsilon_scaling_factor,
             solver_params.epsilon_scaling_steps);
     }

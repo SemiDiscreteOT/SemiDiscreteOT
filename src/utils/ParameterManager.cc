@@ -68,10 +68,8 @@ SotParameterManager::SotParameterManager(const MPI_Comm &comm)
                      "Convergence tolerance for the optimization solver");
         add_parameter("solver_control_type", solver_params.solver_control_type,
                      "Type of solver control to use (l1norm/componentwise)");
-        add_parameter("regularization_parameter", solver_params.regularization_param,
-                     "Entropy regularization parameter (lambda)");
         add_parameter("epsilon", solver_params.epsilon,
-                     "Truncation criterion for the kernel evaluation");
+                     "Entropy regularization parameter (lambda)");
         add_parameter("tau", solver_params.tau,
                      "Truncation error tolerance for integral radius bound");
         add_parameter("distance_threshold_type", solver_params.distance_threshold_type,
@@ -90,10 +88,6 @@ SotParameterManager::SotParameterManager(const MPI_Comm &comm)
                      "Factor by which to reduce epsilon in each scaling step");
         add_parameter("epsilon_scaling_steps", solver_params.epsilon_scaling_steps,
                      "Number of epsilon scaling steps");
-        add_parameter("use_caching", solver_params.use_caching,
-                     "Enable distance threshold caching");
-        add_parameter("max_cache_size_mb", solver_params.max_cache_size_mb,
-                     "Maximum cache size in MB/per processor");
         add_parameter("use_log_sum_exp_trick", solver_params.use_log_sum_exp_trick,
                      "Enable log-sum-exp trick for numerical stability with small entropy");
     }
@@ -304,7 +298,6 @@ void SotParameterManager::print_solver_parameters() const
     pcout << "    Solver Control Type: " << BOLD << solver_params.solver_control_type << RESET << std::endl;
     
     pcout << CYAN << "  Regularization Settings:" << RESET << std::endl;
-    pcout << "    Regularization Parameter: " << BOLD << solver_params.regularization_param << RESET << std::endl;
     pcout << "    Epsilon: " << BOLD << solver_params.epsilon << RESET << std::endl;
     pcout << "    Tau: " << BOLD << solver_params.tau << RESET << std::endl;
     pcout << "    Distance Threshold Type: " << BOLD << solver_params.distance_threshold_type << RESET << std::endl;
@@ -323,11 +316,6 @@ void SotParameterManager::print_solver_parameters() const
     pcout << "    Quadrature Order: " << BOLD << solver_params.quadrature_order << RESET << std::endl;
     pcout << "    Number of Points: " << BOLD << solver_params.nb_points << RESET << std::endl;
     pcout << "    Number of Threads: " << BOLD << (solver_params.n_threads == 0 ? "auto" : std::to_string(solver_params.n_threads)) << RESET << std::endl;
-    pcout << "    Caching: " << BOLD << (solver_params.use_caching ? "enabled" : "disabled") << RESET << std::endl;
-    if (solver_params.use_caching) {
-        pcout << "    Max Cache Size: " << BOLD << (solver_params.max_cache_size_mb == 0 ? "unlimited" : 
-                                                  std::to_string(solver_params.max_cache_size_mb) + " MB") << RESET << std::endl;
-    }
     pcout << std::endl;
 }
 

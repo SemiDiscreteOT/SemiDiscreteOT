@@ -23,8 +23,7 @@ subsection ParameterManager
   subsection rsot_solver
     set max_iterations = 10000
     set tolerance = 1e-3
-    set regularization_parameter = 1e-2
-    set epsilon = 1e-20
+    set epsilon = 1e-2
     set tau = 1e-4  # Truncation error tolerance for integral radius bound
     set verbose_output = false
     set solver_type = BFGS
@@ -33,7 +32,6 @@ subsection ParameterManager
     set use_epsilon_scaling = false
     set epsilon_scaling_factor = 10
     set epsilon_scaling_steps = 3
-    set use_caching = true
     set max_cache_size_mb = 20000
   end
 
