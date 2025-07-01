@@ -368,8 +368,8 @@ namespace Applications
   }
 
   void PotentialDensity::output_conditioned_densities(
-    std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> &conditioned_densities,
-    LinearAlgebra::distributed::Vector<double, MemorySpace::Host> &number_of_non_thresholded_targets) const
+    std::vector<Vector<double>> &conditioned_densities,
+    Vector<double> &number_of_non_thresholded_targets) const
   {
     DataOut<3> data_out;
     DataOutBase::VtkFlags flags;
@@ -385,21 +385,22 @@ namespace Applications
       subdomain(i) = tria_1.locally_owned_subdomain();
     data_out.add_data_vector(subdomain, "subdomain");
 
+    pcout << "   Writing "<< conditioned_densities.size() << " conditioned densities " << std::endl;
     for (unsigned int i = 0; i < conditioned_densities.size(); ++i)
     {
-      pcout << "   Writing conditioned densities " << i << std::endl;
       data_out.add_data_vector(
         conditioned_densities[i],
-        std::string("conditioned_densities_") + Utilities::int_to_string(i),
-        DataOut<3>::type_dof_data,
-        interpretation);
+        std::string("conditioned_densities_") + Utilities::int_to_string(i));
     }
 
     data_out.add_data_vector(
       number_of_non_thresholded_targets,
-      std::string("thresholded_targets"),
-      DataOut<3>::type_dof_data,
-      interpretation);
+      std::string("thresholded_targets"));
+    // data_out.add_data_vector(
+    //   number_of_non_thresholded_targets,
+    //   std::string("thresholded_targets"),
+    //   DataOut<3>::type_dof_data,
+    //   interpretation);
 
     data_out.build_patches(
       mapping, mapping.get_degree() + 1,
@@ -550,8 +551,8 @@ namespace Applications
     for (unsigned int i = 0; i < this->target_points.size(); ++i)
       potential_indices.push_back(i);
     // potential_indices.push_back(N*(n_conditioned_densities-1));
-    std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> conditioned_densities;
-    LinearAlgebra::distributed::Vector<double, MemorySpace::Host> number_of_non_thresholded_targets;
+    std::vector<Vector<double>> conditioned_densities;
+    Vector<double> number_of_non_thresholded_targets;
 
     this->sot_solver->get_potential_conditioned_density(
       dof_handler_1, mapping,

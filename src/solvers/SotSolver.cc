@@ -967,124 +967,135 @@ void SotSolver<dim, spacedim>::get_potential_conditioned_density(
     const Mapping<dim, spacedim> &mapping,
     const Vector<double> &potential,
     const std::vector<unsigned int> &potential_indices,
-    std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> &conditioned_densities,
-    LinearAlgebra::distributed::Vector<double, MemorySpace::Host> &number_of_non_thresholded_targets)
+    std::vector<Vector<double>> &conditioned_densities,
+    Vector<double> &number_of_non_thresholded_targets)
 {
-    pcout << "Computing conditioned densities for potential indices: ";
-    for (unsigned int idensity = 0; idensity < potential_indices.size(); ++idensity)
-        pcout << potential_indices[idensity] << " ";
-    pcout << std::endl;
+    pcout << "Computing conditioned densities for specified potential indices\n";
 
-    auto locally_owned_dofs = dof_handler.locally_owned_dofs();
     conditioned_densities.resize(potential_indices.size());
-
-    std::map<types::global_dof_index, Point<spacedim>> sp;
-    DoFTools::map_dofs_to_support_points(
-        mapping, dof_handler, sp);
     
+    unsigned int n_active_cells = dof_handler.get_triangulation().n_active_cells();
     number_of_non_thresholded_targets.reinit(
-        locally_owned_dofs, mpi_communicator);
+        n_active_cells);
     for (unsigned int idensity = 0; idensity < conditioned_densities.size(); ++idensity)
-        conditioned_densities[idensity].reinit(locally_owned_dofs, mpi_communicator);
+        conditioned_densities[idensity].reinit(n_active_cells);
         
     double epsilon_inv = 1.0 / current_epsilon;
     std::set<std::size_t> all_found_targets;
     
-    for (auto idx: locally_owned_dofs)
-    {
-        std::vector<std::size_t> cell_target_indices = find_nearest_target_points(sp[idx]);
-        
-        // Add these indices to our accumulated set
-        all_found_targets.insert(cell_target_indices.begin(), cell_target_indices.end());
+    try {
+        pcout << "Init conditional densities..." << std::endl;
+        bool use_simplex = (dynamic_cast<const FE_SimplexP<dim>*>(&*source_measure.fe) != nullptr);
 
-        std::vector<double> exp(potential.size(), 0.0);
-        double total_sum_exp = 0;
-        double max_exponent = -std::numeric_limits<double>::max();
+        std::unique_ptr<Quadrature<dim>> quadrature;
+            if (use_simplex) {
+                quadrature = std::make_unique<QGaussSimplex<dim>>(source_measure.quadrature_order);
+            } else {
+                quadrature = std::make_unique<QGauss<dim>>(source_measure.quadrature_order);
+            }
+        FEValues<dim, spacedim> fe_values(
+            *source_measure.mapping,
+            *source_measure.fe,
+            *quadrature,
+            update_values | update_quadrature_points | update_JxW_values);
 
-        #pragma omp simd reduction(max:max_exponent)
-        for (unsigned int i = 0; i < cell_target_indices.size(); ++i)
+        unsigned int local_cell_index = 0;
+        for (const auto &cell : dof_handler.active_cell_iterators())
         {
-            const size_t tidx = cell_target_indices[i];
-            const double exponent = (potential[tidx]-0.5*
-                std::pow(
-                distance_function(
-                    sp[tidx],
-                    target_measure.points[tidx]), 2))*epsilon_inv;
-            max_exponent = std::max(max_exponent, exponent);
-        }
-
-        #pragma omp simd reduction(+:total_sum_exp)
-        for (unsigned int i = 0; i < cell_target_indices.size(); ++i)
-        {
-            const size_t tidx = cell_target_indices[i];
-            exp[tidx] = std::exp((potential[tidx]-0.5*
-                std::pow(
-                distance_function(
-                    sp[tidx],
-                    target_measure.points[tidx]), 2))*epsilon_inv-max_exponent);
-            total_sum_exp += target_measure.density[tidx] * exp[tidx];
-            // if (tidx == 29)
-            // {
-            //     pcout << "DEBUG " << idx << "i " << std::pow(
-            //         distance_function(
-            //             sp[tidx],
-            //             target_measure.points[tidx]), 2) << " " << exp[tidx] << " " << max_exponent << " " << epsilon_inv << " " << potential[tidx] << " " << target_measure.density[tidx] << std::endl;
-            // }
-        }
-
-        number_of_non_thresholded_targets[idx] = cell_target_indices.size();
-        if (total_sum_exp > 1e-6)
-        {
-            for (unsigned int idensity = 0; idensity < potential_indices.size(); ++idensity)
+            if (!cell->is_locally_owned())
             {
-                // Check if the current potential index is in our found target indices
-                bool index_found = std::find(cell_target_indices.begin(), 
-                                             cell_target_indices.end(), 
-                                             potential_indices[idensity]) != cell_target_indices.end();
+                ++local_cell_index;
+                continue;
+            }
 
-                // Only compute the density contribution if the index was found
-                if (index_found)
-                    conditioned_densities[idensity][idx] = (*source_measure.density)[idx] * (exp[potential_indices[idensity]]/total_sum_exp);
-                // std::cout << "DEBUG /scratch/romor/SemiDiscreteOT/src/solvers/SotSolver.cc at Line 1033 " << conditioned_densities[idensity][idx] << std::endl;
+            fe_values.reinit(cell);
+            const std::vector<Point<spacedim>>& q_points = fe_values.get_quadrature_points();
+            const unsigned int n_q_points = q_points.size();
+            std::vector<double> density_values((*quadrature).size());
+            fe_values.get_function_values(*source_measure.density, density_values);
 
-                if (idensity==29)
+            std::vector<std::size_t> cell_target_indices = find_nearest_target_points(cell->center());
+            if (cell_target_indices.empty()) return;
+
+            // Add these indices to our accumulated set
+            all_found_targets.insert(cell_target_indices.begin(), cell_target_indices.end());
+
+            number_of_non_thresholded_targets[local_cell_index] = cell_target_indices.size();
+
+            const unsigned int n_target_points = cell_target_indices.size();
+            
+            std::vector<Point<spacedim>> target_positions(n_target_points);
+            std::vector<double> target_densities(n_target_points);
+            std::vector<double> potential_values(n_target_points);
+
+            for (size_t i = 0; i < n_target_points; ++i) {
+                const size_t idx = cell_target_indices[i];
+                target_positions[i] = target_measure.points[idx];
+                target_densities[i] = target_measure.density[idx];
+                potential_values[i] = potential[idx];
+            }
+            
+            for (unsigned int q = 0; q < n_q_points; ++q) {
+                const Point<spacedim>& x = q_points[q];
+                const double density_value = density_values[q];
+                const double JxW = fe_values.JxW(q);
+        
+                double total_sum_exp = 0.0;
+                double max_exponent = -std::numeric_limits<double>::max();
+                std::vector<double> exp_terms(n_target_points);
+        
+                if (current_params.use_log_sum_exp_trick) {
+                    // First pass: find maximum exponent
+                    #pragma omp simd reduction(max:max_exponent)
+                    for (size_t i = 0; i < n_target_points; ++i) {
+                        const double local_dist2 = std::pow(distance_function(x, target_positions[i]), 2);
+                        const double exponent = (potential_values[i] - 0.5 * local_dist2) * epsilon_inv;
+                        max_exponent = std::max(max_exponent, exponent);
+                    }
+                    // Second pass: compute shifted exponentials
+                    #pragma omp simd reduction(+:total_sum_exp)
+                    for (size_t i = 0; i < n_target_points; ++i) {
+                        const double local_dist2 = std::pow(distance_function(x, target_positions[i]), 2);
+                        const double shifted_exp = std::exp((potential_values[i] - 0.5 * local_dist2) * epsilon_inv - max_exponent);
+                        exp_terms[i] = shifted_exp;
+                        total_sum_exp += target_densities[i] * exp_terms[i];
+                    }
+                } else {
+                    // Original computation method
+                    #pragma omp simd reduction(+:total_sum_exp)
+                    for (size_t i = 0; i < n_target_points; ++i) {
+                        const double local_dist2 = std::pow(distance_function(x, target_positions[i]), 2);
+                        exp_terms[i] = 
+                            std::exp((potential_values[i] - 0.5 * local_dist2) * epsilon_inv);
+                        total_sum_exp += target_densities[i] * exp_terms[i];
+                    }
+                }
+        
+                if (total_sum_exp <= 0.0)
                 {
-                    pcout << idx << " " << exp[potential_indices[idensity]]/total_sum_exp << " " << exp[potential_indices[idensity]] << " " << total_sum_exp << " " << potential[potential_indices[idensity]] << " " << target_measure.density[potential_indices[idensity]] << std::endl;
+                    ++local_cell_index;
+                    continue;
                 }
 
+                for (unsigned int idensity = 0; idensity < potential_indices.size(); ++idensity)
+                {
+                    conditioned_densities[idensity][local_cell_index] += JxW * density_value * (exp_terms[potential_indices[idensity]]/total_sum_exp);
+                }
             }
-        } else {
-            double max_exp = -std::numeric_limits<double>::max();
-            double max_target = -std::numeric_limits<double>::max();
-            for (unsigned int i = 0; i < cell_target_indices.size(); ++i)
-            {
-                max_exp = std::max(max_exp, exp[cell_target_indices[i]]);
-                max_target = std::max(max_target, target_measure.density[cell_target_indices[i]]);
-            }
-            std::cout << "DEBUG /scratch/romor/SemiDiscreteOT/src/solvers/SotSolver.cc at Line 1010 " << cell_target_indices.size() << " " << total_sum_exp << " " << max_exp << " " << max_target << " " << max_exponent << std::endl;
+            ++local_cell_index;
         }
-    }
+            
+        pcout << "Traversed targets: " << all_found_targets.size() << " targets over a total of " << potential.size() << std::endl;
         
-    pcout << "Traversed targets: " << all_found_targets.size() << " targets." << std::endl;
-    number_of_non_thresholded_targets.compress(VectorOperation::insert);
-    for (unsigned int idensity = 0; idensity < conditioned_densities.size(); ++idensity)
-    {
-        conditioned_densities[idensity].compress(VectorOperation::insert);
-        // Print min value for this density
-        double max_val = std::numeric_limits<double>::min();
-        double global_max_val = std::numeric_limits<double>::min();
-
-        // Find local max
-        for (const auto& val : conditioned_densities[idensity])
-            if (val > 0.0)  // Skip zeros that might be due to ghosted entries
-                max_val = std::max(max_val, val);
-
-        // Find global max across all processes
-        global_max_val = Utilities::MPI::max(max_val, mpi_communicator);
-        pcout << "Max value for conditioned density " << potential_indices[idensity] 
-              << ": " << global_max_val << std::endl;
+        number_of_non_thresholded_targets.compress(VectorOperation::insert);
+        for (unsigned int idensity = 0; idensity < conditioned_densities.size(); ++idensity)
+        {
+            conditioned_densities[idensity].compress(VectorOperation::add);
+        }
+    } catch (const std::exception& e) {
+        pcout << "Error in conditional densities initialization: " << e.what() << std::endl;
+        throw;
     }
-
 }
 
 // Explicit instantiation

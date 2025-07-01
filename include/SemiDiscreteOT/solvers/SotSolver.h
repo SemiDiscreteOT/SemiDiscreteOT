@@ -237,8 +237,8 @@ public:
         const Mapping<dim, spacedim> &mapping,
         const Vector<double> &potential,
         const std::vector<unsigned int> &potential_indices,
-        std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> &conditioned_densities,
-        LinearAlgebra::distributed::Vector<double, MemorySpace::Host> &number_of_non_thresholded_targets);
+        std::vector<Vector<double>> &conditioned_densities,
+        Vector<double> &number_of_non_thresholded_targets);
 
     // Distance function
     std::string distance_name;
