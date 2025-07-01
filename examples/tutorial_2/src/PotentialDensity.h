@@ -111,8 +111,8 @@ namespace Applications
     void output_eigenfunctions() const;
     void output_normalized_source(LinearAlgebra::distributed::Vector<double, MemorySpace::Host> &source) const;
     void output_conditioned_densities(
-      std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> &conditioned_densities,
-      LinearAlgebra::distributed::Vector<double, MemorySpace::Host> &number_of_non_thresholded_targets) const;
+      std::vector<Vector<double>> &conditioned_densities,
+      Vector<double> &number_of_non_thresholded_targets) const;
     
     MPI_Comm mpi_communicator;
     ConditionalOStream pcout;
