@@ -128,7 +128,7 @@ void SotSolver<dim, spacedim>::solve(
 
     // Print log-sum-exp status if using small entropy
     if (params.epsilon < 1e-2) {
-        pcout << "Small entropy detected (λ = " << params.epsilon << ")" << std::endl;
+        pcout << "Small entropy detected (ε = " << params.epsilon << ")" << std::endl;
         pcout << "  Log-Sum-Exp trick: " << (params.use_log_sum_exp_trick ? "enabled" : "disabled") << std::endl;
         if (!params.use_log_sum_exp_trick && params.epsilon < 1e-4) {
             pcout << "  \033[1;33mWARNING: Using very small entropy without Log-Sum-Exp trick may cause numerical instability\033[0m" << std::endl;

@@ -110,7 +110,7 @@ void Lloyd<dim, spacedim>::run_centroid_iteration(
                 // Run optimization for each epsilon value
                 for (size_t i = 0; i < epsilon_sequence.size(); ++i) {
                     this->pcout << "\nEpsilon scaling step " << i + 1 << "/" << epsilon_sequence.size()
-                        << " (λ = " << epsilon_sequence[i] << ")" << std::endl;
+                        << " (ε = " << epsilon_sequence[i] << ")" << std::endl;
 
                     solver_config.epsilon = epsilon_sequence[i];
 
@@ -216,7 +216,7 @@ void Lloyd<dim, spacedim>::run_sot_iteration(
                 for (size_t i = 0; i < epsilon_sequence.size(); ++i)
                 {
                     this->pcout << "\nEpsilon scaling step " << i + 1 << "/" << epsilon_sequence.size()
-                          << " (λ = " << epsilon_sequence[i] << ")" << std::endl;
+                          << " (ε = " << epsilon_sequence[i] << ")" << std::endl;
 
                     solver_config.epsilon = epsilon_sequence[i];
 
@@ -272,7 +272,7 @@ void Lloyd<dim, spacedim>::run_sot_iteration(
         std::string eps_dir = "output/epsilon_" + Utils::to_scientific_string(solver_config.epsilon);
         fs::create_directories(eps_dir);
         std::ofstream conv_info(eps_dir + "/convergence_info.txt");
-        conv_info << "Regularization parameter (λ): " << solver_config.epsilon << "\n";
+        conv_info << "Regularization parameter (ε): " << solver_config.epsilon << "\n";
         conv_info << "Number of iterations: " << this->sot_solver->get_last_iteration_count() << "\n";
         conv_info << "Final function value: " << this->sot_solver->get_last_functional_value() << "\n";
         conv_info << "Last threshold value: " << this->sot_solver->get_last_distance_threshold() << "\n";
