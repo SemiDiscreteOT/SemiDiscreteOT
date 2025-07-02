@@ -6,8 +6,8 @@ namespace Applications
 
   PotentialDensity::PotentialDensity(const MPI_Comm &comm)
       : SemiDiscreteOT<3, 3>(comm),
-        ParameterAcceptor("/Tutorial 3/PotentialDensity"), 
-        mpi_communicator(MPI_COMM_WORLD), 
+        ParameterAcceptor("/Tutorial 2/PotentialDensity"),
+        mpi_communicator(MPI_COMM_WORLD),
         pcout(std::cout, (Utilities::MPI::this_mpi_process(mpi_communicator) == 0)),
         tria_1(
             mpi_communicator,
@@ -19,9 +19,9 @@ namespace Applications
           typename Triangulation<3>::MeshSmoothing(
               Triangulation<3>::smoothing_on_refinement |
               Triangulation<3>::smoothing_on_coarsening)),
-        dof_handler_1(tria_1), 
-        dof_handler_2(tria_2), 
-        fe(1), 
+        dof_handler_1(tria_1),
+        dof_handler_2(tria_2),
+        fe(1),
         mapping(1)
   {
     add_parameter("number of refinements", n_refinements);
@@ -79,7 +79,7 @@ namespace Applications
     locally_owned_dofs = dof_handler_1.locally_owned_dofs();
     locally_relevant_dofs =
         DoFTools::extract_locally_relevant_dofs(dof_handler_1);
-    
+
     constraints.clear();
     constraints.reinit(locally_relevant_dofs);
     DoFTools::make_hanging_node_constraints(dof_handler_1, constraints);
@@ -110,7 +110,7 @@ namespace Applications
       locally_owned_dofs,
       dsp,
       mpi_communicator);
-    
+
     eigenfunctions.resize(n_evecs);
     for (unsigned int i = 0; i < eigenfunctions.size(); ++i)
       eigenfunctions[i].reinit(locally_owned_dofs, mpi_communicator);
@@ -236,7 +236,7 @@ namespace Applications
           MeshWorker::assemble_ghost_faces_once,
       boundary_worker,
       face_worker);
-    
+
     stiffness_matrix.compress(VectorOperation::add);
   }
 
@@ -247,7 +247,7 @@ namespace Applications
     SolverControl solver_control(dof_handler_1.n_dofs(), 1e-8);
     SLEPcWrappers::SolverKrylovSchur eigensolver(
       solver_control, mpi_communicator);
-  
+
     eigensolver.set_which_eigenpairs(EPS_SMALLEST_REAL);
     eigensolver.set_problem_type(EPS_HEP);
 
@@ -256,7 +256,7 @@ namespace Applications
                       eigenfunctions,
                       eigenfunctions.size());
 
-    pcout << "Eigen problem solved\n"; 
+    pcout << "Eigen problem solved\n";
     return solver_control.last_step();
   }
 
@@ -288,9 +288,9 @@ namespace Applications
     DataOutBase::DataOutFilterFlags flags(true, true);
     DataOutBase::DataOutFilter data_filter(flags);
     data_out.write_filtered_data(data_filter);
-    
+
     std::string h5_filename = output_dir + "/" + field_name + ".h5";
-    data_out.write_hdf5_parallel(data_filter, 
+    data_out.write_hdf5_parallel(data_filter,
                                 h5_filename,
                                 mpi_communicator);
 
@@ -333,7 +333,6 @@ namespace Applications
                            DataOut<3>::curved_inner_cells);
 
     const std::string filename = "eigenvectors";
-    std::ofstream output(filename);
     data_out.write_vtu_with_pvtu_record(
       output_dir, filename, 0, mpi_communicator);
   }
@@ -358,67 +357,60 @@ namespace Applications
                               std::string("source"),
                                 DataOut<3>::type_dof_data, interpretation);
 
-    data_out.build_patches(mapping, mapping.get_degree() + 1,
-                           DataOut<3>::curved_inner_cells);
+    data_out.build_patches(mapping, 1, DataOut<3>::no_curved_cells);
 
     const std::string filename = "source_density";
-    std::ofstream output(filename);
     data_out.write_vtu_with_pvtu_record(
       output_dir, filename, 0, mpi_communicator);
   }
 
   void PotentialDensity::output_conditioned_densities(
-    std::vector<Vector<double>> &conditioned_densities,
-    Vector<double> &number_of_non_thresholded_targets) const
-  {
+    std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> &conditioned_densities) const
+{
     DataOut<3> data_out;
-    DataOutBase::VtkFlags flags;
-    flags.write_higher_order_cells = true;
-    data_out.set_flags(flags);
-
-    std::vector<DataComponentInterpretation::DataComponentInterpretation> interpretation(1, DataComponentInterpretation::component_is_scalar);
-
     data_out.attach_dof_handler(dof_handler_1);
+
+    std::vector<DataComponentInterpretation::DataComponentInterpretation>
+        interpretation(1, DataComponentInterpretation::component_is_scalar);
 
     Vector<float> subdomain(tria_1.n_active_cells());
     for (unsigned int i = 0; i < subdomain.size(); ++i)
-      subdomain(i) = tria_1.locally_owned_subdomain();
+        subdomain(i) = tria_1.locally_owned_subdomain();
     data_out.add_data_vector(subdomain, "subdomain");
 
-    pcout << "   Writing "<< conditioned_densities.size() << " conditioned densities " << std::endl;
+
+    pcout << "   Writing " << conditioned_densities.size()
+          << " conditioned densities to output file..." << std::endl;
+
     for (unsigned int i = 0; i < conditioned_densities.size(); ++i)
     {
-      data_out.add_data_vector(
-        conditioned_densities[i],
-        std::string("conditioned_densities_") + Utilities::int_to_string(i));
+        data_out.add_data_vector(
+            conditioned_densities[i],
+            std::string("conditioned_density_") + Utilities::int_to_string(i),
+            DataOut<3>::type_dof_data,
+            interpretation);
     }
 
-    data_out.add_data_vector(
-      number_of_non_thresholded_targets,
-      std::string("thresholded_targets"));
-    // data_out.add_data_vector(
-    //   number_of_non_thresholded_targets,
-    //   std::string("thresholded_targets"),
-    //   DataOut<3>::type_dof_data,
-    //   interpretation);
+    // --- Build patches and write output files ---
+    data_out.build_patches(mapping, fe.degree);
 
-    data_out.build_patches(
-      mapping, mapping.get_degree() + 1,
-      DataOut<3>::curved_inner_cells);
+    const std::string filename_base = "conditioned_densities";
+    const std::string output_path = "output/density_field/";
+    data_out.write_vtu_with_pvtu_record(output_path,
+                                         filename_base,
+                                         0,
+                                         mpi_communicator);
+    pcout << "   Saved conditioned densities to " << output_path << filename_base << "_0.pvtu" << std::endl;
+}
 
-    const std::string filename = "conditioned_densities";
-    std::ofstream output(filename);
-    data_out.write_vtu_with_pvtu_record(
-      output_dir, filename, 0, mpi_communicator);
-  }
 
-  void PotentialDensity::run()
+void PotentialDensity::run()
   {
     pcout << "Running with PETSc on "
           << Utilities::MPI::n_mpi_processes(mpi_communicator)
           << " MPI rank(s)..." << std::endl;
     pcout << "n threads: " << dealii::MultithreadInfo::n_threads() << std::endl;
-    
+
     this->param_manager.print_parameters();
 
     // get continuous source density field as eigenfunction of the Laplacian operator
@@ -438,11 +430,11 @@ namespace Applications
     tmp_source_density.reinit(locally_owned_dofs, mpi_communicator);
     for (auto idx : tmp_source_density.locally_owned_elements())
     {
-        tmp_source_density[idx] = 1;//std::exp(eigenfunctions[n_evecs-1][idx]);
+        tmp_source_density[idx] = std::exp(eigenfunctions[n_evecs-1][idx]);
     }
     tmp_source_density.compress(dealii::VectorOperation::insert);
     this->source_density = tmp_source_density;
-    
+
     // normalize source
     auto quadrature = Utils::create_quadrature_for_mesh<3>(tria_1, solver_params.quadrature_order);
     // Calculate L1 norm
@@ -465,7 +457,7 @@ namespace Applications
 
     double global_l1_norm = Utilities::MPI::sum(local_l1_norm, mpi_communicator);
     pcout << "Density L1 norm before normalization: " << global_l1_norm << std::endl;
-    
+
     tmp_source_density /= global_l1_norm;
     this->source_density = tmp_source_density;
     this->sot_solver->setup_source(
@@ -477,31 +469,27 @@ namespace Applications
     );
     output_normalized_source(this->source_density);
 
-    // manually set up the target density
     std::map<types::global_dof_index, Point<3>> support_points;
     DoFTools::map_dofs_to_support_points(
       mapping, dof_handler_2, support_points);
 
-    unsigned int n_support_points = dof_handler_2.n_dofs();
-    std::vector<double> loc_sp(n_support_points * 3);
-    auto locally_owned_dofs_2 = dof_handler_2.locally_owned_dofs();
-    for (auto idx: locally_owned_dofs_2)
-      for (unsigned int d = 0; d < 3; ++d)
-        loc_sp[idx * 3 + d] = support_points[idx][d];
+    auto all_support_points = Utilities::MPI::all_gather(
+      mpi_communicator, support_points);
 
-    std::vector<double> global_sp(n_support_points * 3);
-    MPI_Allreduce(
-      loc_sp.data(), global_sp.data(),
-      n_support_points * 3, MPI_DOUBLE, MPI_SUM, mpi_communicator);
-    
+    std::map<types::global_dof_index, Point<3>> global_support_points;
+    for (const auto& proc_support_points : all_support_points) {
+      for (const auto& [dof_idx, point] : proc_support_points) {
+        global_support_points[dof_idx] = point;
+      }
+    }
+
     this->target_points.clear();
-    this->target_points.resize(dof_handler_2.n_dofs());
-    for (unsigned int i = 0; i < n_support_points; ++i) {
-      this->target_points.emplace_back(
-        global_sp[i * 3 + 0], global_sp[i * 3 + 1], global_sp[i * 3 + 2]);
+    this->target_points.reserve(global_support_points.size());
+    for (const auto& [dof_idx, point] : global_support_points) {
+      this->target_points.emplace_back(point);
     }
     pcout << "Number of support points: " << this->target_points.size() << std::endl;
-    
+
     this->target_density.reinit(this->target_points.size());
     this->target_density = 1.0/this->target_points.size();
     this->sot_solver->setup_target(
@@ -513,7 +501,7 @@ namespace Applications
       std::ofstream ply_out;
       if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
       ply_out.open(ply_filename);
-      
+
       // Header
       ply_out << "ply\n";
       ply_out << "format ascii 1.0\n";
@@ -523,14 +511,14 @@ namespace Applications
       ply_out << "property float z\n";
       ply_out << "property float density\n";  // Add density property
       ply_out << "end_header\n";
-      
+
       // Data
       for (unsigned int i = 0; i < this->target_points.size(); ++i) {
         const auto& point = this->target_points[i];
-        ply_out << point[0] << " " << point[1] << " " << point[2] << " " 
+        ply_out << point[0] << " " << point[1] << " " << point[2] << " "
            << this->target_density[i] << "\n";  // Include density value
       }
-      
+
       ply_out.close();
       pcout << "Saved target points with density to " << ply_filename << std::endl;
       }
@@ -539,7 +527,7 @@ namespace Applications
     // set distanace
     this->sot_solver->set_distance_function("euclidean");
 
-    // run regularized semi-discrete OT 
+    // run regularized semi-discrete OT
     Vector<double> potential;
     potential.reinit(this->target_points.size());
     SotParameterManager::SolverParameters& solver_config = this->solver_params;
@@ -547,24 +535,25 @@ namespace Applications
     this->save_results(potential, "potentials");
 
     std::vector<unsigned int> potential_indices;
-    // unsigned int N = this->target_points.size()/n_conditioned_densities;
-    for (unsigned int i = 0; i < this->target_points.size(); ++i)
-      potential_indices.push_back(i);
-    // potential_indices.push_back(N*(n_conditioned_densities-1));
-    std::vector<Vector<double>> conditioned_densities;
-    Vector<double> number_of_non_thresholded_targets;
+    unsigned int N = this->target_points.size() / n_conditioned_densities;
+    for (unsigned int i = 0; i < n_conditioned_densities; ++i)
+    {
+      pcout << "   Adding potential index " << i * N << std::endl;
+      potential_indices.push_back(i * N);
+    }
+
+
+    std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> conditioned_densities;
 
     this->sot_solver->get_potential_conditioned_density(
       dof_handler_1, mapping,
-      potential, potential_indices, conditioned_densities,
-      number_of_non_thresholded_targets);
+      potential, potential_indices, conditioned_densities);
 
     output_conditioned_densities(
-      conditioned_densities,
-      number_of_non_thresholded_targets);
+      conditioned_densities);
 
   }
-} // namespace Applications
+}
 
 using namespace dealii;
 
@@ -582,15 +571,15 @@ int main(int argc, char *argv[])
 
     // Create conditional output stream
     ConditionalOStream pcout(std::cout, this_mpi_process == 0);
-    
+
     PotentialDensity conditioned_density_test(mpi_communicator);
-    
+
     // Use command line argument if provided, otherwise use default
     std::string param_file = (argc > 1) ? argv[1] : "parameters.prm";
-    
+
     pcout << "Using parameter file: " << param_file << std::endl;
     ParameterAcceptor::initialize(param_file);
-    
+
     conditioned_density_test.run();
   }
   catch (std::exception &exc)
