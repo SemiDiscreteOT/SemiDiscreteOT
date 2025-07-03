@@ -84,9 +84,6 @@ namespace LA
 #if defined(DEAL_II_WITH_PETSC)
   using namespace dealii::LinearAlgebraPETSc;
 #define USE_PETSC_LA
-#elif defined(DEAL_II_WITH_TRILINOS)
-  using namespace dealii::LinearAlgebraTrilinos;
-#define USE_TRILINOS_LA
 #else
 #error DEAL_II_WITH_PETSC or DEAL_II_WITH_TRILINOS required
 #endif
@@ -96,14 +93,14 @@ namespace Applications
 {
   using namespace dealii;
 
-  class SphereData : public ParameterAcceptor, public Lloyd<2, 3>
+  class PotentialDensity : public ParameterAcceptor, public SemiDiscreteOT<3>
   {
-    using Iterator = typename DoFHandler<2, 3>::active_cell_iterator;
+    using Iterator = typename DoFHandler<3>::active_cell_iterator;
     using VectorType = LA::MPI::Vector;
     using MatrixType = LA::MPI::SparseMatrix;
 
   public:
-    SphereData(const MPI_Comm &comm);
+    PotentialDensity(const MPI_Comm &comm);
     void run();
 
   private:
@@ -113,18 +110,23 @@ namespace Applications
     void output_results() const;
     void output_eigenfunctions() const;
     void output_normalized_source(LinearAlgebra::distributed::Vector<double, MemorySpace::Host> &source) const;
-    
+
+  void output_conditioned_densities(
+    std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> &conditioned_densities) const;
+
     MPI_Comm mpi_communicator;
     ConditionalOStream pcout;
 
     const std::string vtk_folder = "vtk";
     const std::string output_dir = "output/density_field/";
 
-    parallel::distributed::Triangulation<2, 3> triangulation;
+    parallel::distributed::Triangulation<3> tria_1;
+    parallel::distributed::Triangulation<3> tria_2;
 
-    DoFHandler<2, 3> dof_handler;
-    FE_Q<2, 3> fe;
-    MappingQ<2, 3> mapping;
+    DoFHandler<3> dof_handler_1;
+    DoFHandler<3> dof_handler_2;
+    FE_Q<3> fe;
+    MappingQ<3> mapping;
 
     AffineConstraints<double> constraints;
 
@@ -140,19 +142,20 @@ namespace Applications
 
     unsigned int n_refinements;
     unsigned int n_evecs        = 5;
+    unsigned int n_conditioned_densities = 5;
   };
 
   struct ScratchData
   {
-    ScratchData(const Mapping<2, 3> &      mapping,
-                const FiniteElement<2, 3> &fe,
+    ScratchData(const Mapping<3> &      mapping,
+                const FiniteElement<3> &fe,
                 const unsigned int        quadrature_degree,
                 const UpdateFlags         update_flags,
                 const UpdateFlags         interface_update_flags)
-      : fe_values(mapping, fe, QGauss<2>(quadrature_degree), update_flags)
+      : fe_values(mapping, fe, QGauss<3>(quadrature_degree), update_flags)
       , fe_interface_values(mapping,
                             fe,
-                            QGauss<1>(quadrature_degree),
+                            QGauss<2>(quadrature_degree),
                             interface_update_flags)
     {}
 
@@ -168,8 +171,8 @@ namespace Applications
                             scratch_data.fe_interface_values.get_update_flags())
     {}
 
-    FEValues<2, 3>          fe_values;
-    FEInterfaceValues<2, 3> fe_interface_values;
+    FEValues<3>          fe_values;
+    FEInterfaceValues<3> fe_interface_values;
   };
 
 

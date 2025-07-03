@@ -51,8 +51,7 @@ subsection ParameterManager
 
   subsection rsot_solver
     set max_iterations = 10000
-    set regularization_parameter = 1e-2
-    set epsilon = 1e-8
+    set epsilon = 1e-2
     set tau = 1e-1  # Truncation error tolerance for integral radius bound
     set tolerance = 1e-2
     set distance_threshold_type = pointwise # Options: pointwise/integral
@@ -65,8 +64,6 @@ subsection ParameterManager
     set use_epsilon_scaling = false
     set epsilon_scaling_factor = 10
     set epsilon_scaling_steps = 3
-    set use_caching = false
-    set max_cache_size_mb = 20000
   end
 
   subsection power_diagram_parameters

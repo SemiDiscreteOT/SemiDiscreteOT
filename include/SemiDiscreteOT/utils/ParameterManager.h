@@ -57,8 +57,7 @@ public:
         unsigned int max_iterations = 1000;      ///< Maximum number of solver iterations
         double tolerance = 1;                    ///< Convergence tolerance
         std::string solver_control_type = "l1norm"; ///< Type of solver control to use (l1norm/componentwise)
-        double regularization_param = 1e-3;      ///< Entropy regularization parameter
-        double epsilon = 1e-8;                   ///< Kernel truncation parameter
+        double epsilon = 1e-3;      ///< Entropy regularization parameter
         double tau = 1e-8;                       ///< Integral radius bound tolerance
         std::string distance_threshold_type = "pointwise"; ///< Type of distance threshold bound (pointwise|integral|geometric)
         bool verbose_output = true;              ///< Enable detailed solver output
@@ -69,8 +68,6 @@ public:
         bool use_epsilon_scaling = false;        ///< Enable epsilon scaling strategy
         double epsilon_scaling_factor = 2.0;     ///< Factor for epsilon reduction
         unsigned int epsilon_scaling_steps = 5;  ///< Number of scaling steps
-        bool use_caching = false;               ///< Enable distance threshold caching
-        double max_cache_size_mb = 1024.0;      ///< Maximum cache size per processor in MB (0 = unlimited)
         bool use_log_sum_exp_trick = false;     ///< Enable log-sum-exp trick for numerical stability with small entropy
     };
 

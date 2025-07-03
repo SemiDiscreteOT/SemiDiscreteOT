@@ -39,7 +39,7 @@ void OptimalTransportPlan<spacedim>::set_potential(
 {
     AssertDimension(potential.size(), target_points.size());
     transport_potential = potential;
-    regularization_parameter = regularization_param;
+    epsilon = regularization_param;
 }
 
 template <int spacedim>
@@ -58,7 +58,7 @@ void OptimalTransportPlan<spacedim>::compute_map()
 
     strategy->compute_map(distance_function, source_points, source_density,
                          target_points, target_density,
-                         transport_potential, regularization_parameter,
+                         transport_potential, epsilon,
                          truncation_radius);
 }
 

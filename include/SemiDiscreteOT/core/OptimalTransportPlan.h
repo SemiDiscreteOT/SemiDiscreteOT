@@ -120,7 +120,7 @@ private:
     std::vector<Point<spacedim>> target_points;
     std::vector<double> target_density;
     Vector<double> transport_potential;
-    double regularization_parameter;
+    double epsilon;
     double truncation_radius = -1.0;  // Negative means no truncation
 
     // Distance function
