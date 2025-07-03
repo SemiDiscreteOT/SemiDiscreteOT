@@ -235,7 +235,7 @@ int PointCloudHierarchyManager::generateHierarchy(
     // Save the point clouds and parent-child relationships for each level
     for (int level = 0; level < num_levels_; ++level) {
         std::string points_file = output_dir + "/level_" + std::to_string(level) + "_points.txt";
-        std::string densities_file = output_dir + "/level_" + std::to_string(level) + "_densities.txt";
+        std::string densities_file = output_dir + "/level_" + std::to_string(level) + "_density.txt";
         
         std::ofstream points_out(points_file);
         std::ofstream densities_out(densities_file);

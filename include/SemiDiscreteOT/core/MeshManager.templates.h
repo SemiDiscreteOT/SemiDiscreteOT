@@ -75,7 +75,8 @@ void MeshManager<dim, spacedim>::generate_mesh(TriangulationType& tria,
 }
 
 template <int dim, int spacedim>
-void MeshManager<dim, spacedim>::load_source_mesh(parallel::fullydistributed::Triangulation<dim, spacedim>& source_mesh)
+void MeshManager<dim, spacedim>::load_source_mesh(parallel::fullydistributed::Triangulation<dim, spacedim>& source_mesh,
+                                                 const std::string& source_file)
 {
     // First load source mesh into a serial triangulation
     Triangulation<dim, spacedim> serial_source;
@@ -83,34 +84,61 @@ void MeshManager<dim, spacedim>::load_source_mesh(parallel::fullydistributed::Tr
     grid_in_source.attach_triangulation(serial_source);
     bool source_loaded = false;
 
-    // First try VTK
-    std::ifstream in_vtk_source(mesh_directory + "/source.vtk");
-    if (in_vtk_source.good()) {
-        try {
-            grid_in_source.read_vtk(in_vtk_source);
-            source_loaded = true;
-            pcout << "Source mesh loaded from VTK format" << std::endl;
-        } catch (const std::exception& e) {
-            pcout << "Failed to load source mesh from VTK format: " << e.what() << std::endl;
+    // If custom file path is provided, try to load it
+    if (!source_file.empty()) {
+        std::ifstream input_file(source_file);
+        if (input_file.good()) {
+            try {
+                // Determine file format from extension
+                std::string extension = source_file.substr(source_file.find_last_of(".") + 1);
+                if (extension == "vtk") {
+                    grid_in_source.read_vtk(input_file);
+                } else if (extension == "msh") {
+                    grid_in_source.read_msh(input_file);
+                } else {
+                    throw std::runtime_error("Unsupported file format: " + extension);
+                }
+                source_loaded = true;
+                pcout << "Source mesh loaded from custom file: " << source_file << std::endl;
+            } catch (const std::exception& e) {
+                pcout << "Failed to load source mesh from custom file: " << e.what() << std::endl;
+            }
+        } else {
+            pcout << "Could not open custom source mesh file: " << source_file << std::endl;
         }
     }
 
-    // If VTK failed, try MSH
+    // If custom file loading failed or no custom file provided, try default locations
     if (!source_loaded) {
-        std::ifstream in_msh_source(mesh_directory + "/source.msh");
-        if (in_msh_source.good()) {
+        // First try VTK
+        std::ifstream in_vtk_source(mesh_directory + "/source.vtk");
+        if (in_vtk_source.good()) {
             try {
-                grid_in_source.read_msh(in_msh_source);
+                grid_in_source.read_vtk(in_vtk_source);
                 source_loaded = true;
-                pcout << "Source mesh loaded from MSH format" << std::endl;
+                pcout << "Source mesh loaded from VTK format" << std::endl;
             } catch (const std::exception& e) {
-                pcout << "Failed to load source mesh from MSH format: " << e.what() << std::endl;
+                pcout << "Failed to load source mesh from VTK format: " << e.what() << std::endl;
+            }
+        }
+
+        // If VTK failed, try MSH
+        if (!source_loaded) {
+            std::ifstream in_msh_source(mesh_directory + "/source.msh");
+            if (in_msh_source.good()) {
+                try {
+                    grid_in_source.read_msh(in_msh_source);
+                    source_loaded = true;
+                    pcout << "Source mesh loaded from MSH format" << std::endl;
+                } catch (const std::exception& e) {
+                    pcout << "Failed to load source mesh from MSH format: " << e.what() << std::endl;
+                }
             }
         }
     }
 
     if (!source_loaded) {
-        throw std::runtime_error("Failed to load source mesh from either VTK or MSH format");
+        throw std::runtime_error("Failed to load source mesh from either custom file or default locations");
     }
 
     // Partition the serial source mesh using z-order curve
@@ -239,6 +267,7 @@ void MeshManager<dim, spacedim>::load_mesh_at_level(parallel::fullydistributed::
                                "\nError: " + e.what());
     }
 }
+
 
 template <int dim, int spacedim>
 void MeshManager<dim, spacedim>::save_meshes(const parallel::fullydistributed::Triangulation<dim, spacedim>& source_mesh,

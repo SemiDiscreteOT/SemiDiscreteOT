@@ -29,12 +29,16 @@ void MeshHierarchyManager::initializeGeogram() {
     }
 }
 
-bool MeshHierarchyManager::loadVolumeMesh(const std::string& filename, GEO::Mesh& M) const {
-    std::cout << "Loading volume mesh..." << std::endl;
+bool MeshHierarchyManager::loadVolumeMesh(const std::string& filename, GEO::Mesh& M, bool fill_volume) const {
+    std::cout << "Loading mesh..." << std::endl;
+    std::cout << "Fill volume mode: " << (fill_volume ? "enabled (3D)" : "disabled (2D surface)") << std::endl;
+    
     GEO::MeshIOFlags flags;
-    flags.set_element(GEO::MESH_CELLS);
     flags.set_element(GEO::MESH_FACETS);
-    flags.set_attribute(GEO::MESH_CELL_REGION);
+    if (fill_volume) {
+        flags.set_element(GEO::MESH_CELLS);
+        flags.set_attribute(GEO::MESH_CELL_REGION);
+    }
 
     if(!mesh_load(filename, M, flags)) {
         return false;
@@ -45,20 +49,30 @@ bool MeshHierarchyManager::loadVolumeMesh(const std::string& filename, GEO::Mesh
         M.facets.triangulate();
     }
 
-    if(!M.cells.are_simplices()) {
-        std::cout << "Tetrahedralizing cells..." << std::endl;
-        if(!mesh_tetrahedralize(M, true, true)) {
-            return false;
+    if (fill_volume) {
+        // For 3D: Fill volume with tetrahedra
+        if(!M.cells.are_simplices()) {
+            std::cout << "Tetrahedralizing cells..." << std::endl;
+            if(!mesh_tetrahedralize(M, true, true)) {
+                return false;
+            }
         }
-    }
 
-    if(M.cells.nb() == 0) {
-        std::cout << "File " << filename << " does not contain a volume" << std::endl;
-        std::cout << "Trying to tetrahedralize..." << std::endl;
-        if(!mesh_tetrahedralize(M, true, true)) {
-            return false;
+        if(M.cells.nb() == 0) {
+            std::cout << "File " << filename << " does not contain a volume" << std::endl;
+            std::cout << "Trying to tetrahedralize..." << std::endl;
+            if(!mesh_tetrahedralize(M, true, true)) {
+                return false;
+            }
+        }
+    } else {
+        // For 2D: Keep as surface mesh, no volume filling
+        std::cout << "Surface mesh mode: skipping volume tetrahedralization" << std::endl;
+        if(M.cells.nb() > 0) {
+            std::cout << "Warning: Input mesh contains volume cells, but fill_volume=false. Cells will be ignored." << std::endl;
         }
     }
+    
     return true;
 }
 
@@ -95,13 +109,13 @@ int MeshHierarchyManager::getPointsForLevel(int base_points, int level) const {
     return std::max(points, min_vertices_);
 }
 
-int MeshHierarchyManager::generateHierarchyFromFile(const std::string& input_mesh_file, const std::string& output_dir) {
+int MeshHierarchyManager::generateHierarchyFromFile(const std::string& input_mesh_file, const std::string& output_dir, bool fill_volume) {
     // Initialize Geogram if needed
     initializeGeogram();
 
     // Load the input mesh
     GEO::Mesh input_mesh;
-    if (!loadVolumeMesh(input_mesh_file, input_mesh)) {
+    if (!loadVolumeMesh(input_mesh_file, input_mesh, fill_volume)) {
         throw std::runtime_error("Failed to load input mesh: " + input_mesh_file);
     }
 
@@ -148,11 +162,17 @@ int MeshHierarchyManager::generateHierarchyFromFile(const std::string& input_mes
             
             GEO::remesh_smooth(input_mesh, level_mesh, points_for_level);
             
-            // Apply high-quality tetrahedralization
-            GEO::MeshTetrahedralizeParameters params;
-            params.refine = true;
-            params.refine_quality = 1.0;
-            mesh_tetrahedralize(level_mesh, params);
+            if (fill_volume) {
+                // Apply high-quality tetrahedralization for 3D
+                std::cout << "Applying volume tetrahedralization for level " << level << std::endl;
+                GEO::MeshTetrahedralizeParameters params;
+                params.refine = true;
+                params.refine_quality = 1.0;
+                mesh_tetrahedralize(level_mesh, params);
+            } else {
+                // For 2D, keep as surface mesh
+                std::cout << "Keeping level " << level << " as surface mesh (2D mode)" << std::endl;
+            }
         }
 
         // Save the mesh for this level

@@ -67,6 +67,53 @@ class SemiDiscreteOT {
 public:
     SemiDiscreteOT(const MPI_Comm &mpi_communicator);
     void run();
+
+    /**
+     * @brief Configure the solver parameters programmatically.
+     * @param config_func A lambda function that takes a reference to the
+     *                    SotParameterManager and modifies its parameters.
+     */
+    void configure(std::function<void(SotParameterManager&)> config_func);
+
+
+    /**
+     * @brief Setup source measure from standard dealii objects (simplified API for tutorials)
+     * @param tria A standard Triangulation
+     * @param dh A DoFHandler on the provided triangulation
+     * @param density A standard Vector containing the density values
+     * 
+     * This method internally handles the conversion to distributed objects when needed for parallel computation.
+     */
+    void setup_source_measure(
+        Triangulation<dim, spacedim>& tria,
+        const DoFHandler<dim, spacedim>& dh,
+        const Vector<double>& density);
+
+    /**
+     * @brief Set up the target measure from a discrete set of points and weights.
+     * @param points A vector of target points.
+     * @param weights A vector of weights/densities for each target point.
+     */
+    void setup_target_measure(
+        const std::vector<Point<spacedim>>& points,
+        const Vector<double>& weights);
+
+    /**
+     * @brief Pre-computes the multilevel hierarchies for source and/or target.
+     * This must be called after setting up the base measures and before calling solve()
+     * if multilevel computation is desired.
+     */
+    void prepare_multilevel_hierarchies();
+
+
+    /**
+     * @brief Run the optimal transport computation based on the current configuration.
+     *        This method handles single-level, multilevel, and epsilon scaling automatically.
+     * @return A vector containing the computed optimal transport potentials for the target points.
+     */
+    Vector<double> solve();
+
+
     void save_discrete_measures();
     
     void set_distance_function(
@@ -96,16 +143,21 @@ protected:
     std::string& selected_task;
     std::string& io_coding;
 
+    std::unique_ptr<DoFHandler<dim, spacedim>> initial_fine_dof_handler;
+    std::unique_ptr<Vector<double>> initial_fine_density;
+    bool is_setup_programmatically_ = false; 
+
+
     // Mesh and DoF handler members
     parallel::fullydistributed::Triangulation<dim, spacedim> source_mesh;
     Triangulation<dim, spacedim> target_mesh;
     DoFHandler<dim, spacedim> dof_handler_source;
     DoFHandler<dim, spacedim> dof_handler_target;
 
-    std::unique_ptr<VTKHandler<dim>> source_vtk_handler;
-    DoFHandler<dim> vtk_dof_handler_source;
+    std::unique_ptr<VTKHandler<dim,spacedim>> source_vtk_handler;
+    DoFHandler<dim,spacedim> vtk_dof_handler_source;
     Vector<double> vtk_field_source;
-    Triangulation<dim> vtk_tria_source;
+    Triangulation<dim,spacedim> vtk_tria_source;
     // Finite element and mapping members
     std::unique_ptr<FiniteElement<dim, spacedim>> fe_system;
     std::unique_ptr<Mapping<dim, spacedim>> mapping;
@@ -131,7 +183,13 @@ private:
     // Core functionality methods
     void mesh_generation();
     void load_meshes();
-    void run_sot();
+    
+    /**
+     * @brief Run single-level SOT computation.
+     * @return Vector containing the optimal transport potentials for the target points.
+     */
+    Vector<double> run_sot();
+    
     void compute_power_diagram();
     void compute_transport_map();
 
@@ -139,14 +197,30 @@ private:
     // Multilevel methods
     void prepare_source_multilevel();
     void prepare_target_multilevel();
-    void run_multilevel();
-    void run_combined_multilevel();
-    void run_source_multilevel();
-    void run_target_multilevel(const std::string& source_mesh_file = "",
-                             Vector<double>* output_potentials = nullptr,
-                             bool save_results_to_files = true);
-    void run_target_multilevel_for_source_level(
-        const std::string& source_mesh_file, Vector<double>& potentials);
+    
+    /**
+     * @brief Run multilevel SOT computation (dispatcher method).
+     * @return Vector containing the optimal transport potentials for the target points.
+     */
+    Vector<double> run_multilevel();
+    
+    /**
+     * @brief Run combined source and target multilevel SOT computation.
+     * @return Vector containing the optimal transport potentials for the target points.
+     */
+    Vector<double> run_combined_multilevel();
+    
+    /**
+     * @brief Run source-only multilevel SOT computation.
+     * @return Vector containing the optimal transport potentials for the target points.
+     */
+    Vector<double> run_source_multilevel();
+    
+    /**
+     * @brief Run target-only multilevel SOT computation.
+     * @return Vector containing the optimal transport potentials for the target points.
+     */
+    Vector<double> run_target_multilevel();
 
     // Setup methods
     void setup_source_finite_elements(bool is_multilevel = false);

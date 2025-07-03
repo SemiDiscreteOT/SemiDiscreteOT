@@ -1,3 +1,4 @@
+// SemiDiscreteOT.cc
 #include "SemiDiscreteOT/core/SemiDiscreteOT.h"
 namespace fs = std::filesystem;
 
@@ -26,6 +27,167 @@ SemiDiscreteOT<dim, spacedim>::SemiDiscreteOT(const MPI_Comm &comm)
     , sot_solver(std::make_unique<SotSolver<dim, spacedim>>(comm))
 {
 }
+
+template <int dim, int spacedim>
+void SemiDiscreteOT<dim, spacedim>::configure(std::function<void(SotParameterManager&)> config_func)
+{
+    config_func(param_manager);
+    pcout << "Solver configured programmatically." << std::endl;
+    param_manager.print_parameters();
+
+    if (solver_params.use_epsilon_scaling)
+    {
+        epsilon_scaling_handler = std::make_unique<EpsilonScalingHandler>(
+            mpi_communicator,
+            solver_params.regularization_param,
+            solver_params.epsilon_scaling_factor,
+            solver_params.epsilon_scaling_steps);
+    }
+
+    is_setup_programmatically_ = true;
+}
+
+template <int dim, int spacedim>
+void SemiDiscreteOT<dim, spacedim>::setup_source_measure(
+    Triangulation<dim, spacedim>& tria,
+    const DoFHandler<dim, spacedim>& dh,
+    const Vector<double>& density)
+{
+    pcout << "Setting up source measure from standard dealii objects (simplified API)..." << std::endl;
+
+
+
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0)
+    {
+        std::string mesh_directory = "output/data_mesh";
+        mesh_manager->write_mesh(tria,
+                mesh_directory + "/source",
+              std::vector<std::string>{"vtk", "msh"});
+    }
+
+    // Create distributed triangulation from serial triangulation
+    pcout << "Converting serial triangulation to distributed triangulation..." << std::endl;
+
+    // Partition the serial source mesh using z-order curve
+    GridTools::partition_triangulation_zorder(n_mpi_processes, tria);
+
+    // Convert serial source mesh to fullydistributed without multigrid hierarchy
+    auto construction_data = TriangulationDescription::Utilities::create_description_from_triangulation(
+        tria, mpi_communicator,
+        TriangulationDescription::Settings::default_setting);
+    source_mesh.create_triangulation(construction_data);
+    
+    // Set up finite elements on the distributed mesh
+    auto [fe, map] = Utils::create_fe_and_mapping_for_mesh<dim, spacedim>(source_mesh);
+    fe_system = std::move(fe);
+    mapping = std::move(map);
+    
+    // Set up DoFHandler on distributed mesh
+    dof_handler_source.clear();
+    dof_handler_source.reinit(source_mesh);
+    dof_handler_source.distribute_dofs(*fe_system);
+    
+    // Set up distributed vectors
+    IndexSet locally_owned_dofs = dof_handler_source.locally_owned_dofs();
+    IndexSet locally_relevant_dofs;
+    DoFTools::extract_locally_relevant_dofs(dof_handler_source, locally_relevant_dofs);
+    
+    source_density.reinit(locally_owned_dofs, locally_relevant_dofs, mpi_communicator);
+    
+    // Convert serial density to distributed density
+    pcout << "Converting serial density vector to distributed format..." << std::endl;
+    AssertDimension(density.size(), dof_handler_source.n_dofs());
+    
+    // Copy density values to distributed vector
+    for (const auto& dof_index : locally_owned_dofs)
+    {
+        source_density[dof_index] = density[dof_index];
+    }
+    source_density.update_ghost_values();
+    
+    // Normalize the density
+    normalize_density(source_density);
+    
+    pcout << "Distributed source mesh has " << source_mesh.n_active_cells() 
+          << " active cells and " << dof_handler_source.n_dofs() << " DoFs" << std::endl;
+
+    // Store fine-grain data for multilevel operations if needed
+    if (multilevel_params.source_enabled)
+    {
+        pcout << "Storing fine-grain source data for multilevel interpolation." << std::endl;
+        initial_fine_dof_handler = std::make_unique<DoFHandler<dim, spacedim>>(tria);
+        initial_fine_dof_handler->distribute_dofs(dh.get_fe());
+        initial_fine_density = std::make_unique<Vector<double>>(density);
+    }
+
+    is_setup_programmatically_ = true;
+    pcout << "Source measure setup from standard objects complete." << std::endl;
+}
+
+template <int dim, int spacedim>
+void SemiDiscreteOT<dim, spacedim>::setup_target_measure(
+    const std::vector<Point<spacedim>>& points,
+    const Vector<double>& weights)
+{
+    pcout << "Setting up target measure from in-memory objects..." << std::endl;
+    AssertDimension(points.size(), weights.size());
+
+    target_points = points;
+    target_density = weights;
+
+    // Normalize density
+    double sum_weights = target_density.l1_norm();
+    if (sum_weights > 0)
+        target_density /= sum_weights;
+
+    sot_solver->setup_target(target_points, target_density);
+
+    pcout << "Target measure setup complete with " << target_points.size() << " points." << std::endl;
+}
+
+
+template <int dim, int spacedim>
+void SemiDiscreteOT<dim, spacedim>::prepare_multilevel_hierarchies()
+{
+    pcout << "Preparing multilevel hierarchies..." << std::endl;
+
+    if (multilevel_params.source_enabled)
+    {
+        prepare_source_multilevel();
+    }
+
+    if (multilevel_params.target_enabled)
+    {
+        if (target_points.empty())
+            throw std::runtime_error("Target measure must be set up via setup_target_measure() before preparing hierarchies.");
+
+        prepare_target_multilevel();
+    }
+
+    pcout << "Multilevel hierarchies prepared successfully." << std::endl;
+}
+
+template <int dim, int spacedim>
+Vector<double> SemiDiscreteOT<dim, spacedim>::solve()
+{
+    const bool use_multilevel = multilevel_params.source_enabled || multilevel_params.target_enabled;
+
+    Vector<double> final_potentials;
+
+    if (use_multilevel)
+    {
+        final_potentials = run_multilevel();
+    }
+    else
+    {
+        final_potentials = run_sot();
+    }
+
+    pcout << Color::green << Color::bold << "OT solve sequence finished." << Color::reset << std::endl;
+    return final_potentials;
+}
+
+
 
 template <int dim, int spacedim>
 void SemiDiscreteOT<dim, spacedim>::mesh_generation()
@@ -188,26 +350,42 @@ void SemiDiscreteOT<dim, spacedim>::setup_source_finite_elements(const bool is_m
     fe_system = std::move(fe);
     mapping = std::move(map);
 
-    // Distribute DoFs.
+    // dof_handler_source.clear();
     dof_handler_source.distribute_dofs(*fe_system);
+
     IndexSet locally_owned_dofs = dof_handler_source.locally_owned_dofs();
     IndexSet locally_relevant_dofs;
     DoFTools::extract_locally_relevant_dofs(dof_handler_source, locally_relevant_dofs);
-
-    // Initialize source density.
+    
     source_density.reinit(locally_owned_dofs, locally_relevant_dofs, mpi_communicator);
 
-    // Handle custom density if enabled.
-    if (source_params.use_custom_density)
+
+    if (is_multilevel && is_setup_programmatically_ && initial_fine_dof_handler)
     {
-        if (source_params.density_file_format == "vtk")
+        pcout << Color::green 
+              << "Interpolating programmatically provided source density onto current mesh level" 
+              << Color::reset << std::endl;
+        
+        Utils::interpolate_non_conforming_nearest(*initial_fine_dof_handler,
+                                                                 *initial_fine_density,
+                                                                 dof_handler_source,
+                                                                 source_density);
+
+
+                                                                 
+        pcout << "Source density interpolated for current multilevel grid." << std::endl;
+    }
+    else 
+    {
+        // Handle custom density if enabled.
+        if (source_params.use_custom_density)
         {
-            if constexpr (dim==spacedim)
+            if (source_params.density_file_format == "vtk")
             {
                 if (is_multilevel)
                 {
                     pcout << Color::green << "Interpolating source density from VTK to source mesh" << Color::reset << std::endl;
-    
+
                     // For multilevel, use the stored VTKHandler if available
                     if (source_vtk_handler)
                     {
@@ -223,30 +401,30 @@ void SemiDiscreteOT<dim, spacedim>::setup_source_finite_elements(const bool is_m
                                                                   dof_handler_source,
                                                                   source_density);
                     }
-    
+
                     pcout << "Source density interpolated from VTK to source mesh" << std::endl;
                 }
                 else
                 {
                     pcout << "Using custom source density from file: " << source_params.density_file_path << std::endl;
                     bool density_loaded = false;
-    
+
                     try
                     {
                         pcout << "Loading VTK file using VTKHandler: " << source_params.density_file_path << std::endl;
-    
+
                         // Create VTKHandler instance and store it as a member variable
-                        source_vtk_handler = std::make_unique<VTKHandler<dim>>(source_params.density_file_path);
-    
+                        source_vtk_handler = std::make_unique<VTKHandler<dim,spacedim>>(source_params.density_file_path);
+
                         // Setup the field for interpolation using the configured field name
-                        source_vtk_handler->setup_field(source_params.density_field_name, VTKHandler<dim>::DataLocation::PointData, 0);
-    
+                        source_vtk_handler->setup_field(source_params.density_field_name, VTKHandler<dim,spacedim>::DataLocation::PointData, 0);
+
                         pcout << "Source density loaded from VTK file" << std::endl;
                         pcout << Color::green << "Interpolating source density from VTK to source mesh" << Color::reset << std::endl;
-    
+
                         // Interpolate the field to the source mesh
                         VectorTools::interpolate(dof_handler_source, *source_vtk_handler, source_density);
-    
+
                         pcout << "Successfully interpolated VTK field to source mesh" << std::endl;
                         density_loaded = true;
                     }
@@ -255,73 +433,6 @@ void SemiDiscreteOT<dim, spacedim>::setup_source_finite_elements(const bool is_m
                         pcout << Color::red << "Error loading VTK file: " << e.what() << Color::reset << std::endl;
                         density_loaded = false;
                     }
-    
-                    if (!density_loaded)
-                    {
-                        pcout << Color::red << "Failed to load custom density, using uniform density" << Color::reset << std::endl;
-                        source_density = 1.0;
-                    }
-                }
-
-            } else {
-                pcout << Color::red << "Unsupported dim!=spacedim" << Color::reset << std::endl;
-                throw std::runtime_error("Unsupported dimension for source mesh");
-            }
-        }
-        else
-        {
-            pcout << Color::red << "Unsupported density file format, using uniform density" << Color::reset << std::endl;
-            source_density = 1.0;
-        }
-    }
-    else
-    {
-        pcout << Color::green << "Using uniform source density" << Color::reset << std::endl;
-        source_density = 1.0;
-    }
-
-    if (source_params.use_custom_density)
-    {
-        if (source_params.density_file_format == "vtk")
-        {
-            if constexpr (dim == spacedim)
-            {
-                if (is_multilevel)
-                {
-                    pcout << Color::green << "Interpolating source density from VTK to source mesh" << Color::reset << std::endl;
-                    // For multilevel, use non-conforming nearest neighbor interpolation.
-                    Utils::interpolate_non_conforming_nearest<dim, spacedim>(vtk_dof_handler_source,
-                        vtk_field_source,
-                        dof_handler_source,
-                        source_density);                
-                    pcout << "Source density interpolated from VTK to source mesh" << std::endl;
-                } else
-                {
-                    pcout << "Using custom source density from file: " << source_params.density_file_path << std::endl;
-                    bool density_loaded = false;
-
-                    try {
-                        pcout << "Loading VTK file using VTKHandler: " << source_params.density_file_path << std::endl;
-                        
-                        // Create VTKHandler instance and store it as a member variable
-                        source_vtk_handler = std::make_unique<VTKHandler<dim, spacedim>>(source_params.density_file_path);
-                        
-                        // Setup the field for interpolation using the configured field name
-                        source_vtk_handler->setup_field(
-                            source_params.density_field_name, VTKHandler<dim, spacedim>::DataLocation::PointData, 0);
-                        
-                        pcout << "Source density loaded from VTK file" << std::endl;
-                        pcout << Color::green << "Interpolating source density from VTK to source mesh" << Color::reset << std::endl;
-                        
-                        // Interpolate the field to the source mesh
-                        VectorTools::interpolate(dof_handler_source, *source_vtk_handler, source_density);
-                        
-                        pcout << "Successfully interpolated VTK field to source mesh" << std::endl;
-                        density_loaded = true;
-                    } catch (const std::exception& e) {
-                        pcout << Color::red << "Error loading VTK file: " << e.what() << Color::reset << std::endl;
-                        density_loaded = false;
-                    }
 
                     if (!density_loaded)
                     {
@@ -329,22 +440,18 @@ void SemiDiscreteOT<dim, spacedim>::setup_source_finite_elements(const bool is_m
                         source_density = 1.0;
                     }
                 }
-            } else
+            }
+            else
             {
-                pcout << Color::red << "Unsupported dim!=spacedim" << Color::reset << std::endl;
-                throw std::runtime_error("Unsupported dimension for source mesh");
+                pcout << Color::red << "Unsupported density file format, using uniform density" << Color::reset << std::endl;
+                source_density = 1.0;
             }
         }
         else
         {
-            pcout << Color::red << "Unsupported density file format, using uniform density" << Color::reset << std::endl;
+            pcout << Color::green << "Using uniform source density" << Color::reset << std::endl;
             source_density = 1.0;
         }
-    }
-    else
-    {
-        pcout << Color::green << "Using uniform source density" << Color::reset << std::endl;
-        source_density = 1.0;
     }
 
     source_density.update_ghost_values();
@@ -403,43 +510,36 @@ void SemiDiscreteOT<dim, spacedim>::setup_target_finite_elements()
 
             if (target_params.density_file_format == "vtk")
             {
-                if constexpr (dim==spacedim)
+                // Use the VTKHandler class to load and interpolate the field
+                try
                 {
-                    // Use the new VTKHandler class to load and interpolate the field
-                    try
-                    {
-                        pcout << "Loading VTK file using VTKHandler: " << target_params.density_file_path << std::endl;
+                    pcout << "Loading VTK file using VTKHandler: " << target_params.density_file_path << std::endl;
     
-                        // Create VTKHandler instance
-                        VTKHandler<dim> vtk_handler(target_params.density_file_path);
+                    // Create VTKHandler instance
+                    VTKHandler<dim,spacedim> vtk_handler(target_params.density_file_path);
     
-                        // Setup the field for interpolation using the configured field name
-                        vtk_handler.setup_field(target_params.density_field_name, VTKHandler<dim>::DataLocation::PointData, 0);
+                    // Setup the field for interpolation using the configured field name
+                    vtk_handler.setup_field(target_params.density_field_name, VTKHandler<dim,spacedim>::DataLocation::PointData, 0);
     
-                        pcout << "Target density loaded from VTK file" << std::endl;
-                        target_density.reinit(dof_handler_target.n_dofs());
-                        pcout << "Target density size: " << target_density.size() << std::endl;
+                    pcout << "Target density loaded from VTK file" << std::endl;
+                    target_density.reinit(dof_handler_target.n_dofs());
+                    pcout << "Target density size: " << target_density.size() << std::endl;
     
-                        pcout << Color::green << "Interpolating target density from VTK to target mesh" << Color::reset << std::endl;
+                    pcout << Color::green << "Interpolating target density from VTK to target mesh" << Color::reset << std::endl;
     
-                        // Interpolate the field to the target mesh
-                        VectorTools::interpolate(dof_handler_target, vtk_handler, target_density);
+                    // Interpolate the field to the target mesh
+                    VectorTools::interpolate(dof_handler_target, vtk_handler, target_density);
     
-                        pcout << "Successfully interpolated VTK field to target mesh" << std::endl;
-                        pcout << "L1 norm of interpolated field: " << target_density.l1_norm() << std::endl;
-                        target_density /= target_density.l1_norm();
+                    pcout << "Successfully interpolated VTK field to target mesh" << std::endl;
+                    pcout << "L1 norm of interpolated field: " << target_density.l1_norm() << std::endl;
+                    target_density /= target_density.l1_norm();
     
-                        density_loaded = true;
-                    }
-                    catch (const std::exception &e)
-                    {
-                        pcout << Color::red << "Error loading VTK file: " << e.what() << Color::reset << std::endl;
-                        density_loaded = false;
-                    }
+                    density_loaded = true;
                 }
-                else {
-                    pcout << Color::red << "Unsupported dim!=spacedim" << Color::reset << std::endl;
-                    throw std::runtime_error("Unsupported dimension for target mesh");
+                catch (const std::exception &e)
+                {
+                    pcout << Color::red << "Error loading VTK file: " << e.what() << Color::reset << std::endl;
+                    density_loaded = false;
                 }
             }
             else
@@ -610,12 +710,16 @@ void SemiDiscreteOT<dim, spacedim>::assign_potentials_by_hierarchy(
 
 // run single sot optimization with epsilon scaling
 template <int dim, int spacedim>
-void SemiDiscreteOT<dim, spacedim>::run_sot()
+Vector<double> SemiDiscreteOT<dim, spacedim>::run_sot()
 {
     Timer timer;
     timer.start();
 
-    setup_finite_elements();
+
+    if (!is_setup_programmatically_) {
+        setup_finite_elements();
+    }
+
 
     pcout << Color::yellow << Color::bold << "Starting SOT optimization with " << target_points.size()
           << " target points and " << source_density.size() << " source points" << Color::reset << std::endl;
@@ -720,13 +824,13 @@ void SemiDiscreteOT<dim, spacedim>::run_sot()
         conv_info << "Total execution time: " << total_time << " seconds\n";
         conv_info << "Convergence achieved: " << sot_solver->get_convergence_status() << "\n";
     }
+    
+    // Return the computed potentials
+    return potential;
 }
 
 template <int dim, int spacedim>
-void SemiDiscreteOT<dim, spacedim>::run_target_multilevel(
-    const std::string& source_mesh_file,
-    Vector<double>* output_potentials,
-    bool save_results_to_files)
+Vector<double> SemiDiscreteOT<dim, spacedim>::run_target_multilevel()
 {
     Timer global_timer;
     global_timer.start();
@@ -737,17 +841,10 @@ void SemiDiscreteOT<dim, spacedim>::run_target_multilevel(
     pcout << Color::yellow << Color::bold << "Starting target point cloud multilevel SOT computation..." << Color::reset << std::endl;
 
     // Load source mesh based on input parameters
-    if (source_mesh_file.empty())
+    if (!is_setup_programmatically_)
     {
         mesh_manager->load_source_mesh(source_mesh);
         setup_source_finite_elements();
-    }
-    else
-    {
-        pcout << "Source mesh loaded from file: " << source_mesh_file << std::endl;
-        mesh_manager->load_mesh_at_level(source_mesh, dof_handler_source, source_mesh_file);
-        setup_source_finite_elements(true);
-        pcout << "Source mesh loaded from file: " << source_mesh_file << std::endl;
     }
 
     // Get target point cloud hierarchy files (sorted from coarsest to finest)
@@ -763,13 +860,13 @@ void SemiDiscreteOT<dim, spacedim>::run_target_multilevel(
         {
             pcout << Color::red << Color::bold << "Error: " << e.what() << Color::reset << std::endl;
             pcout << "Please run prepare_target_multilevel first." << std::endl;
-            return;
+            return Vector<double>();
         }
 
         if (hierarchy_files.empty())
         {
             pcout << "No target point cloud hierarchy found. Please run prepare_target_multilevel first." << std::endl;
-            return;
+            return Vector<double>();
         }
         num_levels = hierarchy_files.size();
     }
@@ -786,7 +883,7 @@ void SemiDiscreteOT<dim, spacedim>::run_target_multilevel(
     if (!has_hierarchy_data_)
     {
         pcout << "Failed to initialize hierarchy data. Cannot proceed with multilevel computation." << std::endl;
-        return;
+        return Vector<double>();
     }
 
     // Store original solver parameters
@@ -986,8 +1083,7 @@ void SemiDiscreteOT<dim, spacedim>::run_target_multilevel(
                 pcout << Color::red << Color::bold << "Warning: Optimization did not converge for level " << level_number << Color::reset << std::endl;
                 pcout << "  Iterations: " << exc.last_step << std::endl;
                 if (level == 0)
-                    return; // If coarsest level fails, abort
-                // Otherwise continue to next level with current potentials
+                    return Vector<double>(); 
             }
         }
 
@@ -1019,12 +1115,6 @@ void SemiDiscreteOT<dim, spacedim>::run_target_multilevel(
 
         // Store potentials for next level
         level_potentials = current_level_potentials;
-    }
-
-    // If output_potentials is provided, copy the final potentials
-    if (output_potentials != nullptr)
-    {
-        *output_potentials = level_potentials;
     }
 
     // Save final potentials in the top-level directory
@@ -1067,17 +1157,13 @@ void SemiDiscreteOT<dim, spacedim>::run_target_multilevel(
     }
 
     pcout << Color::magenta << Color::bold << "----------------------------------------" << Color::reset << std::endl;
+    
+    // Return the final potentials from the finest level
+    return level_potentials;
 }
 
 template <int dim, int spacedim>
-void SemiDiscreteOT<dim, spacedim>::run_target_multilevel_for_source_level(
-    const std::string& source_mesh_file, Vector<double>& potentials)
-{
-    run_target_multilevel(source_mesh_file, &potentials);
-}
-
-template <int dim, int spacedim>
-void SemiDiscreteOT<dim, spacedim>::run_source_multilevel()
+Vector<double> SemiDiscreteOT<dim, spacedim>::run_source_multilevel()
 {
     Timer global_timer;
     global_timer.start();
@@ -1089,7 +1175,7 @@ void SemiDiscreteOT<dim, spacedim>::run_source_multilevel()
     if (source_mesh_files.empty())
     {
         pcout << "No source mesh hierarchy found. Please run prepare_source_multilevel first." << std::endl;
-        return;
+        return Vector<double>();
     }
     unsigned int num_levels = source_mesh_files.size();
 
@@ -1174,9 +1260,11 @@ void SemiDiscreteOT<dim, spacedim>::run_source_multilevel()
     Vector<double> final_potentials;
     Vector<double> previous_source_potentials;
 
-    mesh_manager->load_source_mesh(source_mesh);                                
-    setup_source_finite_elements();     
-    setup_target_points(); 
+    if (!is_setup_programmatically_) {
+        mesh_manager->load_source_mesh(source_mesh);                                
+        setup_source_finite_elements();     
+        setup_target_points(); 
+    }
 
     for (size_t source_level_idx = 0; source_level_idx < source_mesh_files.size(); ++source_level_idx)
     {
@@ -1281,11 +1369,14 @@ void SemiDiscreteOT<dim, spacedim>::run_source_multilevel()
     pcout << Color::green << "Final results saved in: " << source_multilevel_dir << Color::reset << std::endl;
     pcout << Color::green << Color::bold
           << "============================================" << Color::reset << std::endl;
+    
+    // Return the final potentials from the finest level
+    return final_potentials;
 }
 
 // TODO check if there are bug with dim, spacedim, custom distance
 template <int dim, int spacedim>
-void SemiDiscreteOT<dim, spacedim>::run_combined_multilevel()
+Vector<double> SemiDiscreteOT<dim, spacedim>::run_combined_multilevel()
 {
     Timer global_timer;
     global_timer.start();
@@ -1343,8 +1434,10 @@ void SemiDiscreteOT<dim, spacedim>::run_combined_multilevel()
     double total_softmax_time = 0.0;
 
     // loading mesh and setup FEs, needed for first iteration in order to load interpolate 
-    mesh_manager->load_source_mesh(source_mesh);                                
-    setup_source_finite_elements();     
+    if (!is_setup_programmatically_) {
+        mesh_manager->load_source_mesh(source_mesh);                                
+        setup_source_finite_elements();     
+    }
 
     // Main Loop (Combined Levels)
     for (unsigned int combined_iter = 0; combined_iter < n_c_levels; ++combined_iter) {
@@ -1376,6 +1469,10 @@ void SemiDiscreteOT<dim, spacedim>::run_combined_multilevel()
         std::string current_target_density_file;
 
         if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+            pcout << "target_hierarchy_files.size(): " << target_hierarchy_files.size() << std::endl;
+            pcout << "current_target_idx: " << current_target_idx << std::endl;
+            // print dir target
+            pcout << "target_hierarchy_dir: " << multilevel_params.target_hierarchy_dir << std::endl;
             current_target_points_file = target_hierarchy_files[current_target_idx].first;
             current_target_density_file = target_hierarchy_files[current_target_idx].second;
         }
@@ -1546,10 +1643,13 @@ void SemiDiscreteOT<dim, spacedim>::run_combined_multilevel()
               << " seconds (" << (total_softmax_time / total_time * 100.0) << "%)" << Color::reset << std::endl;
     }
     pcout << Color::green << Color::bold << "============================================" << Color::reset << std::endl;
+    
+    // Return the final potentials from the finest combined level
+    return current_potentials;
 }
 
 template <int dim, int spacedim>
-void SemiDiscreteOT<dim, spacedim>::run_multilevel()
+Vector<double> SemiDiscreteOT<dim, spacedim>::run_multilevel()
 {
     pcout << Color::yellow << Color::bold << "Starting multilevel SOT computation (dispatcher)..." << Color::reset << std::endl;
 
@@ -1559,17 +1659,17 @@ void SemiDiscreteOT<dim, spacedim>::run_multilevel()
     if (source_ml_enabled && !target_ml_enabled)
     {
         pcout << "Executing Source-Only Multilevel SOT." << std::endl;
-        run_source_multilevel();
+        return run_source_multilevel();
     }
     else if (!source_ml_enabled && target_ml_enabled)
     {
         pcout << "Executing Target-Only Multilevel SOT." << std::endl;
-        run_target_multilevel("", nullptr);
+        return run_target_multilevel();
     }
     else if (source_ml_enabled && target_ml_enabled)
     {
         pcout << "Executing Combined Source and Target Multilevel SOT." << std::endl;
-        run_combined_multilevel();
+        return run_combined_multilevel();
     }
     else
     {
@@ -1577,6 +1677,9 @@ void SemiDiscreteOT<dim, spacedim>::run_multilevel()
               << "Error: No multilevel strategy enabled (neither source nor target). "
               << "Please enable at least one in parameters.prm and select the 'multilevel_sot' task."
               << Color::reset << std::endl;
+        
+        // Return empty vector on error
+        return Vector<double>();
     }
 }
 
@@ -1634,41 +1737,53 @@ typename std::enable_if<d == 3 && s == 3>::type SemiDiscreteOT<dim, spacedim>::r
 template <int dim, int spacedim>
 void SemiDiscreteOT<dim, spacedim>::prepare_source_multilevel()
 {
-    pcout << "Preparing multilevel mesh hierarchy..." << std::endl;
 
-    // Create MeshHierarchyManager instance
-    MeshHierarchy::MeshHierarchyManager hierarchy_manager(
-        multilevel_params.source_min_vertices,
-        multilevel_params.source_max_vertices);
-
-    // Ensure source mesh exists
-    const std::string source_mesh_file = "output/data_mesh/source.msh";
-    if (!std::filesystem::exists(source_mesh_file))
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0)
     {
-        pcout << "Source mesh file not found. Please run mesh_generation first." << std::endl;
-        return;
-    }
+        pcout << "Preparing multilevel mesh hierarchy..." << std::endl;
 
-    try
-    {
-        // Create output directory if it doesn't exist
-        const std::string hierarchy_dir = multilevel_params.source_hierarchy_dir;
-        fs::create_directories(hierarchy_dir);
+        // Create MeshHierarchyManager instance
+        MeshHierarchy::MeshHierarchyManager hierarchy_manager(
+            multilevel_params.source_min_vertices,
+            multilevel_params.source_max_vertices);
 
-        // Generate hierarchy
-        int num_levels = hierarchy_manager.generateHierarchyFromFile(
-            source_mesh_file,
-            hierarchy_dir);
+        std::string source_mesh_file = "output/data_mesh/source.msh";
 
-        pcout << Color::green << Color::bold << "Successfully generated mesh hierarchy with " << num_levels << " levels" << Color::reset << std::endl;
-        pcout << Color::green << "Mesh hierarchy saved in: " << hierarchy_dir << Color::reset << std::endl;
-        pcout << Color::green << "Level 1 (finest) vertices: " << multilevel_params.source_max_vertices << Color::reset << std::endl;
-        pcout << Color::green << "Coarsest level vertices: ~" << multilevel_params.source_min_vertices << Color::reset << std::endl;
+        // Check if source mesh file exists
+        if (!std::filesystem::exists(source_mesh_file))
+        {
+            pcout << "Source mesh file not found: " << source_mesh_file << std::endl;
+            pcout << "Please ensure the source mesh is available." << std::endl;
+            return;
+        }
+
+        try
+        {
+            // Create output directory if it doesn't exist
+            const std::string hierarchy_dir = multilevel_params.source_hierarchy_dir;
+            fs::create_directories(hierarchy_dir);
+
+            // Determine whether to fill volume based on dimension
+            constexpr bool fill_volume = (dim == 3);
+            pcout << "Mesh hierarchy generation mode: " << (fill_volume ? "3D volume filling" : "2D surface mesh") << std::endl;
+
+            // Generate hierarchy
+            int num_levels = hierarchy_manager.generateHierarchyFromFile(
+                source_mesh_file,
+                hierarchy_dir,
+                fill_volume);
+
+            pcout << Color::green << Color::bold << "Successfully generated mesh hierarchy with " << num_levels << " levels" << Color::reset << std::endl;
+            pcout << Color::green << "Mesh hierarchy saved in: " << hierarchy_dir << Color::reset << std::endl;
+            pcout << Color::green << "Level 1 (finest) vertices: " << multilevel_params.source_max_vertices << Color::reset << std::endl;
+            pcout << Color::green << "Coarsest level vertices: ~" << multilevel_params.source_min_vertices << Color::reset << std::endl;
+        }
+        catch (const std::exception &e)
+        {
+            pcout << Color::red << Color::bold << "Error: " << e.what() << Color::reset << std::endl;
+        }
     }
-    catch (const std::exception &e)
-    {
-        pcout << Color::red << Color::bold << "Error: " << e.what() << Color::reset << std::endl;
-    }
+    MPI_Barrier(mpi_communicator);
 }
 
 template <int dim, int spacedim>
@@ -1752,8 +1867,6 @@ void SemiDiscreteOT<dim, spacedim>::prepare_target_multilevel()
                 return;
             }
         }
-        // Load the hierarchy data for use in computations
-        load_hierarchy_data(multilevel_params.target_hierarchy_dir);
     }
     MPI_Barrier(mpi_communicator);
 }
@@ -2230,7 +2343,7 @@ void SemiDiscreteOT<dim, spacedim>::run()
     else if (selected_task == "sot")
     {
         load_meshes();
-        run_sot();
+        Vector<double> potentials = run_sot();
     }
     else if (selected_task == "prepare_source_multilevel")
     {
@@ -2253,15 +2366,15 @@ void SemiDiscreteOT<dim, spacedim>::run()
     }
     else if (selected_task == "target_multilevel")
     {
-        run_target_multilevel();
+        Vector<double> potentials = run_target_multilevel();
     }
     else if (selected_task == "source_multilevel")
     {
-        run_source_multilevel();
+        Vector<double> potentials = run_source_multilevel();
     }
     else if (selected_task == "multilevel")
     {
-        run_multilevel();
+        Vector<double> potentials = run_multilevel();
     }
     else if (selected_task == "exact_sot")
     {

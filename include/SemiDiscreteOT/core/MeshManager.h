@@ -47,8 +47,10 @@ public:
     /**
      * @brief Load source mesh from file into distributed triangulation
      * @param source_mesh Distributed triangulation to load into
+     * @param source_file Optional path to source mesh file. If not provided, defaults to mesh_directory/source.[vtk|msh]
      */
-    void load_source_mesh(parallel::fullydistributed::Triangulation<dim, spacedim>& source_mesh);
+    void load_source_mesh(parallel::fullydistributed::Triangulation<dim, spacedim>& source_mesh,
+                         const std::string& source_file = "");
 
     /**
      * @brief Load target mesh from file into serial triangulation
