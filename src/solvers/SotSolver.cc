@@ -1040,9 +1040,7 @@ void SotSolver<dim, spacedim>::get_potential_conditioned_density(
     }
         
     for (unsigned int idensity = 0; idensity < conditioned_densities.size(); ++idensity)
-    {
         conditioned_densities[idensity].compress(VectorOperation::insert);
-    }
 }
 
 
