@@ -976,7 +976,8 @@ void SotSolver<dim, spacedim>::get_potential_conditioned_density(
     const Mapping<dim, spacedim> &mapping,
     const Vector<double> &potential,
     const std::vector<unsigned int> &potential_indices,
-    std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> &conditioned_densities)
+    std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> &conditioned_densities,
+    bool thresholded = true)
 {
     std::cout << "Current epsilon: " << current_epsilon << std::endl;
     auto locally_owned_dofs = dof_handler.locally_owned_dofs();
@@ -1039,9 +1040,7 @@ void SotSolver<dim, spacedim>::get_potential_conditioned_density(
     }
         
     for (unsigned int idensity = 0; idensity < conditioned_densities.size(); ++idensity)
-    {
         conditioned_densities[idensity].compress(VectorOperation::insert);
-    }
 }
 
 
