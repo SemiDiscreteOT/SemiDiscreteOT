@@ -106,8 +106,16 @@ namespace Applications
     KokkosSOT(const MPI_Comm &comm);
     void run();
     void kokkos_semidiscrete_ot(Vector<double> &potential);
+    double evaluate_functional_sot(
+      const Kokkos::View<double*> &phi,
+      Kokkos::View<double*> &grad,
+      const Kokkos::DualView<double*[3]> y,
+      const Kokkos::DualView<double*> nu,
+      const Kokkos::DualView<double*[3]> x,
+      const Kokkos::DualView<double*> mu);
+
     void kokkos_regularized_semidiscrete_ot(Vector<double> &potential);
-    double evaluate_functional(
+    double evaluate_functional_rsot(
       double epsilon,
       const Kokkos::View<double*> &phi,
       Kokkos::View<double*> &grad,
@@ -123,9 +131,14 @@ namespace Applications
     void output_eigenfunctions() const;
     void output_normalized_source(LinearAlgebra::distributed::Vector<double, MemorySpace::Host> &source) const;
     void output_conditioned_densities(
-      std::vector<Vector<double>> &conditioned_densities,
-      Vector<double> &number_of_non_thresholded_targets,
+      std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> &conditioned_densities,
+      LinearAlgebra::distributed::Vector<double, MemorySpace::Host> &target_indices,
       std::vector<unsigned int> &potential_indices) const;
+    void kokkos_init(
+      Kokkos::DualView<double*[3]>y,
+      Kokkos::DualView<double*>nu,
+      Kokkos::DualView<double*[3]>x,
+      Kokkos::DualView<double*>mu);
 
     MPI_Comm mpi_communicator;
     ConditionalOStream pcout;

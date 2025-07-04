@@ -192,7 +192,14 @@ void SotSolver<dim, spacedim>::solve(
 
         solver.solve(
             [this](const Vector<double>& w, Vector<double>& grad) {
-                return this->evaluate_functional(w, grad);
+                auto start = std::chrono::system_clock::now();
+                auto res = this->evaluate_functional(w, grad);
+                auto end = std::chrono::system_clock::now();
+                auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+                if (current_params.verbose_output) {
+                    pcout << "Functional evaluation took " << elapsed.count() << " microseconds" << std::endl;
+                }
+                return res;
             },
             potentials
         );
@@ -977,7 +984,8 @@ void SotSolver<dim, spacedim>::get_potential_conditioned_density(
     const Vector<double> &potential,
     const std::vector<unsigned int> &potential_indices,
     std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> &conditioned_densities,
-    bool thresholded = true)
+    LinearAlgebra::distributed::Vector<double, MemorySpace::Host> &target_indices,
+    bool thresholded)
 {
     std::cout << "Current epsilon: " << current_epsilon << std::endl;
     auto locally_owned_dofs = dof_handler.locally_owned_dofs();
@@ -987,6 +995,7 @@ void SotSolver<dim, spacedim>::get_potential_conditioned_density(
     DoFTools::map_dofs_to_support_points(
         mapping, dof_handler, sp);
     
+    target_indices.reinit(locally_owned_dofs, mpi_communicator);
     for (unsigned int idensity = 0; idensity < conditioned_densities.size(); ++idensity)
         conditioned_densities[idensity].reinit(locally_owned_dofs, mpi_communicator);
         
@@ -994,7 +1003,14 @@ void SotSolver<dim, spacedim>::get_potential_conditioned_density(
     
     for (auto idx: locally_owned_dofs)
     {
-        std::vector<std::size_t> cell_target_indices = find_nearest_target_points(sp[idx]);
+        std::vector<std::size_t> cell_target_indices;
+        if (thresholded)
+            cell_target_indices = find_nearest_target_points(sp[idx]);
+        else{
+            cell_target_indices.resize(target_measure.points.size());
+            std::iota(cell_target_indices.begin(), cell_target_indices.end(), 0);
+        }
+        target_indices[idx] = cell_target_indices.size();
         
         std::vector<double> exp(potential.size(), 0.0);
         double total_sum_exp = 0;
@@ -1039,6 +1055,7 @@ void SotSolver<dim, spacedim>::get_potential_conditioned_density(
         } 
     }
         
+    target_indices.compress(VectorOperation::insert);
     for (unsigned int idensity = 0; idensity < conditioned_densities.size(); ++idensity)
         conditioned_densities[idensity].compress(VectorOperation::insert);
 }

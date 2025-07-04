@@ -301,7 +301,7 @@ SolverKokkosBFGS::solve(
  
   double g_l2_norm = l2norm(g);
   double g_l1_norm = l1norm(g);
-  auto conv = solver_control.check(k, g_l2_norm);
+  auto conv = solver_control.check(k, g_l1_norm);
   
   if (conv != BFGSControl::Status::iterate)
     return;
@@ -344,7 +344,8 @@ SolverKokkosBFGS::solve(
     // 3. Check convergence
     ++k;
     double g_l2 = l2norm(g);
-    conv = solver_control.check(k, g_l2);
+    double g_l1 = l1norm(g);
+    conv = solver_control.check(k, g_l1);
     if (conv != BFGSControl::Status::iterate)
       break;
 
