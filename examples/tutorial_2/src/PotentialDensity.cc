@@ -365,7 +365,8 @@ namespace Applications
   }
 
   void PotentialDensity::output_conditioned_densities(
-    std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> &conditioned_densities) const
+    std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> &conditioned_densities,
+    LinearAlgebra::distributed::Vector<double, MemorySpace::Host> &target_indices) const
 {
     DataOut<3> data_out;
     data_out.attach_dof_handler(dof_handler_1);
@@ -390,6 +391,11 @@ namespace Applications
           DataOut<3>::type_dof_data,
           interpretation);
     }
+    data_out.add_data_vector(
+      target_indices,
+      std::string("target_indices"),
+      DataOut<3>::type_dof_data,
+      interpretation);
 
     // --- Build patches and write output files ---
     data_out.build_patches(mapping, fe.degree);
@@ -543,13 +549,14 @@ void PotentialDensity::run()
     }
 
     std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> conditioned_densities;
+    LinearAlgebra::distributed::Vector<double, MemorySpace::Host> target_indices;
 
     this->sot_solver->get_potential_conditioned_density(
       dof_handler_1, mapping,
-      potential, potential_indices, conditioned_densities);
+      potential, potential_indices, conditioned_densities, target_indices);
 
     output_conditioned_densities(
-      conditioned_densities);
+      conditioned_densities, target_indices);
 
   }
 }
