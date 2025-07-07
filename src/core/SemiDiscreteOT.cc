@@ -51,17 +51,20 @@ template <int dim, int spacedim>
 void SemiDiscreteOT<dim, spacedim>::setup_source_measure(
     Triangulation<dim, spacedim>& tria,
     const DoFHandler<dim, spacedim>& dh,
-    const Vector<double>& density)
+    const Vector<double>& density,
+    const std::string& name)
 {
     pcout << "Setting up source measure from standard dealii objects (simplified API)..." << std::endl;
 
-
+    // Store the source mesh name for later use
+    if (!name.empty())
+        source_mesh_name = name;
 
     if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0)
     {
         std::string mesh_directory = "output/data_mesh";
         mesh_manager->write_mesh(tria,
-                mesh_directory + "/source",
+                mesh_directory + "/" + source_mesh_name,
               std::vector<std::string>{"vtk", "msh"});
     }
 
@@ -168,7 +171,7 @@ void SemiDiscreteOT<dim, spacedim>::prepare_multilevel_hierarchies()
 }
 
 template <int dim, int spacedim>
-Vector<double> SemiDiscreteOT<dim, spacedim>::solve()
+Vector<double> SemiDiscreteOT<dim, spacedim>::solve(const Vector<double>& initial_potential)
 {
     const bool use_multilevel = multilevel_params.source_enabled || multilevel_params.target_enabled;
 
@@ -176,18 +179,20 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::solve()
 
     if (use_multilevel)
     {
+        if (initial_potential.size() > 0) {
+            pcout << Color::yellow << "Warning: Initial potential provided but multilevel is enabled. "
+                  << "Initial potential will be ignored." << Color::reset << std::endl;
+        }
         final_potentials = run_multilevel();
     }
     else
     {
-        final_potentials = run_sot();
+        final_potentials = run_sot(initial_potential);
     }
 
     pcout << Color::green << Color::bold << "OT solve sequence finished." << Color::reset << std::endl;
     return final_potentials;
 }
-
-
 
 template <int dim, int spacedim>
 void SemiDiscreteOT<dim, spacedim>::mesh_generation()
@@ -708,9 +713,8 @@ void SemiDiscreteOT<dim, spacedim>::assign_potentials_by_hierarchy(
     }
 }
 
-// run single sot optimization with epsilon scaling
 template <int dim, int spacedim>
-Vector<double> SemiDiscreteOT<dim, spacedim>::run_sot()
+Vector<double> SemiDiscreteOT<dim, spacedim>::run_sot(const Vector<double>& initial_potential)
 {
     Timer timer;
     timer.start();
@@ -737,7 +741,22 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_sot()
     // Set up target measure
     sot_solver->setup_target(target_points, target_density);
 
-    Vector<double> potential(target_points.size());
+    // Initialize potential vector
+    Vector<double> potential;
+    if (initial_potential.size() > 0) {
+        // Verify that the initial potential has the correct size
+        if (initial_potential.size() != target_points.size()) {
+            pcout << Color::red << Color::bold << "Error: Initial potential size (" << initial_potential.size() 
+                  << ") does not match target points size (" << target_points.size() << ")" << Color::reset << std::endl;
+            return Vector<double>();
+        }
+        pcout << Color::green << "Using provided initial potential" << Color::reset << std::endl;
+        potential = initial_potential;
+    } else {
+        // Initialize with zeros
+        potential.reinit(target_points.size());
+        potential = 0.0;
+    }
 
     try
     {
@@ -843,7 +862,7 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_target_multilevel()
     // Load source mesh based on input parameters
     if (!is_setup_programmatically_)
     {
-        mesh_manager->load_source_mesh(source_mesh);
+        mesh_manager->load_source_mesh(source_mesh, source_mesh_name);
         setup_source_finite_elements();
     }
 
@@ -1261,7 +1280,7 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_source_multilevel()
     Vector<double> previous_source_potentials;
 
     if (!is_setup_programmatically_) {
-        mesh_manager->load_source_mesh(source_mesh);
+        mesh_manager->load_source_mesh(source_mesh, source_mesh_name);
         setup_source_finite_elements();
         setup_target_points();
     }
@@ -1747,7 +1766,7 @@ void SemiDiscreteOT<dim, spacedim>::prepare_source_multilevel()
             multilevel_params.source_min_vertices,
             multilevel_params.source_max_vertices);
 
-        std::string source_mesh_file = "output/data_mesh/source.msh";
+        std::string source_mesh_file = "output/data_mesh/" + source_mesh_name + ".msh";
 
         // Check if source mesh file exists
         if (!std::filesystem::exists(source_mesh_file))
@@ -2310,7 +2329,7 @@ void SemiDiscreteOT<dim, spacedim>::save_interpolated_fields()
                 }
             }
         }
-    }
+        }
 
     pcout << "\n"
           << Color::green << Color::bold

@@ -77,7 +77,7 @@ public:
      */
     struct MultilevelParameters {
         // Source mesh hierarchy parameters
-        bool source_enabled = true;             ///< Whether to use source multilevel approach
+        bool source_enabled = false;             ///< Whether to use source multilevel approach
         int source_min_vertices = 1000;         ///< Minimum vertices for coarsest source level
         int source_max_vertices = 10000;        ///< Maximum vertices for finest source level
         std::string source_hierarchy_dir = "output/data_multilevel/source_multilevel";  ///< Source hierarchy directory

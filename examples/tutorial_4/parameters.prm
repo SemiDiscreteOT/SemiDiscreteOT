@@ -1,0 +1,71 @@
+# Parameter file for Wasserstein Barycenter computation
+
+subsection Barycenter
+  # Maximum number of barycenter iterations
+  set max_iterations = 100
+  # Convergence tolerance for barycenter iterations
+  set convergence_tolerance = 1e-4
+  # Weight for first source measure
+  set weight_1 = 0.5
+  # Weight for second source measure
+  set weight_2 = 0.5
+  # Number of points in barycenter discretization
+  set n_barycenter_points = 1000
+  # Random seed for barycenter initialization
+  set random_seed = 42
+  # Frequency of output (every N iterations)
+  set output_frequency = 5
+  # Minimum bound for initial barycenter points
+  set initial_bounds_min = -0.1
+  # Maximum bound for initial barycenter points
+  set initial_bounds_max = 0.1
+end
+
+subsection Step Controller
+  # Initial step size
+  set initial_alpha = 20
+  # Minimum step size
+  set min_alpha = 1e-4
+  # Maximum step size
+  set max_alpha = 1e4
+  # Factor by which to decrease step size
+  set decay_factor = 0.8
+  # Factor by which to increase step size
+  set growth_factor = 1.1
+end
+
+subsection Optimal Transport
+  # Regularization parameter
+  set epsilon = 0.01
+  # Distance threshold for computational efficiency
+  set distance_threshold = 10
+  # Numerical stability parameter
+  set tau = 1e-12
+  # Maximum iterations for OT solver
+  set max_iterations = 1000
+  # Tolerance for OT solver
+  set tolerance = 1e-4
+  # Use log-sum-exp trick for numerical stability
+  set use_log_sum_exp_trick = true
+  # Enable verbose output for OT solver
+  set verbose_output = false
+  # Type of distance threshold
+  set distance_threshold_type = pointwise
+  # Enable multilevel for source
+  set source_multilevel_enabled = false
+  # Enable multilevel for target
+  set target_multilevel_enabled = false
+end
+
+subsection Files
+  # Filename for first source mesh
+  set source1_filename = source1.msh
+  # Filename for second source mesh
+  set source2_filename = source2.msh
+  # Prefix for output files
+  set output_prefix = barycenter
+  # Save results in VTK format
+  set save_vtk = true
+  # Save results in text format
+  set save_txt = true
+end

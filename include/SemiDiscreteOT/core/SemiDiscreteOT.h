@@ -81,13 +81,15 @@ public:
      * @param tria A standard Triangulation
      * @param dh A DoFHandler on the provided triangulation
      * @param density A standard Vector containing the density values
+     * @param name An optional name for the source mesh (used for saving and hierarchy generation)
      * 
      * This method internally handles the conversion to distributed objects when needed for parallel computation.
      */
     void setup_source_measure(
         Triangulation<dim, spacedim>& tria,
         const DoFHandler<dim, spacedim>& dh,
-        const Vector<double>& density);
+        const Vector<double>& density,
+        const std::string& name = "source");
 
     /**
      * @brief Set up the target measure from a discrete set of points and weights.
@@ -109,10 +111,10 @@ public:
     /**
      * @brief Run the optimal transport computation based on the current configuration.
      *        This method handles single-level, multilevel, and epsilon scaling automatically.
+     * @param initial_potential Optional initial potential values to start the optimization from.
      * @return A vector containing the computed optimal transport potentials for the target points.
      */
-    Vector<double> solve();
-
+    Vector<double> solve(const Vector<double>& initial_potential = Vector<double>());
 
     void save_discrete_measures();
     
@@ -147,6 +149,8 @@ protected:
     std::unique_ptr<Vector<double>> initial_fine_density;
     bool is_setup_programmatically_ = false; 
 
+    // Source mesh name for saving and hierarchy generation
+    std::string source_mesh_name = "source";
 
     // Mesh and DoF handler members
     parallel::fullydistributed::Triangulation<dim, spacedim> source_mesh;
@@ -186,9 +190,10 @@ private:
     
     /**
      * @brief Run single-level SOT computation.
+     * @param initial_potential Optional initial potential values to start the optimization from.
      * @return Vector containing the optimal transport potentials for the target points.
      */
-    Vector<double> run_sot();
+    Vector<double> run_sot(const Vector<double>& initial_potential = Vector<double>());
     
     void compute_power_diagram();
     void compute_transport_map();
