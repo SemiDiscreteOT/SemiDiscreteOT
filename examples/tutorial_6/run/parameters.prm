@@ -1,7 +1,7 @@
 subsection Tutorial 3
   subsection KokkosSOT
     set task = kokkosrsot  # kokkosrsot | kokkossot | rsot
-    set number of refinements = 2
+    set number of refinements = 0
     set number of eigenfunctions = 5
     set number of conditioned densities = 5
   end

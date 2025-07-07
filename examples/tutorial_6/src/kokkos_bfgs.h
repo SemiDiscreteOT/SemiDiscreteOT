@@ -388,7 +388,8 @@ SolverKokkosBFGS::solve(
     g_l1_norm = l1norm(g);
     double elapsed = timer.seconds();
     std::cout << "Iteration " << k << " in " << elapsed*1e6 << " mus, "
-              << " L2-norm grad: " << g_l2_norm
+              << " Functional value: " << f
+              << " ,L2-norm grad: " << g_l2_norm
               << ", L1-norm grad: " << g_l1_norm << std::endl;
   }
 }
