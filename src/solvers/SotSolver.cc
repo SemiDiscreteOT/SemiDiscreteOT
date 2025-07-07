@@ -701,9 +701,10 @@ void SotSolver<dim,spacedim>::compute_weighted_barycenters_non_euclidean(
         }
 
         // Create scratch and copy data
-        ScratchData scratch_data(*source_measure.fe,
-                               *source_measure.mapping,
-                               *quadrature);
+        ScratchData scratch_data(
+            *source_measure.fe,
+            *source_measure.mapping,
+            *quadrature);
         CopyData copy_data(target_measure.points.size());
 
         // Create filtered iterators for locally owned cells
@@ -1000,6 +1001,7 @@ void SotSolver<dim, spacedim>::get_potential_conditioned_density(
         conditioned_densities[idensity].reinit(locally_owned_dofs, mpi_communicator);
         
     double epsilon_inv = 1.0 / current_epsilon;
+    pcout << "Epsilon conditioned densities: " << current_epsilon << std::endl;
     
     for (auto idx: locally_owned_dofs)
     {
@@ -1007,7 +1009,7 @@ void SotSolver<dim, spacedim>::get_potential_conditioned_density(
         if (thresholded)
             cell_target_indices = find_nearest_target_points(sp[idx]);
         else{
-            cell_target_indices.resize(target_measure.points.size());
+            cell_target_indices.resize(potential.size());
             std::iota(cell_target_indices.begin(), cell_target_indices.end(), 0);
         }
         target_indices[idx] = cell_target_indices.size();

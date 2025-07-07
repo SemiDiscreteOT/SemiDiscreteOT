@@ -450,7 +450,6 @@ namespace Applications
                            update_values | update_JxW_values | update_quadrature_points);
     std::vector<double> density_values(quadrature->size());
     
-    
     for (unsigned int i = 0; i < y.extent(0); ++i){
       nu.h_view(i) = this->target_density[i];
       for (unsigned int d = 0; d < 3; ++d)
@@ -490,8 +489,8 @@ namespace Applications
   }
 
   double KokkosSOT::evaluate_functional_sot(
-    const Kokkos::View<double*> &phi,
-    Kokkos::View<double*> &grad,
+    const Kokkos::View<double*> phi,
+    Kokkos::View<double*> grad,
     const Kokkos::DualView<double*[3]> y,
     const Kokkos::DualView<double*> nu,
     const Kokkos::DualView<double*[3]> x,
@@ -503,7 +502,7 @@ namespace Applications
     Kokkos::parallel_for("ComputeArgmax", x.extent(0), KOKKOS_LAMBDA(int i) {
       double max_kernel = -1e20;
       int max_j = -1;
-      for (int j = 0; j < y.extent(0); ++j) {
+      for (long unsigned int j = 0; j < y.extent(0); ++j) {
         double dist = 0.0;
         for (int d = 0; d < 3; ++d) {
           double tmp = x.d_view(i, d) - y.d_view(j, d); // euclidean distance
@@ -527,7 +526,7 @@ namespace Applications
 
     Kokkos::parallel_for("SubtractNu", y.extent(0), KOKKOS_LAMBDA(int i) {
       grad(i) -= nu.d_view(i);
-      phi(i) -= grad(i);
+      // phi(i) -= grad(i);
     });
     
     // compute functional value
@@ -538,7 +537,7 @@ namespace Applications
 
     double dot_phi_nu = 0.0;
     Kokkos::parallel_reduce("ComputeDotPhiNu", y.extent(0), KOKKOS_LAMBDA(int j, double &dot_sum) {
-      dot_sum += phi(j) * nu.d_view(j);
+      dot_sum -= phi(j) * nu.d_view(j);
     }, dot_phi_nu);
 
     return functional_value - dot_phi_nu;
@@ -557,7 +556,7 @@ namespace Applications
     Kokkos::DualView<double*> mu("mu", n_source);
 
     auto phi_host = Kokkos::create_mirror_view(phi);
-    for (unsigned int i = 0; i < n_target; ++i)
+    for (int i = 0; i < n_target; ++i)
       phi_host(i) = potential[i];
     Kokkos::deep_copy(phi, phi_host);
 
@@ -589,8 +588,8 @@ namespace Applications
   // TODO: use kokkos nested parallel_for ?
   double KokkosSOT::evaluate_functional_rsot(
     double epsilon,
-    const Kokkos::View<double*> &phi,
-    Kokkos::View<double*> &grad,
+    const Kokkos::View<double*> phi,
+    Kokkos::View<double*> grad,
     const Kokkos::DualView<double*[3]> y,
     const Kokkos::DualView<double*> nu,
     const Kokkos::DualView<double*[3]> x,
@@ -607,7 +606,7 @@ namespace Applications
       for (long unsigned int j = 0; j < y.extent(0); ++j) {
         double dist = 0.0;
         for (int d = 0; d < 3; ++d) {
-          double tmp = x.d_view(i, d) - y.d_view(j, d); // euclidean distance
+          double tmp = x.d_view(i, d) - y.d_view(j, d);
           dist += tmp * tmp;
         }
         double exp=(phi(j)-0.5*dist)/epsilon;
@@ -619,7 +618,7 @@ namespace Applications
       for (long unsigned int j = 0; j < y.extent(0); ++j) {
         double dist = 0.0;
         for (int d = 0; d < 3; ++d) {
-          double tmp = x.d_view(i, d) - y.d_view(j, d); // euclidean expance
+          double tmp = x.d_view(i, d) - y.d_view(j, d);
           dist += tmp * tmp;
         }
         double exp=(phi(j)-0.5*dist)/epsilon;
@@ -641,7 +640,6 @@ namespace Applications
       }
 
       grad(j) = grad_j-nu.d_view(j);
-      phi(j) -= grad_j-nu.d_view(j);
     });
     
     // compute functional value
@@ -666,26 +664,26 @@ namespace Applications
     Kokkos::DualView<double*> nu("nu", n_target);
 
     auto quadrature = Utils::create_quadrature_for_mesh<3>(tria_1, solver_params.quadrature_order);
+    pcout << "Quadrature size: " << quadrature->size() << std::endl;
     const int n_source = tria_1.n_active_cells() * quadrature->size();
     Kokkos::DualView<double*[3]> x("x", n_source, 3);
     Kokkos::DualView<double*> mu("mu", n_source);
 
     auto phi_host = Kokkos::create_mirror_view(phi);
-    for (unsigned int i = 0; i < n_target; ++i)
+    for (int i = 0; i < n_target; ++i)
       phi_host(i) = potential[i];
     Kokkos::deep_copy(phi, phi_host);
 
     kokkos_init(y, nu, x, mu);
 
-    pcout << "End Kokkos view\n";
-
-    double epsilon = this->sot_solver->current_params.epsilon;
+    SotParameterManager::SolverParameters& solver_config = this->solver_params;
+    double epsilon = solver_config.epsilon;
+    this->sot_solver->current_epsilon = epsilon;
     pcout << "Epsilon: " << epsilon << std::endl;
 
     pcout << "Running on Kokkos execution space: " 
         << typeid(Kokkos::DefaultExecutionSpace).name() << std::endl;
 
-    SotParameterManager::SolverParameters& solver_config = this->solver_params;
     SolverKokkosBFGS::BFGSControl control(solver_config.max_iterations, solver_config.tolerance);
     SolverKokkosBFGS::AdditionalData additional_data;
     pcout << "Using BFGS solver with max iterations: "
@@ -693,7 +691,7 @@ namespace Applications
 
     SolverKokkosBFGS solver(control, additional_data);
     solver.solve(
-      [this, y, nu, x, mu, &epsilon](const Kokkos::View<double*> phi_, Kokkos::View<double*> grad_) {
+      [this, y, nu, x, mu, epsilon](const Kokkos::View<double*> phi_, Kokkos::View<double*> grad_) {
         return this->evaluate_functional_rsot(
           epsilon, phi_, grad_, y, nu, x, mu);
       },
@@ -918,10 +916,10 @@ int main(int argc, char *argv[])
 {
   try
   {
-    InitFinalize mpi_initialization(argc, argv,          InitializeLibrary::MPI | InitializeLibrary::SLEPc | InitializeLibrary::PETSc |
+    InitFinalize mpi_initialization(argc, argv,          InitializeLibrary::MPI | InitializeLibrary::SLEPc | InitializeLibrary::PETSc | InitializeLibrary::Kokkos |
         InitializeLibrary::Zoltan | InitializeLibrary::P4EST);
 
-    Kokkos::initialize(argc, argv);
+    // Kokkos::initialize(argc, argv);
 
     printf("Hello World on Kokkos execution space %s\n",
             typeid(Kokkos::DefaultExecutionSpace).name ());
@@ -952,7 +950,7 @@ int main(int argc, char *argv[])
     // Ensure all Kokkos resources are deallocated before finalizing
     pcout << "Finalizing Kokkos..." << std::endl;
     Kokkos::DefaultExecutionSpace().fence();
-    Kokkos::finalize();
+    // Kokkos::finalize();
   }
   catch (std::exception &exc)
   {

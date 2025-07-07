@@ -107,8 +107,8 @@ namespace Applications
     void run();
     void kokkos_semidiscrete_ot(Vector<double> &potential);
     double evaluate_functional_sot(
-      const Kokkos::View<double*> &phi,
-      Kokkos::View<double*> &grad,
+      const Kokkos::View<double*> phi,
+      Kokkos::View<double*> grad,
       const Kokkos::DualView<double*[3]> y,
       const Kokkos::DualView<double*> nu,
       const Kokkos::DualView<double*[3]> x,
@@ -117,8 +117,8 @@ namespace Applications
     void kokkos_regularized_semidiscrete_ot(Vector<double> &potential);
     double evaluate_functional_rsot(
       double epsilon,
-      const Kokkos::View<double*> &phi,
-      Kokkos::View<double*> &grad,
+      const Kokkos::View<double*> phi,
+      Kokkos::View<double*> grad,
       const Kokkos::DualView<double*[3]> y,
       const Kokkos::DualView<double*> nu,
       const Kokkos::DualView<double*[3]> x,

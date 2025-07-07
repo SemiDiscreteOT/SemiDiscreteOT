@@ -350,6 +350,7 @@ public:
 
     // Current solver parameters
     SotParameterManager::SolverParameters current_params;
+    double current_epsilon;
 
 private:
 
@@ -507,7 +508,6 @@ private:
     mutable double current_distance_threshold;
     mutable double effective_distance_threshold;
     const Vector<double>* current_potential;
-    double current_epsilon;
     mutable double global_functional;
     Vector<double> gradient;  
     double covering_radius;           
