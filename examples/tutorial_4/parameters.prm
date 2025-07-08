@@ -23,28 +23,28 @@ end
 
 subsection Step Controller
   # Initial step size
-  set initial_alpha = 20
+  set initial_alpha = 100
   # Minimum step size
   set min_alpha = 1e-4
   # Maximum step size
   set max_alpha = 1e4
   # Factor by which to decrease step size
-  set decay_factor = 0.8
+  set decay_factor = 0.9
   # Factor by which to increase step size
   set growth_factor = 1.1
 end
 
 subsection Optimal Transport
   # Regularization parameter
-  set epsilon = 0.01
+  set epsilon = 1e-3
   # Distance threshold for computational efficiency
   set distance_threshold = 10
   # Numerical stability parameter
-  set tau = 1e-12
+  set tau = 0
   # Maximum iterations for OT solver
-  set max_iterations = 1000
+  set max_iterations = 50000
   # Tolerance for OT solver
-  set tolerance = 1e-4
+  set tolerance = 1e-2
   # Use log-sum-exp trick for numerical stability
   set use_log_sum_exp_trick = true
   # Enable verbose output for OT solver
@@ -55,6 +55,10 @@ subsection Optimal Transport
   set source_multilevel_enabled = false
   # Enable multilevel for target
   set target_multilevel_enabled = false
+  # Minimum number of vertices for source multilevel
+  set source_min_vertices = 100
+  # Maximum number of vertices for source multilevel
+  set source_max_vertices = 5000
 end
 
 subsection Files

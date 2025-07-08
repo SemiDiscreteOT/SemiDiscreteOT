@@ -32,23 +32,23 @@ class BarycenterParameters : public ParameterAcceptor
 public:
     BarycenterParameters() : ParameterAcceptor("Barycenter")
     {
-        add_parameter("max_iterations", max_iterations, 
+        add_parameter("max_iterations", max_iterations,
                      "Maximum number of barycenter iterations");
-        add_parameter("convergence_tolerance", convergence_tolerance, 
+        add_parameter("convergence_tolerance", convergence_tolerance,
                      "Convergence tolerance for barycenter iterations");
-        add_parameter("weight_1", weight_1, 
+        add_parameter("weight_1", weight_1,
                      "Weight for first source measure");
-        add_parameter("weight_2", weight_2, 
+        add_parameter("weight_2", weight_2,
                      "Weight for second source measure");
-        add_parameter("n_barycenter_points", n_barycenter_points, 
+        add_parameter("n_barycenter_points", n_barycenter_points,
                      "Number of points in barycenter discretization");
-        add_parameter("random_seed", random_seed, 
+        add_parameter("random_seed", random_seed,
                      "Random seed for barycenter initialization");
-        add_parameter("output_frequency", output_frequency, 
+        add_parameter("output_frequency", output_frequency,
                      "Frequency of output (every N iterations)");
-        add_parameter("initial_bounds_min", initial_bounds_min, 
+        add_parameter("initial_bounds_min", initial_bounds_min,
                      "Minimum bound for initial barycenter points");
-        add_parameter("initial_bounds_max", initial_bounds_max, 
+        add_parameter("initial_bounds_max", initial_bounds_max,
                      "Maximum bound for initial barycenter points");
     }
 
@@ -68,15 +68,15 @@ class StepControllerParameters : public ParameterAcceptor
 public:
     StepControllerParameters() : ParameterAcceptor("Step Controller")
     {
-        add_parameter("initial_alpha", initial_alpha, 
+        add_parameter("initial_alpha", initial_alpha,
                      "Initial step size");
-        add_parameter("min_alpha", min_alpha, 
+        add_parameter("min_alpha", min_alpha,
                      "Minimum step size");
-        add_parameter("max_alpha", max_alpha, 
+        add_parameter("max_alpha", max_alpha,
                      "Maximum step size");
-        add_parameter("decay_factor", decay_factor, 
+        add_parameter("decay_factor", decay_factor,
                      "Factor by which to decrease step size");
-        add_parameter("growth_factor", growth_factor, 
+        add_parameter("growth_factor", growth_factor,
                      "Factor by which to increase step size");
     }
 
@@ -92,26 +92,30 @@ class OptimalTransportParameters : public ParameterAcceptor
 public:
     OptimalTransportParameters() : ParameterAcceptor("Optimal Transport")
     {
-        add_parameter("epsilon", epsilon, 
+        add_parameter("epsilon", epsilon,
                      "Regularization parameter");
-        add_parameter("distance_threshold", distance_threshold, 
+        add_parameter("distance_threshold", distance_threshold,
                      "Distance threshold for computational efficiency");
-        add_parameter("tau", tau, 
+        add_parameter("tau", tau,
                      "Numerical stability parameter");
-        add_parameter("max_iterations", max_iterations, 
+        add_parameter("max_iterations", max_iterations,
                      "Maximum iterations for OT solver");
-        add_parameter("tolerance", tolerance, 
+        add_parameter("tolerance", tolerance,
                      "Tolerance for OT solver");
-        add_parameter("use_log_sum_exp_trick", use_log_sum_exp_trick, 
+        add_parameter("use_log_sum_exp_trick", use_log_sum_exp_trick,
                      "Use log-sum-exp trick for numerical stability");
-        add_parameter("verbose_output", verbose_output, 
+        add_parameter("verbose_output", verbose_output,
                      "Enable verbose output for OT solver");
-        add_parameter("distance_threshold_type", distance_threshold_type, 
+        add_parameter("distance_threshold_type", distance_threshold_type,
                      "Type of distance threshold");
-        add_parameter("source_multilevel_enabled", source_multilevel_enabled, 
+        add_parameter("source_multilevel_enabled", source_multilevel_enabled,
                      "Enable multilevel for source");
-        add_parameter("target_multilevel_enabled", target_multilevel_enabled, 
+        add_parameter("target_multilevel_enabled", target_multilevel_enabled,
                      "Enable multilevel for target");
+        add_parameter("source_min_vertices", source_min_vertices,
+                     "Minimum number of vertices for source multilevel");
+        add_parameter("source_max_vertices", source_max_vertices,
+                     "Maximum number of vertices for source multilevel");
     }
 
     double epsilon = 1e-2;
@@ -124,6 +128,8 @@ public:
     std::string distance_threshold_type = "pointwise";
     bool source_multilevel_enabled = false;
     bool target_multilevel_enabled = false;
+    unsigned int source_min_vertices = 100;
+    unsigned int source_max_vertices = 500;
 };
 
 class FileParameters : public ParameterAcceptor
@@ -131,15 +137,15 @@ class FileParameters : public ParameterAcceptor
 public:
     FileParameters() : ParameterAcceptor("Files")
     {
-        add_parameter("source1_filename", source1_filename, 
+        add_parameter("source1_filename", source1_filename,
                      "Filename for first source mesh");
-        add_parameter("source2_filename", source2_filename, 
+        add_parameter("source2_filename", source2_filename,
                      "Filename for second source mesh");
-        add_parameter("output_prefix", output_prefix, 
+        add_parameter("output_prefix", output_prefix,
                      "Prefix for output files");
-        add_parameter("save_vtk", save_vtk, 
+        add_parameter("save_vtk", save_vtk,
                      "Save results in VTK format");
-        add_parameter("save_txt", save_txt, 
+        add_parameter("save_txt", save_txt,
                      "Save results in text format");
     }
 
@@ -278,10 +284,10 @@ class AdaptiveStepController
 {
 public:
     AdaptiveStepController(const StepControllerParameters &params)
-        : alpha(params.initial_alpha), 
-          min_alpha(params.min_alpha), 
+        : alpha(params.initial_alpha),
+          min_alpha(params.min_alpha),
           max_alpha(params.max_alpha),
-          decay_factor(params.decay_factor), 
+          decay_factor(params.decay_factor),
           growth_factor(params.growth_factor),
           previous_change(std::numeric_limits<double>::max())
     {
@@ -309,42 +315,42 @@ private:
     double previous_change;
 };
 
-void save_vtk_output(const std::vector<Point<3>> &points, 
-                     const Vector<double> &weights, 
+void save_vtk_output(const std::vector<Point<3>> &points,
+                     const Vector<double> &weights,
                      const std::string &filename)
 {
     std::ofstream vtk_file(filename);
     if (!vtk_file.is_open()) return;
 
     const unsigned int n_points = points.size();
-    
+
     vtk_file << "# vtk DataFile Version 3.0\n";
     vtk_file << "Barycenter Points\n";
     vtk_file << "ASCII\n";
     vtk_file << "DATASET UNSTRUCTURED_GRID\n";
     vtk_file << "POINTS " << n_points << " float\n";
-    
+
     for (const auto &point : points) {
         vtk_file << point[0] << " " << point[1] << " " << point[2] << "\n";
     }
-    
+
     vtk_file << "CELLS " << n_points << " " << 2 * n_points << "\n";
     for (unsigned int i = 0; i < n_points; ++i) {
         vtk_file << "1 " << i << "\n";
     }
-    
+
     vtk_file << "CELL_TYPES " << n_points << "\n";
     for (unsigned int i = 0; i < n_points; ++i) {
         vtk_file << "1\n";  // VTK_VERTEX
     }
-    
+
     vtk_file << "POINT_DATA " << n_points << "\n";
     vtk_file << "SCALARS weights float 1\n";
     vtk_file << "LOOKUP_TABLE default\n";
     for (unsigned int i = 0; i < n_points; ++i) {
         vtk_file << weights[i] << "\n";
     }
-    
+
     vtk_file.close();
 }
 
@@ -374,7 +380,7 @@ int main(int argc, char *argv[])
     } catch (const std::exception &e) {
         pcout << "Warning: Could not load parameter file '" << parameter_filename << "'." << std::endl;
         pcout << "Creating default parameter file..." << std::endl;
-        
+
         // Create default parameter file
         std::ofstream param_file(parameter_filename);
         if (param_file.is_open()) {
@@ -398,7 +404,7 @@ int main(int argc, char *argv[])
     const int spacedim = 3;
 
     // Configure OT solver
-    auto configure_solver = [&ot_params](SotParameterManager &p) {
+    auto configure_solver = [&ot_params](SotParameterManager &p, int solver_id) {
         p.solver_params.epsilon = ot_params.epsilon;
         p.solver_params.use_log_sum_exp_trick = ot_params.use_log_sum_exp_trick;
         p.solver_params.verbose_output = ot_params.verbose_output;
@@ -408,13 +414,16 @@ int main(int argc, char *argv[])
         p.solver_params.tolerance = ot_params.tolerance;
         p.multilevel_params.source_enabled = ot_params.source_multilevel_enabled;
         p.multilevel_params.target_enabled = ot_params.target_multilevel_enabled;
+        p.multilevel_params.source_min_vertices = ot_params.source_min_vertices;
+        p.multilevel_params.source_max_vertices = ot_params.source_max_vertices;
+        p.multilevel_params.source_hierarchy_dir = "source_hierarchy_" + std::to_string(solver_id);
     };
 
     SemiDiscreteOT<dim, spacedim> sot_problem_1(mpi_comm);
-    sot_problem_1.configure(configure_solver);
+    sot_problem_1.configure([&](SotParameterManager &p) { configure_solver(p, 1); });
     SemiDiscreteOT<dim, spacedim> sot_problem_2(mpi_comm);
-    sot_problem_2.configure(configure_solver);
-    
+    sot_problem_2.configure([&](SotParameterManager &p) { configure_solver(p, 2); });
+
     // Load source meshes
     Triangulation<dim, spacedim> source1_tria;
     {
@@ -426,12 +435,12 @@ int main(int argc, char *argv[])
             return 1;
         }
         grid_in.read_msh(input_file);
-        
-        // const double volume = GridTools::volume(source1_tria);
-        // if (volume > 1e-12) {
-        //     GridTools::scale(1.0 / std::cbrt(volume), source1_tria);
-        //     pcout << "Rescaled source 1 to unit volume." << std::endl;
-        // }
+
+        const double volume = GridTools::volume(source1_tria);
+        if (volume > 1e-12) {
+            GridTools::scale(1.0 / std::cbrt(volume), source1_tria);
+            pcout << "Rescaled source 1 to unit volume." << std::endl;
+        }
     }
     FE_SimplexP<dim, spacedim> source1_fe(1);
     DoFHandler<dim, spacedim> source1_dof_handler(source1_tria);
@@ -450,12 +459,12 @@ int main(int argc, char *argv[])
             return 1;
         }
         grid_in.read_msh(input_file);
-        
-        // const double volume = GridTools::volume(source2_tria);
-        // if (volume > 1e-12) {
-        //     GridTools::scale(1.0 / std::cbrt(volume), source2_tria);
-        //     pcout << "Rescaled source 2 to unit volume." << std::endl;
-        // }
+
+        const double volume = GridTools::volume(source2_tria);
+        if (volume > 1e-12) {
+            GridTools::scale(1.0 / std::cbrt(volume), source2_tria);
+            pcout << "Rescaled source 2 to unit volume." << std::endl;
+        }
     }
     FE_SimplexP<dim, spacedim> source2_fe(1);
     DoFHandler<dim, spacedim> source2_dof_handler(source2_tria);
@@ -464,23 +473,34 @@ int main(int argc, char *argv[])
     source2_density = 1.0;
     sot_problem_2.setup_source_measure(source2_tria, source2_dof_handler, source2_density, "source_2");
 
+    sot_problem_1.prepare_multilevel_hierarchies();
+    sot_problem_2.prepare_multilevel_hierarchies();
+
     // Initialize barycenter
     pcout << "Initializing barycenter..." << std::endl;
-    pcout << "barycenter_params.initial_bounds_min: " << barycenter_params.initial_bounds_min << std::endl;
-    pcout << "barycenter_params.initial_bounds_max: " << barycenter_params.initial_bounds_max << std::endl;
+    pcout << "Using support points from the second mesh for initialization" << std::endl;
     std::vector<Point<spacedim>> barycenter_points;
-    std::mt19937 gen(barycenter_params.random_seed);
-    std::uniform_real_distribution<> dist(barycenter_params.initial_bounds_min, 
-                                          barycenter_params.initial_bounds_max);
-    for (unsigned int i = 0; i < barycenter_params.n_barycenter_points; ++i) {
-        barycenter_points.push_back(Point<spacedim>(dist(gen), dist(gen), dist(gen)));
+
+    // Get support points from the second mesh
+    std::map<types::global_dof_index, Point<spacedim>> support_points;
+    DoFTools::map_dofs_to_support_points(MappingFE<dim, spacedim>(source2_fe),
+                                        source2_dof_handler,
+                                        support_points);
+
+    // Use support points for barycenter initialization
+    for (const auto& [index, point] : support_points) {
+        barycenter_points.push_back(point);
     }
+
+    barycenter_params.n_barycenter_points = barycenter_points.size();
+
+
     Vector<double> barycenter_weights(barycenter_params.n_barycenter_points);
     if (Utilities::MPI::this_mpi_process(mpi_comm) == 0) {
         Utils::write_vector(barycenter_points, "barycenter_points.txt");
     }
     barycenter_weights = 1.0 / barycenter_params.n_barycenter_points;
-    pcout << "Initialized barycenter with " << barycenter_params.n_barycenter_points << " random points." << std::endl;
+    pcout << "Initialized barycenter with " << barycenter_params.n_barycenter_points << " points from the second mesh." << std::endl;
 
     // Initialize step controller
     AdaptiveStepController step_controller(step_params);
@@ -509,9 +529,9 @@ int main(int argc, char *argv[])
             source1_dof_handler.begin_active(), source1_dof_handler.end(),
             [&](const auto& cell, auto& scratch, auto& copy) {
                 if (cell->is_locally_owned())
-                    local_assemble_barycenter_gradient(cell, scratch, copy, source1_density, 
-                                                      barycenter_points, barycenter_weights, 
-                                                      potentials_1, ot_params.epsilon, 
+                    local_assemble_barycenter_gradient(cell, scratch, copy, source1_density,
+                                                      barycenter_points, barycenter_weights,
+                                                      potentials_1, ot_params.epsilon,
                                                       ot_params.distance_threshold);
             },
             [&](const auto& copy) { copy_local_to_global_barycenter(copy, grad_points_1); },
@@ -523,23 +543,23 @@ int main(int argc, char *argv[])
             source2_dof_handler.begin_active(), source2_dof_handler.end(),
             [&](const auto& cell, auto& scratch, auto& copy) {
                 if (cell->is_locally_owned())
-                    local_assemble_barycenter_gradient(cell, scratch, copy, source2_density, 
-                                                      barycenter_points, barycenter_weights, 
-                                                      potentials_2, ot_params.epsilon, 
+                    local_assemble_barycenter_gradient(cell, scratch, copy, source2_density,
+                                                      barycenter_points, barycenter_weights,
+                                                      potentials_2, ot_params.epsilon,
                                                       ot_params.distance_threshold);
             },
             [&](const auto& copy) { copy_local_to_global_barycenter(copy, grad_points_2); },
             BarycenterScratchData<dim, spacedim>(source2_fe, source2_mapping, 2),
             BarycenterCopyData<spacedim>(barycenter_params.n_barycenter_points, spacedim));
-        
+
         Utilities::MPI::sum(grad_points_1, mpi_comm, grad_points_1);
         Utilities::MPI::sum(grad_points_2, mpi_comm, grad_points_2);
 
         // Update barycenter points
         Vector<double> total_grad_points(barycenter_params.n_barycenter_points * spacedim);
-        total_grad_points.add(barycenter_params.weight_1, grad_points_1, 
+        total_grad_points.add(barycenter_params.weight_1, grad_points_1,
                              barycenter_params.weight_2, grad_points_2);
-        
+
         const double alpha = step_controller.get();
         for (unsigned int i = 0; i < barycenter_params.n_barycenter_points; ++i)
         {
@@ -557,8 +577,8 @@ int main(int argc, char *argv[])
         }
         point_change = std::sqrt(point_change / barycenter_params.n_barycenter_points);
         step_controller.update(point_change);
-        
-        pcout << "  RMS Point Change: " << std::scientific << std::setprecision(3) << point_change 
+
+        pcout << "  RMS Point Change: " << std::scientific << std::setprecision(3) << point_change
               << ", Step Size: " << std::fixed << std::setprecision(4) << alpha << std::endl;
 
         if (point_change < barycenter_params.convergence_tolerance)
@@ -568,34 +588,34 @@ int main(int argc, char *argv[])
         }
 
         // Output intermediate results
-        if (Utilities::MPI::this_mpi_process(mpi_comm) == 0 && 
+        if (Utilities::MPI::this_mpi_process(mpi_comm) == 0 &&
             (iter + 1) % barycenter_params.output_frequency == 0)
         {
             std::string iter_suffix = "_iter_" + std::to_string(iter + 1);
-            
+
             if (file_params.save_txt) {
                 Utils::write_vector(barycenter_points, file_params.output_prefix + iter_suffix);
             }
-            
+
             if (file_params.save_vtk) {
-                save_vtk_output(barycenter_points, barycenter_weights, 
+                save_vtk_output(barycenter_points, barycenter_weights,
                                file_params.output_prefix + iter_suffix + ".vtk");
             }
         }
     }
-    
+
     // Save final results
     if (Utilities::MPI::this_mpi_process(mpi_comm) == 0)
     {
         if (file_params.save_txt) {
             Utils::write_vector(barycenter_points, file_params.output_prefix + "_final");
         }
-        
+
         if (file_params.save_vtk) {
-            save_vtk_output(barycenter_points, barycenter_weights, 
+            save_vtk_output(barycenter_points, barycenter_weights,
                            file_params.output_prefix + "_final.vtk");
         }
-        
+
         pcout << "\nSaved final barycenter to " << file_params.output_prefix << "_final.*" << std::endl;
     }
 
