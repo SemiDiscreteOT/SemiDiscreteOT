@@ -38,6 +38,8 @@ public:
                      "Convergence tolerance for barycenter iterations");
         add_parameter("weight_1", weight_1,
                      "Weight for first source measure");
+        add_parameter("random_initialization", random_initialization,
+                     "Use random initialization for barycenter points");
         add_parameter("weight_2", weight_2,
                      "Weight for second source measure");
         add_parameter("n_barycenter_points", n_barycenter_points,
@@ -61,6 +63,7 @@ public:
     unsigned int output_frequency = 5;
     double initial_bounds_min = -0.5;
     double initial_bounds_max = 0.5;
+    bool random_initialization = true;
 };
 
 class StepControllerParameters : public ParameterAcceptor
@@ -478,29 +481,64 @@ int main(int argc, char *argv[])
 
     // Initialize barycenter
     pcout << "Initializing barycenter..." << std::endl;
-    pcout << "Using support points from the second mesh for initialization" << std::endl;
     std::vector<Point<spacedim>> barycenter_points;
+    if (barycenter_params.random_initialization) {
+        pcout << "Using random initialization within the bounding box of both geometries" << std::endl;
 
-    // Get support points from the second mesh
-    std::map<types::global_dof_index, Point<spacedim>> support_points;
-    DoFTools::map_dofs_to_support_points(MappingFE<dim, spacedim>(source2_fe),
-                                        source2_dof_handler,
-                                        support_points);
-
-    // Use support points for barycenter initialization
-    for (const auto& [index, point] : support_points) {
-        barycenter_points.push_back(point);
+        // Compute bounding box of both geometries
+        dealii::BoundingBox<spacedim> bbox1 = GridTools::compute_bounding_box(source1_tria);
+        dealii::BoundingBox<spacedim> bbox2 = GridTools::compute_bounding_box(source2_tria);
+    
+        // Combine bounding boxes
+        Point<spacedim> min_point, max_point;
+        std::pair<Point<spacedim>, Point<spacedim>> bounds1 = bbox1.get_boundary_points();
+        std::pair<Point<spacedim>, Point<spacedim>> bounds2 = bbox2.get_boundary_points();
+    
+        for (unsigned int d = 0; d < spacedim; ++d) {
+            min_point[d] = std::min(bounds1.first[d], bounds2.first[d]);
+            max_point[d] = std::max(bounds1.second[d], bounds2.second[d]);
+        }
+    
+        // Initialize random number generator
+        std::mt19937 rng(barycenter_params.random_seed);
+        std::vector<std::uniform_real_distribution<double>> dist;
+        for (unsigned int d = 0; d < spacedim; ++d) {
+            dist.emplace_back(min_point[d], max_point[d]);
+        }
+    
+        // Generate random points within the bounding box
+        barycenter_points.resize(barycenter_params.n_barycenter_points);
+        for (unsigned int i = 0; i < barycenter_params.n_barycenter_points; ++i) {
+            for (unsigned int d = 0; d < spacedim; ++d) {
+                barycenter_points[i][d] = dist[d](rng);
+            }
+        }
     }
-
-    barycenter_params.n_barycenter_points = barycenter_points.size();
-
+    else {
+        pcout << "Using support points from the second mesh for initialization" << std::endl;
+        std::map<types::global_dof_index, Point<spacedim>> support_points;
+        DoFTools::map_dofs_to_support_points(MappingFE<dim, spacedim>(source2_fe),
+                                            source2_dof_handler,
+                                            support_points);
+        for (const auto& [index, point] : support_points) {
+            barycenter_points.push_back(point);
+        }
+        barycenter_params.n_barycenter_points = barycenter_points.size();
+    }
 
     Vector<double> barycenter_weights(barycenter_params.n_barycenter_points);
     if (Utilities::MPI::this_mpi_process(mpi_comm) == 0) {
         Utils::write_vector(barycenter_points, "barycenter_points.txt");
+        
+        // Save initial barycenter points in VTK format
+        if (file_params.save_vtk) {
+            save_vtk_output(barycenter_points, barycenter_weights,
+                           file_params.output_prefix + "_initial.vtk");
+            pcout << "Saved initial barycenter to " << file_params.output_prefix << "_initial.vtk" << std::endl;
+        }
     }
     barycenter_weights = 1.0 / barycenter_params.n_barycenter_points;
-    pcout << "Initialized barycenter with " << barycenter_params.n_barycenter_points << " points from the second mesh." << std::endl;
+    pcout << "Initialized barycenter with " << barycenter_params.n_barycenter_points << " random points." << std::endl;
 
     // Initialize step controller
     AdaptiveStepController step_controller(step_params);

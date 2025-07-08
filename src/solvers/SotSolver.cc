@@ -951,7 +951,7 @@ void SotSolver<dim, spacedim>::compute_weighted_barycenters_euclidean(
         barycenters_out.resize(target_measure.points.size());
         for (unsigned int i = 0; i < target_measure.points.size(); ++i) {
             for (unsigned int d = 0; d < spacedim; ++d) {
-                barycenters_out[i][d] = barycenters[spacedim * i + d];
+                barycenters_out[i][d] = barycenters[spacedim * i + d]/target_measure.density[i];
             }
         }
 

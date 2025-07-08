@@ -4,35 +4,37 @@ subsection Barycenter
   # Maximum number of barycenter iterations
   set max_iterations = 100
   # Convergence tolerance for barycenter iterations
-  set convergence_tolerance = 1e-4
+  set convergence_tolerance = 1e-3
   # Weight for first source measure
   set weight_1 = 0.5
   # Weight for second source measure
   set weight_2 = 0.5
+  # Use random initialization for barycenter points
+  set random_initialization = false
   # Number of points in barycenter discretization
   set n_barycenter_points = 1000
   # Random seed for barycenter initialization
   set random_seed = 42
   # Frequency of output (every N iterations)
-  set output_frequency = 5
+  set output_frequency = 1
   # Minimum bound for initial barycenter points
   set initial_bounds_min = -0.1
   # Maximum bound for initial barycenter points
   set initial_bounds_max = 0.1
 end
 
-subsection Step Controller
-  # Initial step size
-  set initial_alpha = 100
-  # Minimum step size
-  set min_alpha = 1e-4
-  # Maximum step size
-  set max_alpha = 1e4
-  # Factor by which to decrease step size
-  set decay_factor = 0.9
-  # Factor by which to increase step size
-  set growth_factor = 1.1
-end
+# subsection Step Controller
+#   # Initial step size
+#   set initial_alpha = 20
+#   # Minimum step size
+#   set min_alpha = 1e-4
+#   # Maximum step size
+#   set max_alpha = 1e4
+#   # Factor by which to decrease step size
+#   set decay_factor = 0.9
+#   # Factor by which to increase step size
+#   set growth_factor = 1.1
+# end
 
 subsection Optimal Transport
   # Regularization parameter
@@ -44,7 +46,7 @@ subsection Optimal Transport
   # Maximum iterations for OT solver
   set max_iterations = 50000
   # Tolerance for OT solver
-  set tolerance = 1e-2
+  set tolerance = 1e-6
   # Use log-sum-exp trick for numerical stability
   set use_log_sum_exp_trick = true
   # Enable verbose output for OT solver

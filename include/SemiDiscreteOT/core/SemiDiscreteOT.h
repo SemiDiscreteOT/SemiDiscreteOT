@@ -107,6 +107,19 @@ public:
      */
     void prepare_multilevel_hierarchies();
 
+    /**
+     * @brief Get a pointer to the solver object.
+     * @return Pointer to the solver object.
+     */
+    SotSolver<dim, spacedim> *get_solver() { return sot_solver.get(); }
+
+    /**
+     * @brief Get a reference to the solver parameters.
+     * @return Reference to the solver parameters.
+     */
+    const SotParameterManager::SolverParameters &get_solver_params() const { return solver_params; }
+    
+
 
     /**
      * @brief Run the optimal transport computation based on the current configuration.
