@@ -58,6 +58,8 @@ public:
                      "Minimum bound for initial barycenter points");
         add_parameter("initial_bounds_max", initial_bounds_max,
                      "Maximum bound for initial barycenter points");
+        add_parameter("sampling_id", sampling_id,
+                     "Source ID to sample from (0=both, 1=source1, 2=source2)");
     }
 
     unsigned int max_iterations = 100;
@@ -71,6 +73,7 @@ public:
     double initial_bounds_min = -1.0;
     double initial_bounds_max = 1.0;
     bool volume_scaling = false;
+    unsigned int sampling_id = 0;
 };
 
 class OptimalTransportParameters : public ParameterAcceptor
@@ -93,6 +96,8 @@ public:
         add_parameter("source_max_vertices", source_max_vertices, "Maximum number of vertices for source multilevel");
         add_parameter("target_min_points", target_min_points, "Minimum number of points for target multilevel");
         add_parameter("target_max_points", target_max_points, "Maximum number of points for target multilevel");
+        add_parameter("use_python_clustering", use_python_clustering, "Whether to use Python scripts for clustering");
+        add_parameter("python_script_name", python_script_name, "Name of the Python script to use");
     }
 
     double epsilon = 1e-2;
@@ -109,6 +114,8 @@ public:
     unsigned int source_max_vertices = 500;
     unsigned int target_min_points = 100;
     unsigned int target_max_points = 1000;
+    bool use_python_clustering = true;
+    std::string python_script_name = "multilevel_clustering_faiss_cpu.py";
 };
 
 class FileParameters : public ParameterAcceptor
@@ -279,6 +286,8 @@ int main(int argc, char *argv[])
         p.multilevel_params.target_min_points = ot_params.target_min_points;
         p.multilevel_params.target_max_points = ot_params.target_max_points;
         p.multilevel_params.source_hierarchy_dir = "output/barycenter_h/source" + std::to_string(solver_id);
+        p.multilevel_params.use_python_clustering = ot_params.use_python_clustering;
+        p.multilevel_params.python_script_name = ot_params.python_script_name;
     };
 
     auto problem1 = std::make_shared<SemiDiscreteOT<dim, spacedim>>(mpi_comm);
@@ -377,22 +386,35 @@ int main(int argc, char *argv[])
                 unsigned int n_from_source1 = static_cast<unsigned int>(barycenter_params.weight_1 * barycenter_params.n_barycenter_points);
                 unsigned int n_from_source2 = barycenter_params.n_barycenter_points - n_from_source1;
 
-                pcout << "Sampling " << n_from_source1 << " points from source1 (weight: " << barycenter_params.weight_1 << ")" << std::endl;
-                pcout << "Sampling " << n_from_source2 << " points from source2 (weight: " << barycenter_params.weight_2 << ")" << std::endl;
+                // Sample based on sampling_id
+                if (barycenter_params.sampling_id == 1) {
+                    // Sample all points from source 1
+                    pcout << "Sampling all " << barycenter_params.n_barycenter_points << " points from source1 (sampling_id=1)" << std::endl;
+                    barycenter_points = sample_points_from_geometry(source1_tria, barycenter_params.n_barycenter_points, rng);
+                } 
+                else if (barycenter_params.sampling_id == 2) {
+                    // Sample all points from source 2
+                    pcout << "Sampling all " << barycenter_params.n_barycenter_points << " points from source2 (sampling_id=2)" << std::endl;
+                    barycenter_points = sample_points_from_geometry(source2_tria, barycenter_params.n_barycenter_points, rng);
+                }
+                else {
+                    // Default behavior: sample from both sources based on weights
+                    pcout << "Sampling " << n_from_source1 << " points from source1 (weight: " << barycenter_params.weight_1 << ")" << std::endl;
+                    pcout << "Sampling " << n_from_source2 << " points from source2 (weight: " << barycenter_params.weight_2 << ")" << std::endl;
 
-                // Sample points from both geometries
-                std::vector<Point<spacedim>> points_from_source1 = sample_points_from_geometry(source1_tria, n_from_source1, rng);
-                std::vector<Point<spacedim>> points_from_source2 = sample_points_from_geometry(source2_tria, n_from_source2, rng);
+                    // Sample points from both geometries
+                    std::vector<Point<spacedim>> points_from_source1 = sample_points_from_geometry(source1_tria, n_from_source1, rng);
+                    std::vector<Point<spacedim>> points_from_source2 = sample_points_from_geometry(source2_tria, n_from_source2, rng);
 
-                // Combine the sampled points
-                barycenter_points.clear();
-                barycenter_points.reserve(barycenter_params.n_barycenter_points);
-                barycenter_points.insert(barycenter_points.end(), points_from_source1.begin(), points_from_source1.end());
-                barycenter_points.insert(barycenter_points.end(), points_from_source2.begin(), points_from_source2.end());
+                    // Combine the sampled points
+                    barycenter_points.clear();
+                    barycenter_points.reserve(barycenter_params.n_barycenter_points);
+                    barycenter_points.insert(barycenter_points.end(), points_from_source1.begin(), points_from_source1.end());
+                    barycenter_points.insert(barycenter_points.end(), points_from_source2.begin(), points_from_source2.end());
 
-                // Shuffle the combined points to avoid any ordering bias
-                std::shuffle(barycenter_points.begin(), barycenter_points.end(), rng);
-
+                    // Shuffle the combined points to avoid any ordering bias
+                    std::shuffle(barycenter_points.begin(), barycenter_points.end(), rng);
+                }
             } else {
                 // Use support points of second mesh for initialization
                 std::map<types::global_dof_index, Point<spacedim>> support_points;
@@ -422,10 +444,16 @@ int main(int argc, char *argv[])
         if (ot_params.target_multilevel_enabled) {
             problem1->prepare_target_multilevel();
         }
-        potentials_1 = problem1->solve(potentials_1);
-
         problem2->setup_target_measure(barycenter_points, barycenter_weights);
-        potentials_2 = problem2->solve(potentials_2);
+
+        if (ot_params.target_multilevel_enabled) {
+            potentials_1 = problem1->solve();
+            potentials_2 = problem2->solve();
+        }
+        else {
+            potentials_1 = problem1->solve(potentials_1);
+            potentials_2 = problem2->solve(potentials_2);
+        }
 
         std::vector<Point<spacedim>> centroids_1 (barycenter_points.size());
         problem1->get_solver()->evaluate_weighted_barycenters(potentials_1, centroids_1, problem1->get_solver_params());

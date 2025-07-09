@@ -145,6 +145,28 @@ void SemiDiscreteOT<dim, spacedim>::setup_target_measure(
 
     sot_solver->setup_target(target_points, target_density);
 
+    // Save target points and density to files
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0)
+    {
+        // Create output directory if it doesn't exist
+        std::string output_dir_points = "output/data_points";
+        fs::create_directories(output_dir_points);
+
+        // Save points to file
+        Utils::write_vector(target_points, output_dir_points + "/target_points", io_coding);
+
+        std::string output_dir_density = "output/data_density";
+        fs::create_directories(output_dir_density);
+        
+        // Save density to file
+        std::string density_file = output_dir_density + "/target_density";
+        std::vector<double> output_density_values(target_density.begin(), target_density.end());
+        Utils::write_vector(output_density_values, density_file, io_coding);
+        
+        pcout << "Target points saved to " << output_dir_points << "/target_points" << std::endl;
+        pcout << "Target density saved to " << density_file << std::endl;
+    }
+
     pcout << "Target measure setup complete with " << target_points.size() << " points." << std::endl;
 }
 
@@ -179,11 +201,7 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::solve(const Vector<double>& initia
 
     if (use_multilevel)
     {
-        if (initial_potential.size() > 0) {
-            pcout << Color::yellow << "Warning: Initial potential provided but multilevel is enabled. "
-                  << "Initial potential will be ignored." << Color::reset << std::endl;
-        }
-        final_potentials = run_multilevel();
+        final_potentials = run_multilevel(initial_potential);
     }
     else
     {
@@ -850,7 +868,7 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_sot(const Vector<double>& init
 }
 
 template <int dim, int spacedim>
-Vector<double> SemiDiscreteOT<dim, spacedim>::run_target_multilevel()
+Vector<double> SemiDiscreteOT<dim, spacedim>::run_target_multilevel(const Vector<double>& initial_potential)
 {
     Timer global_timer;
     global_timer.start();
@@ -1012,6 +1030,26 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_target_multilevel()
                 total_softmax_time += transfer_timer.wall_time();
             }
         }
+        else
+        {
+            // For the coarsest level (level == 0), use the provided initial potential
+            if (initial_potential.size() > 0)
+            {
+                if (initial_potential.size() != target_points.size())
+                {
+                    pcout << Color::red << Color::bold << "Error: Initial potential size (" << initial_potential.size() 
+                          << ") does not match coarsest target points size (" << target_points.size() << ")" << Color::reset << std::endl;
+                    return Vector<double>();
+                }
+                pcout << Color::green << "Using provided initial potential for coarsest level " << level_number << Color::reset << std::endl;
+                current_level_potentials = initial_potential;
+            }
+            else
+            {
+                // Initialize with zeros for coarsest level
+                current_level_potentials = 0.0;
+            }
+        }
 
         Timer level_timer;
         level_timer.start();
@@ -1135,6 +1173,12 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_target_multilevel()
 
         // Store potentials for next level
         level_potentials = current_level_potentials;
+        
+        // Store coarsest potential for the first level (level == 0)
+        if (level == 0)
+        {
+            coarsest_potential = current_level_potentials;
+        }
     }
 
     // Save final potentials in the top-level directory
@@ -1183,7 +1227,7 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_target_multilevel()
 }
 
 template <int dim, int spacedim>
-Vector<double> SemiDiscreteOT<dim, spacedim>::run_source_multilevel()
+Vector<double> SemiDiscreteOT<dim, spacedim>::run_source_multilevel(const Vector<double>& initial_potential)
 {
     Timer global_timer;
     global_timer.start();
@@ -1310,7 +1354,22 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_source_multilevel()
         if (source_level_idx == 0)
         {
             level_potentials.reinit(target_points.size());
-            level_potentials = 0.0; // Initialize potentials for the coarsest level
+            // For the coarsest level, use the provided initial potential
+            if (initial_potential.size() > 0)
+            {
+                if (initial_potential.size() != target_points.size())
+                {
+                    pcout << Color::red << Color::bold << "Error: Initial potential size (" << initial_potential.size() 
+                          << ") does not match target points size (" << target_points.size() << ")" << Color::reset << std::endl;
+                    return Vector<double>();
+                }
+                pcout << Color::green << "Using provided initial potential for coarsest source level " << current_level_display_name << Color::reset << std::endl;
+                level_potentials = initial_potential;
+            }
+            else
+            {
+                level_potentials = 0.0; // Initialize potentials for the coarsest level
+            }
         }
         else
         {
@@ -1351,6 +1410,8 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_source_multilevel()
         if (source_level_idx == source_mesh_files.size() - 1)
         {
             final_potentials = level_potentials;
+            // Store final potential for source multilevel (finest source level)
+            coarsest_potential = level_potentials;
         }
     }
 
@@ -1396,7 +1457,7 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_source_multilevel()
 
 // TODO check if there are bug with dim, spacedim, custom distance
 template <int dim, int spacedim>
-Vector<double> SemiDiscreteOT<dim, spacedim>::run_combined_multilevel()
+Vector<double> SemiDiscreteOT<dim, spacedim>::run_combined_multilevel(const Vector<double>& initial_potential)
 {
     Timer global_timer;
     global_timer.start();
@@ -1536,8 +1597,20 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_combined_multilevel()
         // Initialize potentials
         Vector<double> potentials_for_this_level(target_points.size());
 
-        potentials_for_this_level = 0.0;  // Default initialization
-        if (combined_iter > 0) {
+        if (combined_iter == 0) {
+            // For the first iteration (coarsest level), use the provided initial potential
+            if (initial_potential.size() > 0) {
+                if (initial_potential.size() != target_points.size()) {
+                    pcout << Color::red << Color::bold << "Error: Initial potential size (" << initial_potential.size() 
+                          << ") does not match coarsest target points size (" << target_points.size() << ")" << Color::reset << std::endl;
+                    return Vector<double>();
+                }
+                pcout << Color::green << "Using provided initial potential for coarsest combined level " << combined_iter << Color::reset << std::endl;
+                potentials_for_this_level = initial_potential;
+            } else {
+                potentials_for_this_level = 0.0;  // Default initialization
+            }
+        } else {
             bool target_level_changed = (current_actual_target_level_num != prev_actual_target_level_num);
             bool hierarchical_transfer_possible = target_level_changed &&
                                                 (prev_actual_target_level_num == current_actual_target_level_num + 1);
@@ -1610,6 +1683,12 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_combined_multilevel()
         current_potentials = potentials_for_this_level;
         prev_actual_target_level_num = current_actual_target_level_num;
         current_distance_threshold = sot_solver->get_last_distance_threshold();
+        
+        // Store coarsest potential for the first iteration (combined_iter == 0)
+        if (combined_iter == 0)
+        {
+            coarsest_potential = potentials_for_this_level;
+        }
 
         level_timer.stop();
         const double level_time = level_timer.wall_time();
@@ -1669,7 +1748,7 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_combined_multilevel()
 }
 
 template <int dim, int spacedim>
-Vector<double> SemiDiscreteOT<dim, spacedim>::run_multilevel()
+Vector<double> SemiDiscreteOT<dim, spacedim>::run_multilevel(const Vector<double>& initial_potential)
 {
     pcout << Color::yellow << Color::bold << "Starting multilevel SOT computation (dispatcher)..." << Color::reset << std::endl;
 
@@ -1679,17 +1758,17 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_multilevel()
     if (source_ml_enabled && !target_ml_enabled)
     {
         pcout << "Executing Source-Only Multilevel SOT." << std::endl;
-        return run_source_multilevel();
+        return run_source_multilevel(initial_potential);
     }
     else if (!source_ml_enabled && target_ml_enabled)
     {
         pcout << "Executing Target-Only Multilevel SOT." << std::endl;
-        return run_target_multilevel();
+        return run_target_multilevel(initial_potential);
     }
     else if (source_ml_enabled && target_ml_enabled)
     {
         pcout << "Executing Combined Source and Target Multilevel SOT." << std::endl;
-        return run_combined_multilevel();
+        return run_combined_multilevel(initial_potential);
     }
     else
     {

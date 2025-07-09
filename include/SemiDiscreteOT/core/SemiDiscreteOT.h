@@ -131,6 +131,12 @@ public:
      * @return Reference to the solver parameters.
      */
     const SotParameterManager::SolverParameters &get_solver_params() const { return solver_params; }
+
+    /**
+     * @brief Get the coarsest potential from the multilevel solve.
+     * @return Reference to the coarsest potential vector.
+     */
+    const Vector<double> &get_coarsest_potential() const { return coarsest_potential; }
     
 
 
@@ -228,27 +234,31 @@ private:
     
     /**
      * @brief Run multilevel SOT computation (dispatcher method).
+     * @param initial_potential Optional initial potential values to start the optimization from.
      * @return Vector containing the optimal transport potentials for the target points.
      */
-    Vector<double> run_multilevel();
+    Vector<double> run_multilevel(const Vector<double>& initial_potential = Vector<double>());
     
     /**
      * @brief Run combined source and target multilevel SOT computation.
+     * @param initial_potential Optional initial potential values to start the optimization from.
      * @return Vector containing the optimal transport potentials for the target points.
      */
-    Vector<double> run_combined_multilevel();
+    Vector<double> run_combined_multilevel(const Vector<double>& initial_potential = Vector<double>());
     
     /**
      * @brief Run source-only multilevel SOT computation.
+     * @param initial_potential Optional initial potential values to start the optimization from.
      * @return Vector containing the optimal transport potentials for the target points.
      */
-    Vector<double> run_source_multilevel();
+    Vector<double> run_source_multilevel(const Vector<double>& initial_potential = Vector<double>());
     
     /**
      * @brief Run target-only multilevel SOT computation.
+     * @param initial_potential Optional initial potential values to start the optimization from.
      * @return Vector containing the optimal transport potentials for the target points.
      */
-    Vector<double> run_target_multilevel();
+    Vector<double> run_target_multilevel(const Vector<double>& initial_potential = Vector<double>());
 
     // Setup methods
     void setup_source_finite_elements(bool is_multilevel = false);
@@ -270,6 +280,7 @@ private:
     std::vector<Point<spacedim>> target_points_coarse;  // Coarse level target points
     Vector<double> target_density_coarse;          // Coarse level densities
     mutable double current_distance_threshold{0.0}; // Current distance threshold for computations
+    Vector<double> coarsest_potential;             // Coarsest level potential for multilevel solve
 
     // Potential transfer between hierarchy levels
     void assign_potentials_by_hierarchy(Vector<double>& potentials, 

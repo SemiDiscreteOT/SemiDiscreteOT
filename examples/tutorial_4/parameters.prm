@@ -4,15 +4,17 @@ subsection Barycenter
   # Maximum number of barycenter iterations
   set max_iterations = 100
   # Convergence tolerance for barycenter iterations
-  set convergence_tolerance = 1e-3
+  set convergence_tolerance = 1e-5
   # Weight for first source measure
   set weight_1 = 0.5
   # Weight for second source measure
   set weight_2 = 0.5
   # Use random initialization for barycenter points
   set random_initialization = true
+  # Source ID to sample from (0=both, 1=source1, 2=source2)
+  set sampling_id = 0
   # Number of points in barycenter discretization
-  set n_barycenter_points = 40000
+  set n_barycenter_points = 1000
   # Random seed for barycenter initialization
   set random_seed = 42
   # Frequency of output (every N iterations)
@@ -22,7 +24,7 @@ subsection Barycenter
   # Maximum bound for initial barycenter points
   set initial_bounds_max = 0.1
   # Volume scaling
-  set volume_scaling = true
+  set volume_scaling = false
 end
 
 # subsection Step Controller
@@ -40,7 +42,7 @@ end
 
 subsection Optimal Transport
   # Regularization parameter
-  set epsilon = 1e-2
+  set epsilon = 5e-6
   # Distance threshold for computational efficiency
   set distance_threshold = 10
   # Numerical stability parameter
@@ -48,7 +50,7 @@ subsection Optimal Transport
   # Maximum iterations for OT solver
   set max_iterations = 50000
   # Tolerance for OT solver
-  set tolerance = 1e-3
+  set tolerance = 1e-5
   # Use log-sum-exp trick for numerical stability
   set use_log_sum_exp_trick = true
   # Enable verbose output for OT solver
@@ -57,12 +59,20 @@ subsection Optimal Transport
   set distance_threshold_type = geometric
   # Enable multilevel for source
   set source_multilevel_enabled = false
-  # Enable multilevel for target
-  set target_multilevel_enabled = true
   # Minimum number of vertices for source multilevel
   set source_min_vertices = 100
   # Maximum number of vertices for source multilevel
   set source_max_vertices = 5000
+  # Enable multilevel for target
+  set target_multilevel_enabled = false
+  # Minimum number of points for target multilevel
+  set target_min_points = 2000
+  # Maximum number of points for target multilevel
+  set target_max_points = 2000
+  # Whether to use Python scripts for clustering
+  set use_python_clustering = true
+  # Name of the Python script to use
+  set python_script_name = multilevel_clustering_faiss_cpu.py
 end
 
 subsection Files
