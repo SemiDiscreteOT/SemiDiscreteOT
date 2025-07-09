@@ -12,7 +12,7 @@ subsection Barycenter
   # Use random initialization for barycenter points
   set random_initialization = true
   # Number of points in barycenter discretization
-  set n_barycenter_points = 350
+  set n_barycenter_points = 40000
   # Random seed for barycenter initialization
   set random_seed = 42
   # Frequency of output (every N iterations)
@@ -40,7 +40,7 @@ end
 
 subsection Optimal Transport
   # Regularization parameter
-  set epsilon = 1e-3
+  set epsilon = 1e-2
   # Distance threshold for computational efficiency
   set distance_threshold = 10
   # Numerical stability parameter
@@ -48,7 +48,7 @@ subsection Optimal Transport
   # Maximum iterations for OT solver
   set max_iterations = 50000
   # Tolerance for OT solver
-  set tolerance = 1e-4
+  set tolerance = 1e-3
   # Use log-sum-exp trick for numerical stability
   set use_log_sum_exp_trick = true
   # Enable verbose output for OT solver
@@ -58,7 +58,7 @@ subsection Optimal Transport
   # Enable multilevel for source
   set source_multilevel_enabled = false
   # Enable multilevel for target
-  set target_multilevel_enabled = false
+  set target_multilevel_enabled = true
   # Minimum number of vertices for source multilevel
   set source_min_vertices = 100
   # Maximum number of vertices for source multilevel

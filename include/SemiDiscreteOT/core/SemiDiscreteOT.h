@@ -108,6 +108,18 @@ public:
     void prepare_multilevel_hierarchies();
 
     /**
+     * @brief Pre-computes the multilevel hierarchy for the source.
+     * @param source_level The level of the source hierarchy to prepare.
+     */
+    void prepare_source_multilevel();
+
+    /**     
+     * @brief Pre-computes the multilevel hierarchy for the target.
+     * @param target_level The level of the target hierarchy to prepare.
+     */
+    void prepare_target_multilevel();
+
+    /**
      * @brief Get a pointer to the solver object.
      * @return Pointer to the solver object.
      */
@@ -212,9 +224,6 @@ private:
     void compute_transport_map();
 
 
-    // Multilevel methods
-    void prepare_source_multilevel();
-    void prepare_target_multilevel();
     
     /**
      * @brief Run multilevel SOT computation (dispatcher method).
