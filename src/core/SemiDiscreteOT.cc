@@ -667,7 +667,8 @@ void SemiDiscreteOT<dim, spacedim>::assign_potentials_by_hierarchy(
             *fe_system,
             source_density,
             solver_params.quadrature_order,
-            current_distance_threshold);
+            current_distance_threshold,
+            solver_params.use_log_sum_exp_trick);
 
         // Add timer for softmax refinement
         Timer softmax_timer;

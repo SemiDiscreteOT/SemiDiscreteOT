@@ -276,6 +276,8 @@ int main(int argc, char *argv[])
         p.multilevel_params.target_enabled = ot_params.target_multilevel_enabled;
         p.multilevel_params.source_min_vertices = ot_params.source_min_vertices;
         p.multilevel_params.source_max_vertices = ot_params.source_max_vertices;
+        p.multilevel_params.target_min_points = ot_params.target_min_points;
+        p.multilevel_params.target_max_points = ot_params.target_max_points;
         p.multilevel_params.source_hierarchy_dir = "output/barycenter_h/source" + std::to_string(solver_id);
     };
 
