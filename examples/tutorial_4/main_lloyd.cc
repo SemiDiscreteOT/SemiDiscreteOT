@@ -36,6 +36,8 @@ class BarycenterParameters : public ParameterAcceptor
 public:
     BarycenterParameters() : ParameterAcceptor("Barycenter")
     {
+        add_parameter("volume_scaling", volume_scaling,
+                     "Volume scaling");
         add_parameter("max_iterations", max_iterations,
                      "Maximum number of barycenter iterations");
         add_parameter("convergence_tolerance", convergence_tolerance,
@@ -68,6 +70,7 @@ public:
     bool random_initialization = true;
     double initial_bounds_min = -1.0;
     double initial_bounds_max = 1.0;
+    bool volume_scaling = false;
 };
 
 class OptimalTransportParameters : public ParameterAcceptor
@@ -157,7 +160,7 @@ int main(int argc, char *argv[])
 
     std::string prm_file = (argc > 1) ? argv[1] : "parameters.prm";
     ParameterAcceptor::initialize(prm_file);
-    
+
     if (std::abs(barycenter_params.weight_1 + barycenter_params.weight_2 - 1.0) > 1e-12) {
         double sum = barycenter_params.weight_1 + barycenter_params.weight_2;
         barycenter_params.weight_1 /= sum;
@@ -202,10 +205,12 @@ int main(int argc, char *argv[])
         }
         grid_in.read_msh(input_file);
 
-        const double volume = GridTools::volume(source1_tria);
-        if (volume > 1e-12) {
-            GridTools::scale(1.0 / std::cbrt(volume), source1_tria);
-            pcout << "Rescaled source 1 to unit volume." << std::endl;
+        if (barycenter_params.volume_scaling) {
+            const double volume = GridTools::volume(source1_tria);
+            if (volume > 1e-12) {
+                GridTools::scale(1.0 / std::cbrt(volume), source1_tria);
+                pcout << "Rescaled source 1 to unit volume." << std::endl;
+            }
         }
     }
     FE_SimplexP<dim, spacedim> source1_fe(1);
@@ -226,10 +231,12 @@ int main(int argc, char *argv[])
         }
         grid_in.read_msh(input_file);
 
-        const double volume = GridTools::volume(source2_tria);
-        if (volume > 1e-12) {
-            GridTools::scale(1.0 / std::cbrt(volume), source2_tria);
-            pcout << "Rescaled source 2 to unit volume." << std::endl;
+        if (barycenter_params.volume_scaling) {
+            const double volume = GridTools::volume(source2_tria);
+            if (volume > 1e-12) {
+                GridTools::scale(1.0 / std::cbrt(volume), source2_tria);
+                pcout << "Rescaled source 2 to unit volume." << std::endl;
+            }
         }
     }
     FE_SimplexP<dim, spacedim> source2_fe(1);
@@ -239,7 +246,7 @@ int main(int argc, char *argv[])
     source2_density = 1.0;
     problem2->setup_source_measure(source2_tria, source2_dof_handler, source2_density, "source_2");
 
-    
+
     problem1->prepare_multilevel_hierarchies();
     problem2->prepare_multilevel_hierarchies();
 
@@ -249,9 +256,36 @@ int main(int argc, char *argv[])
 
     if (Utilities::MPI::this_mpi_process(mpi_comm) == 0) {
         if (barycenter_params.random_initialization) {
+            pcout << "Using random initialization within the bounding box of both geometries" << std::endl;
+
+            // Compute bounding box of both geometries
+            dealii::BoundingBox<spacedim> bbox1 = GridTools::compute_bounding_box(source1_tria);
+            dealii::BoundingBox<spacedim> bbox2 = GridTools::compute_bounding_box(source2_tria);
+
+            // Combine bounding boxes
+            Point<spacedim> min_point, max_point;
+            std::pair<Point<spacedim>, Point<spacedim>> bounds1 = bbox1.get_boundary_points();
+            std::pair<Point<spacedim>, Point<spacedim>> bounds2 = bbox2.get_boundary_points();
+
+            for (unsigned int d = 0; d < spacedim; ++d) {
+                min_point[d] = std::min(bounds1.first[d], bounds2.first[d]);
+                max_point[d] = std::max(bounds1.second[d], bounds2.second[d]);
+            }
+
+            // Initialize random number generator
             std::mt19937 rng(barycenter_params.random_seed);
-            std::uniform_real_distribution<double> dist(-1.0, 1.0);
-            for (auto &p : barycenter_points) for (unsigned int d=0; d<spacedim; ++d) p[d] = dist(rng);
+            std::vector<std::uniform_real_distribution<double>> dist;
+            for (unsigned int d = 0; d < spacedim; ++d) {
+                dist.emplace_back(min_point[d], max_point[d]);
+            }
+
+            // Generate random points within the bounding box
+            barycenter_points.resize(barycenter_params.n_barycenter_points);
+            for (unsigned int i = 0; i < barycenter_params.n_barycenter_points; ++i) {
+                for (unsigned int d = 0; d < spacedim; ++d) {
+                    barycenter_points[i][d] = dist[d](rng);
+                }
+            }
         } else {
             // Use support points of second mesh for initialization
             std::map<types::global_dof_index, Point<spacedim>> support_points;
@@ -268,7 +302,7 @@ int main(int argc, char *argv[])
     pcout << "Initialized barycenter with " << barycenter_points.size() << " points." << std::endl;
 
     Vector<double> potentials_1(barycenter_points.size()), potentials_2(barycenter_points.size());
-    const double theta = 0.5; 
+    const double theta = 0.5;
 
     for (unsigned int iter = 0; iter < barycenter_params.max_iterations; ++iter) {
         pcout << "\n--- Barycenter Iteration " << iter + 1 << " ---" << std::endl;

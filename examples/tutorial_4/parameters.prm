@@ -10,9 +10,9 @@ subsection Barycenter
   # Weight for second source measure
   set weight_2 = 0.5
   # Use random initialization for barycenter points
-  set random_initialization = false
+  set random_initialization = true
   # Number of points in barycenter discretization
-  set n_barycenter_points = 1000
+  set n_barycenter_points = 350
   # Random seed for barycenter initialization
   set random_seed = 42
   # Frequency of output (every N iterations)
@@ -21,6 +21,8 @@ subsection Barycenter
   set initial_bounds_min = -0.1
   # Maximum bound for initial barycenter points
   set initial_bounds_max = 0.1
+  # Volume scaling
+  set volume_scaling = true
 end
 
 # subsection Step Controller
@@ -42,17 +44,17 @@ subsection Optimal Transport
   # Distance threshold for computational efficiency
   set distance_threshold = 10
   # Numerical stability parameter
-  set tau = 0
+  set tau = 1e-5
   # Maximum iterations for OT solver
   set max_iterations = 50000
   # Tolerance for OT solver
-  set tolerance = 1e-6
+  set tolerance = 1e-4
   # Use log-sum-exp trick for numerical stability
   set use_log_sum_exp_trick = true
   # Enable verbose output for OT solver
   set verbose_output = false
   # Type of distance threshold
-  set distance_threshold_type = pointwise
+  set distance_threshold_type = geometric
   # Enable multilevel for source
   set source_multilevel_enabled = false
   # Enable multilevel for target
