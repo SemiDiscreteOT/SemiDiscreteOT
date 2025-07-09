@@ -41,19 +41,6 @@
 #include "SemiDiscreteOT/utils/ColorDefinitions.h"
 #include "SemiDiscreteOT/solvers/Distance.h"
 
-namespace LA
-{
-#if defined(DEAL_II_WITH_PETSC)
-  using namespace dealii::LinearAlgebraPETSc;
-#define USE_PETSC_LA
-#elif defined(DEAL_II_WITH_TRILINOS)
-  using namespace dealii::LinearAlgebraTrilinos;
-#define USE_TRILINOS_LA
-#else
-#error DEAL_II_WITH_PETSC or DEAL_II_WITH_TRILINOS required
-#endif
-} // namespace LA
-
 using namespace dealii;
 
 template <int dim, int spacedim=dim>

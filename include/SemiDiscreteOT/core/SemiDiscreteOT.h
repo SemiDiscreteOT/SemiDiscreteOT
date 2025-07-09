@@ -5,6 +5,7 @@
 #include <memory>
 #include <mutex>
 #include <atomic>
+#include <boost/geometry/strategies/disjoint.hpp>
 #include <boost/geometry/index/rtree.hpp>
 
 #include <deal.II/base/mpi.h>
