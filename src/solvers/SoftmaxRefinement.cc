@@ -181,8 +181,11 @@ void SoftmaxRefinement<dim, spacedim>::local_assemble(
         if (total_sum_exp <= 0.0) continue;
 
         // Now update potential for fine points using their parent's exp term for normalization
-        const double scale = density_value * JxW / total_sum_exp;
-        
+        double scale = density_value * JxW / total_sum_exp;
+        if (use_log_sum_exp_trick) {
+            scale *= std::exp(-max_exponent);
+        }
+
         #pragma omp simd
         for (size_t i = 0; i < n_target_points_fine; ++i) {
             const double local_dist2_fine = std::pow(distance_function(x,  target_positions_fine[i]), 2);
