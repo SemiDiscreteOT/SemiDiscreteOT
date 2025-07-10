@@ -82,7 +82,7 @@ void sadd(
 {
   Kokkos::parallel_for(
     "sadd", trg.extent(0), KOKKOS_LAMBDA(const int i) {
-      src(i) += c2 * trg(i) + c1 * src(i);
+      src(i) = c2 * trg(i) + c1 * src(i);
     });
 }
 
@@ -211,7 +211,7 @@ double SolverKokkosBFGS::line_search(
 
   Assert(a1 > 0., ExcInternalError());
 
-  f_prev = f;
+  f_prev = f0;
 
   // 1d line-search function
   Kokkos::View<double*> x1("x1", x.extent(0));
@@ -288,9 +288,9 @@ SolverKokkosBFGS::solve(
   c1.reserve(additional_data.max_history_size);
  
   // limited history
-  std::vector<Kokkos::View<double*>> y(additional_data.max_history_size);
-  std::vector<Kokkos::View<double*>> s(additional_data.max_history_size);
-  std::vector<double>     rho(additional_data.max_history_size);
+  std::deque<Kokkos::View<double*>> y;
+  std::deque<Kokkos::View<double*>> s;
+  std::deque<double>     rho;
  
   unsigned int m = 0;
   double       f;
@@ -318,15 +318,15 @@ SolverKokkosBFGS::solve(
     {
       c1[i] = dot(s[i], p);
       c1[i] *= rho[i];
-      add(p, c1[i], y[i]);
+      add(p, -c1[i], y[i]);
+      
     }
 
     // second loop:
     for (int i = m - 1; i >= 0; --i)
     {
       Assert(i >= 0, ExcInternalError());
-      double c2 = 0.0;
-      c2 = dot(y[i], p);
+      double c2 = dot(y[i], p);
       c2 *= rho[i];
       add(p, c1[i] - c2, s[i]);
     }
@@ -340,6 +340,7 @@ SolverKokkosBFGS::solve(
 
     sadd(s_k, x, -1, 1);
     sadd(y_k, g, -1, 1);
+
 
     // 3. Check convergence
     ++k;
@@ -362,24 +363,24 @@ SolverKokkosBFGS::solve(
 
       if (s.size() < additional_data.max_history_size)
       {
-        s.push_back(s_k_copy);
-        y.push_back(y_k_copy);
-        rho.push_back(1. / curvature);
+        s.push_front(s_k_copy);
+        y.push_front(y_k_copy);
+        rho.push_front(1. / curvature);
       }
       else
       {
-        s.erase(s.begin());
-        y.erase(y.begin());
-        rho.erase(rho.begin());
+        s.pop_back();
+        y.pop_back();
+        rho.pop_back();
 
-        s.push_back(s_k_copy);
-        y.push_back(y_k_copy);
-        rho.push_back(1. / curvature);
+        s.push_front(s_k_copy);
+        y.push_front(y_k_copy);
+        rho.push_front(1. / curvature);
       }
       m = s.size();
 
-      Assert(y.size() == m, ExcInternalError());
-      Assert(rho.size() == m, ExcInternalError());
+      Assert(s.size() == y.size(), ExcInternalError());
+      Assert(s.size() == rho.size(), ExcInternalError());
     }
 
     Assert(m <= additional_data.max_history_size, ExcInternalError());
@@ -389,7 +390,7 @@ SolverKokkosBFGS::solve(
     double elapsed = timer.seconds();
     std::cout << "Iteration " << k << " in " << elapsed*1e6 << " mus, "
               << " Functional value: " << f
-              << " ,L2-norm grad: " << g_l2_norm
+              << ", L2-norm grad: " << g_l2_norm
               << ", L1-norm grad: " << g_l1_norm << std::endl;
   }
 }

@@ -150,7 +150,7 @@ namespace Applications
     // };
     // GridGenerator::simplex(tria_2, vertices);
     const double radius = 1.0;
-    GridGenerator::hyper_ball(tria_2, Point<3>(0, 2, 0), radius);
+    GridGenerator::hyper_ball(tria_2, Point<3>(0, 0, 0), radius);
     tria_2.refine_global(n_refinements);
     dof_handler_2.distribute_dofs(fe);
 
@@ -642,7 +642,6 @@ namespace Applications
       grad(j) = grad_j-nu.d_view(j);
     });
     
-    // compute functional value
     double functional_value = 0.0;
     Kokkos::parallel_reduce("ComputeFunctionalValue", x.extent(0), KOKKOS_LAMBDA(int i, double &f_sum) {
       f_sum += epsilon * mu.d_view(i) * (max_exp(i)+std::log(sums(i)));
@@ -652,7 +651,7 @@ namespace Applications
     Kokkos::parallel_reduce("ComputeDotPhiNu", y.extent(0), KOKKOS_LAMBDA(int j, double &dot_sum) {
       dot_sum += phi(j) * nu.d_view(j);
     }, dot_phi_nu);
-
+    
     return functional_value - dot_phi_nu;
   }
 
