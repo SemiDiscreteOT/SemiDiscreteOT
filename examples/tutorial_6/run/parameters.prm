@@ -1,7 +1,7 @@
 subsection Tutorial 3
   subsection KokkosSOT
     set task = kokkosrsot  # kokkosrsot | kokkossot | rsot
-    set number of refinements = 0
+    set number of refinements = 5
     set number of eigenfunctions = 5
     set number of conditioned densities = 5
   end
@@ -29,14 +29,14 @@ subsection Tutorial 3
 
     subsection rsot_solver
       set max_iterations = 10000
-      set tolerance = 1e-4
+      set tolerance = 1e-2
       set epsilon = 1e-2
       set tau = 0 # Truncation error tolerance for integral radius bound
       set distance_threshold_type = pointwise # Options: pointwise/integral
       set solver_control_type = l1norm
       set verbose_output = true
       set solver_type = BFGS
-      set quadrature_order = 3
+      set quadrature_order = 1
       set number_of_threads = 0
       set use_log_sum_exp_trick = true
       set use_epsilon_scaling = false
