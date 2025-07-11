@@ -4,6 +4,9 @@
 
 namespace Applications
 {
+  using team_policy = Kokkos::TeamPolicy<>;
+  using member_type = team_policy::member_type;
+
   void print_used_cuda_memory() {
   size_t free_mem = 0;
   size_t total_mem = 0;
@@ -526,10 +529,8 @@ namespace Applications
 
     Kokkos::parallel_for("SubtractNu", y.extent(0), KOKKOS_LAMBDA(int i) {
       grad(i) -= nu.d_view(i);
-      // phi(i) -= grad(i);
     });
     
-    // compute functional value
     double functional_value = 0.0;
     Kokkos::parallel_reduce("ComputeFunctionalValue", x.extent(0), KOKKOS_LAMBDA(int i, double &f_sum) {
       f_sum += max(i) * mu.d_view(i);
@@ -537,7 +538,7 @@ namespace Applications
 
     double dot_phi_nu = 0.0;
     Kokkos::parallel_reduce("ComputeDotPhiNu", y.extent(0), KOKKOS_LAMBDA(int j, double &dot_sum) {
-      dot_sum -= phi(j) * nu.d_view(j);
+      dot_sum += phi(j) * nu.d_view(j);
     }, dot_phi_nu);
 
     return functional_value - dot_phi_nu;
@@ -598,46 +599,60 @@ namespace Applications
     Kokkos::View<double*, Kokkos::CudaSpace> sums("sums", x.extent(0));
     Kokkos::View<double*, Kokkos::CudaSpace> max_exp("Maxexp", x.extent(0));
 
-    Kokkos::parallel_for("sumsEval", x.extent(0), KOKKOS_LAMBDA(int i) {
-      double sum_quad_i = 0.0;
-      
+    Kokkos::parallel_for("sumsEval", team_policy(x.extent(0), Kokkos::AUTO), KOKKOS_LAMBDA(const member_type& team) {
+      int i = team.league_rank();
       double max_exp_ = -1e20;
-      // log sum exp trick
-      for (long unsigned int j = 0; j < y.extent(0); ++j) {
-        double dist = 0.0;
-        for (int d = 0; d < 3; ++d) {
-          double tmp = x.d_view(i, d) - y.d_view(j, d);
-          dist += tmp * tmp;
-        }
-        double exp=(phi(j)-0.5*dist)/epsilon;
-        if (max_exp_ < exp)
-          max_exp_ = exp;
-      }
+      
+      Kokkos::parallel_reduce(
+        Kokkos::TeamThreadRange(team, y.extent(0)),
+        [&](int j, double& max_val) {
+          double dist = 0.0;
+          for (int d = 0; d < 3; ++d) {
+            double tmp = x.d_view(i, d) - y.d_view(j, d);
+            dist += tmp * tmp;
+          }
+          double exp=(phi(j)-0.5*dist)/epsilon;
+          if (exp > max_val)
+            max_val = exp;
+        },
+        Kokkos::Max<double>(max_exp_)  // Kokkos reducer
+      );
+      
       max_exp(i) = max_exp_;
+    
+      double sum_quad_i = 0.0;
+      Kokkos::parallel_reduce(
+        Kokkos::TeamThreadRange(team, y.extent(0)),
+        [&](int j, double& inner_sum) {
+          double dist = 0.0;
+          for (int d = 0; d < 3; ++d) {
+            double tmp = x.d_view(i, d) - y.d_view(j, d);
+            dist += tmp * tmp;
+          }
+          double exp=(phi(j)-0.5*dist)/epsilon;
+          inner_sum += nu.d_view(j)*std::exp(exp - max_exp_);
+        },
+      sum_quad_i);
 
-      for (long unsigned int j = 0; j < y.extent(0); ++j) {
-        double dist = 0.0;
-        for (int d = 0; d < 3; ++d) {
-          double tmp = x.d_view(i, d) - y.d_view(j, d);
-          dist += tmp * tmp;
-        }
-        double exp=(phi(j)-0.5*dist)/epsilon;
-        sum_quad_i += nu.d_view(j)*std::exp(exp - max_exp_);
-      }
       sums(i) = sum_quad_i;
     });
 
-    Kokkos::parallel_for("GradAssemble", y.extent(0), KOKKOS_LAMBDA(int j) {
-      double grad_j = 0;
-      for (long unsigned int i = 0; i < x.extent(0); ++i) {
-        double dist = 0.0;
-        for (int d = 0; d < 3; ++d) {
-          double tmp = x.d_view(i, d) - y.d_view(j, d);
-          dist += tmp * tmp;
-        }
-        double exp=(phi(j)-0.5*dist)/epsilon;
-        grad_j += mu.d_view(i)*nu.d_view(j)*std::exp(exp-max_exp(i))/sums(i);
-      }
+    Kokkos::parallel_for("GradAssemble", team_policy(y.extent(0), Kokkos::AUTO), KOKKOS_LAMBDA(const member_type& team) {
+      int j = team.league_rank();
+      double grad_j = 0.0;
+
+      Kokkos::parallel_reduce(
+        Kokkos::TeamThreadRange(team, x.extent(0)),
+        [&](int i, double& inner_sum) {
+          double dist = 0.0;
+          for (int d = 0; d < 3; ++d) {
+            double tmp = x.d_view(i, d) - y.d_view(j, d);
+            dist += tmp * tmp;
+          }
+          double exp=(phi(j)-0.5*dist)/epsilon;
+          inner_sum += mu.d_view(i)*nu.d_view(j)*std::exp(exp-max_exp(i))/sums(i);
+        },
+      grad_j);
 
       grad(j) = grad_j-nu.d_view(j);
     });
@@ -700,16 +715,7 @@ namespace Applications
     // Copy phi back to potential
     Kokkos::deep_copy(phi_host, phi);
     for (int i = 0; i < n_target; ++i)
-    {
       potential[i] = phi_host(i);
-    }
-    
-    // Compute and print the L2 norm of the potential
-    double local_l2_norm = 0.0;
-    for (int i = 0; i < n_target; ++i)
-      local_l2_norm += potential[i] * potential[i];
-    double global_l2_norm = std::sqrt(Utilities::MPI::sum(local_l2_norm, mpi_communicator));
-    pcout << "L2 norm of the potential: " << global_l2_norm << std::endl;
   }
 
   void KokkosSOT::run()
