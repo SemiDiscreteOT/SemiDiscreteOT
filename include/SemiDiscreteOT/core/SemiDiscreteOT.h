@@ -229,6 +229,7 @@ private:
     
     void compute_power_diagram();
     void compute_transport_map();
+    void compute_conditional_density();
 
 
     

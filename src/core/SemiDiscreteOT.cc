@@ -478,7 +478,10 @@ void SemiDiscreteOT<dim, spacedim>::setup_source_finite_elements(const bool is_m
     }
 
     source_density.update_ghost_values();
-    normalize_density(source_density);
+    if ( selected_task != "map")
+    {
+        normalize_density(source_density);
+    }
 
     unsigned int n_locally_owned = 0;
     for (const auto &cell : dof_handler_source.active_cell_iterators())
@@ -631,6 +634,15 @@ void SemiDiscreteOT<dim, spacedim>::setup_target_finite_elements()
 
         Utils::write_vector(output_density_values, density_file, io_coding);
         pcout << "Target density saved to " << density_file << std::endl;
+        
+        // Save target points with density as VTK file
+        Utils::write_points_with_density_vtk<spacedim>(
+            target_points,
+            output_density_values,
+            output_dir + "/target_points_with_density.vtk",
+            "Target points with density values",
+            "target_density"
+        );
     }
 }
 
@@ -1550,10 +1562,6 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_combined_multilevel(const Vect
         std::string current_target_density_file;
 
         if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
-            pcout << "target_hierarchy_files.size(): " << target_hierarchy_files.size() << std::endl;
-            pcout << "current_target_idx: " << current_target_idx << std::endl;
-            // print dir target
-            pcout << "target_hierarchy_dir: " << multilevel_params.target_hierarchy_dir << std::endl;
             current_target_points_file = target_hierarchy_files[current_target_idx].first;
             current_target_density_file = target_hierarchy_files[current_target_idx].second;
         }
@@ -2021,7 +2029,7 @@ void SemiDiscreteOT<dim, spacedim>::compute_transport_map()
 
     // Get source points and density (serial version)
     std::vector<Point<spacedim>> source_points;
-    Vector<double> source_density;
+    pcout << "Source density size: " << source_density.size() << std::endl;
 
     const std::string directory = "output/data_points";
     bool points_loaded = false;
@@ -2029,6 +2037,7 @@ void SemiDiscreteOT<dim, spacedim>::compute_transport_map()
     {
         points_loaded = true;
         std::cout << "Source points loaded from file" << std::endl;
+        std::cout << "First 4 values of source density: ";
     }
 
     if (!points_loaded)
@@ -2045,9 +2054,6 @@ void SemiDiscreteOT<dim, spacedim>::compute_transport_map()
         Utils::write_vector(source_points, directory + "/source_points", io_coding);
         std::cout << "Source points computed and saved to file" << std::endl;
     }
-
-    source_density.reinit(source_points.size());
-    source_density = 1.0 / source_points.size();
 
     // Convert densities to vectors
     std::vector<double> source_density_vec(source_density.begin(), source_density.end());
@@ -2227,6 +2233,171 @@ void SemiDiscreteOT<dim, spacedim>::compute_power_diagram()
     {
         pcout << "\nCompleted power diagram computation for all selected folders." << std::endl;
     }
+}
+
+template <int dim, int spacedim>
+void SemiDiscreteOT<dim, spacedim>::compute_conditional_density()
+{
+    load_meshes();
+    setup_finite_elements();
+
+    // Set up source measure
+    sot_solver->setup_source(dof_handler_source,
+                             *mapping,
+                             *fe_system,
+                             source_density,
+                             solver_params.quadrature_order);
+
+    // Set up target measure
+    sot_solver->setup_target(target_points, target_density);
+    sot_solver->configure(solver_params);
+    
+    // Use indices and folder from parameters
+    std::vector<unsigned int> indices = param_manager.conditional_density_params.indices;
+    std::string potential_folder = param_manager.conditional_density_params.potential_folder;
+    
+    // If indices are empty, log error and return
+    if (indices.empty())
+    {
+        pcout << Color::red << Color::bold << "Error: No indices specified for conditional density computation." << Color::reset << std::endl;
+        pcout << "Please specify indices in the parameter file under conditional_density_parameters/indices." << std::endl;
+        return;
+    }
+    
+    // Determine which folder to use
+    std::string selected_folder;
+    if (potential_folder.empty())
+    {
+        // Let user select which folder to use (similar to transport map)
+        std::vector<std::string> selected_folders;
+        try
+        {
+            selected_folders = Utils::select_folder();
+            if (selected_folders.empty())
+            {
+                pcout << "No folder selected. Exiting." << std::endl;
+                return;
+            }
+            selected_folder = selected_folders[0]; // Use first selected folder
+        }
+        catch (const std::exception &e)
+        {
+            pcout << "Error: " << e.what() << std::endl;
+            return;
+        }
+    }
+    else
+    {
+        selected_folder = potential_folder;
+    }
+    
+    pcout << "Computing conditional densities for folder: " << selected_folder << std::endl;
+    pcout << "Indices: ";
+    for (size_t i = 0; i < indices.size(); ++i)
+    {
+        if (i > 0) pcout << ", ";
+        pcout << indices[i];
+    }
+    pcout << std::endl;
+    
+    // Read potentials from selected folder
+    std::vector<double> potentials_vec;
+    bool success = Utils::read_vector(potentials_vec, "output/" + selected_folder + "/potentials", io_coding);
+    if (!success)
+    {
+        pcout << "Failed to read potentials from output/" + selected_folder + "/potentials" << std::endl;
+        return;
+    }
+    
+    if (potentials_vec.size() != target_points.size())
+    {
+        pcout << Color::red << Color::bold << "Error: Mismatch between potentials size (" << potentials_vec.size()
+              << ") and target points size (" << target_points.size() << ")" << Color::reset << std::endl;
+        return;
+    }
+    
+    // Convert to dealii::Vector
+    Vector<double> potentials(potentials_vec.size());
+    std::copy(potentials_vec.begin(), potentials_vec.end(), potentials.begin());
+    
+    // Validate indices
+    for (unsigned int idx : indices)
+    {
+        if (idx >= target_points.size())
+        {
+            pcout << Color::red << Color::bold << "Error: Index " << idx << " is out of bounds. Maximum index is "
+                  << target_points.size() - 1 << "." << Color::reset << std::endl;
+            return;
+        }
+    }
+    
+    // Compute conditional densities using SOT solver
+    std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> conditioned_densities;
+    
+    // Set truncation radius if specified
+    if (param_manager.conditional_density_params.truncation_radius > 0.0)
+    {
+        pcout << "Using truncation radius: " << param_manager.conditional_density_params.truncation_radius << std::endl;
+        sot_solver->set_distance_threshold(param_manager.conditional_density_params.truncation_radius);
+    }
+    
+    pcout << "Computing conditional densities..." << std::endl;
+    sot_solver->get_potential_conditioned_density(
+        dof_handler_source, *mapping,
+        potentials, indices, conditioned_densities);
+    
+    // Create output directory
+    const std::string output_dir = "output/" + selected_folder + "/conditional_densities";
+    fs::create_directories(output_dir);
+    
+    // Save conditional densities
+    DataOut<dim, spacedim> data_out;
+    data_out.attach_dof_handler(dof_handler_source);
+    
+    std::vector<DataComponentInterpretation::DataComponentInterpretation>
+        interpretation(1, DataComponentInterpretation::component_is_scalar);
+    
+    pcout << "Saving " << conditioned_densities.size() << " conditional densities..." << std::endl;
+    
+    for (unsigned int i = 0; i < conditioned_densities.size(); ++i)
+    {
+        data_out.add_data_vector(
+            conditioned_densities[i],
+            std::string("conditional_density_") + std::to_string(indices[i]),
+            DataOut<dim, spacedim>::type_dof_data,
+            interpretation);
+    }
+    
+    data_out.build_patches(*mapping, fe_system->degree);
+    
+    const std::string filename_base = "conditional_densities";
+    data_out.write_vtu_with_pvtu_record(output_dir + "/",
+                                       filename_base,
+                                       0,
+                                       mpi_communicator);
+    
+    pcout << "Conditional densities saved to " << output_dir << "/" << filename_base << "_0.pvtu" << std::endl;
+    
+    // Save individual VTU files for each conditional density
+    for (unsigned int i = 0; i < conditioned_densities.size(); ++i)
+    {
+        DataOut<dim, spacedim> individual_data_out;
+        individual_data_out.attach_dof_handler(dof_handler_source);
+        individual_data_out.add_data_vector(
+            conditioned_densities[i],
+            std::string("conditional_density_") + std::to_string(indices[i]),
+            DataOut<dim, spacedim>::type_dof_data,
+            interpretation);
+        individual_data_out.build_patches(*mapping, fe_system->degree);
+        
+        const std::string individual_filename = "conditional_density_" + std::to_string(indices[i]);
+        individual_data_out.write_vtu_with_pvtu_record(output_dir + "/",
+                                                      individual_filename,
+                                                      0,
+                                                      mpi_communicator);
+    }
+    
+    pcout << "Conditional density computation completed successfully." << std::endl;
 }
 
 template <int dim, int spacedim>
@@ -2494,6 +2665,10 @@ void SemiDiscreteOT<dim, spacedim>::run()
     else if (selected_task == "map")
     {
         compute_transport_map();
+    }
+    else if (selected_task == "conditional_density")
+    {
+        compute_conditional_density();
     }
     else if (selected_task == "save_discrete_measures")
     {

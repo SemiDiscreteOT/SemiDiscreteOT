@@ -17,6 +17,7 @@
 #include <deal.II/dofs/dof_handler.h>
 #include <deal.II/base/utilities.h>
 #include <deal.II/base/conditional_ostream.h>
+#include <deal.II/base/tensor.h>
 #include <deal.II/fe/fe_values.h>
 #include <deal.II/fe/fe_simplex_p.h>
 #include <deal.II/fe/fe_q.h>
@@ -835,6 +836,190 @@ std::unique_ptr<dealii::Quadrature<dim>> create_quadrature_for_mesh(
     } else {
         throw std::runtime_error("Could not determine mesh cell type for quadrature creation");
     }
+}
+
+/**
+ * @brief Write points with associated density to VTK file
+ * @tparam spacedim Spatial dimension
+ * @param points Vector of points to write
+ * @param density Vector of density values associated with points
+ * @param filename Output VTK filename
+ * @param description Description for the VTK file header
+ * @param density_name Name for the density scalar field
+ * @return true if write successful, false otherwise
+ */
+template <int spacedim>
+bool write_points_with_density_vtk(
+    const std::vector<dealii::Point<spacedim>>& points,
+    const std::vector<double>& density,
+    const std::string& filename,
+    const std::string& description = "Points with density values",
+    const std::string& density_name = "density")
+{
+    if (points.size() != density.size()) {
+        std::cerr << "Error: Points and density vectors must have the same size" << std::endl;
+        return false;
+    }
+    
+    if (points.empty()) {
+        std::cerr << "Error: Cannot write empty point set" << std::endl;
+        return false;
+    }
+
+    // Create directories if they don't exist
+    std::filesystem::path path(filename);
+    std::filesystem::create_directories(path.parent_path());
+
+    std::ofstream vtk_file(filename);
+    if (!vtk_file.is_open()) {
+        std::cerr << "Error: Unable to open file for writing: " << filename << std::endl;
+        return false;
+    }
+
+    // Write VTK header
+    vtk_file << "# vtk DataFile Version 3.0\n"
+             << description << "\n"
+             << "ASCII\n"
+             << "DATASET UNSTRUCTURED_GRID\n"
+             << "POINTS " << points.size() << " double\n";
+
+    // Write point coordinates
+    for (const auto& p : points) {
+        vtk_file << p[0] << " " << p[1];
+        if (spacedim == 3) {
+            vtk_file << " " << p[2];
+        } else if (spacedim == 2) {
+            vtk_file << " 0.0";  // Add z=0 for 2D
+        }
+        vtk_file << "\n";
+    }
+
+    // Write cells (point cells)
+    const unsigned int n_points = points.size();
+    vtk_file << "CELLS " << n_points << " " << 2 * n_points << "\n";
+    for (unsigned int i = 0; i < n_points; ++i) {
+        vtk_file << "1 " << i << "\n";
+    }
+
+    // Write cell types
+    vtk_file << "CELL_TYPES " << n_points << "\n";
+    for (unsigned int i = 0; i < n_points; ++i) {
+        vtk_file << "1\n";  // VTK_VERTEX
+    }
+
+    // Write density as scalar data
+    vtk_file << "POINT_DATA " << n_points << "\n"
+             << "SCALARS " << density_name << " double 1\n"
+             << "LOOKUP_TABLE default\n";
+    for (std::size_t i = 0; i < n_points; ++i) {
+        vtk_file << density[i] << "\n";
+    }
+
+    vtk_file.close();
+    
+    std::cout << "Points with density saved to: " << filename << std::endl;
+    return true;
+}
+
+/**
+ * @brief Write points with displacement vectors and density to VTK file
+ * @tparam spacedim Spatial dimension
+ * @param source_points Vector of source points
+ * @param mapped_points Vector of mapped points (targets)
+ * @param density Vector of density values associated with points
+ * @param filename Output VTK filename
+ * @param description Description for the VTK file header
+ * @param density_name Name for the density scalar field
+ * @return true if write successful, false otherwise
+ */
+template <int spacedim>
+bool write_points_with_displacement_vtk(
+    const std::vector<dealii::Point<spacedim>>& source_points,
+    const std::vector<dealii::Point<spacedim>>& mapped_points,
+    const std::vector<double>& density,
+    const std::string& filename,
+    const std::string& description = "Points with displacement vectors",
+    const std::string& density_name = "density")
+{
+    if (source_points.size() != mapped_points.size() || 
+        source_points.size() != density.size()) {
+        std::cerr << "Error: Source points, mapped points, and density vectors must have the same size" << std::endl;
+        return false;
+    }
+    
+    if (source_points.empty()) {
+        std::cerr << "Error: Cannot write empty point set" << std::endl;
+        return false;
+    }
+
+    // Create directories if they don't exist
+    std::filesystem::path path(filename);
+    std::filesystem::create_directories(path.parent_path());
+
+    std::ofstream vtk_file(filename);
+    if (!vtk_file.is_open()) {
+        std::cerr << "Error: Unable to open file for writing: " << filename << std::endl;
+        return false;
+    }
+
+    // Write VTK header
+    vtk_file << "# vtk DataFile Version 3.0\n"
+             << description << "\n"
+             << "ASCII\n"
+             << "DATASET UNSTRUCTURED_GRID\n"
+             << "POINTS " << source_points.size() << " double\n";
+
+    // Write source point coordinates
+    for (const auto& p : source_points) {
+        vtk_file << p[0] << " " << p[1];
+        if (spacedim == 3) {
+            vtk_file << " " << p[2];
+        } else if (spacedim == 2) {
+            vtk_file << " 0.0";  // Add z=0 for 2D
+        }
+        vtk_file << "\n";
+    }
+
+    // Write cells (point cells)
+    const unsigned int n_points = source_points.size();
+    vtk_file << "CELLS " << n_points << " " << 2 * n_points << "\n";
+    for (unsigned int i = 0; i < n_points; ++i) {
+        vtk_file << "1 " << i << "\n";
+    }
+
+    // Write cell types
+    vtk_file << "CELL_TYPES " << n_points << "\n";
+    for (unsigned int i = 0; i < n_points; ++i) {
+        vtk_file << "1\n";  // VTK_VERTEX
+    }
+
+    // Write point data
+    vtk_file << "POINT_DATA " << n_points << "\n";
+    
+    // Write displacement vectors
+    vtk_file << "VECTORS displacement double\n";
+    for (std::size_t i = 0; i < n_points; ++i) {
+        dealii::Tensor<1, spacedim> displacement = mapped_points[i] - source_points[i];
+        vtk_file << displacement[0] << " " << displacement[1];
+        if (spacedim == 3) {
+            vtk_file << " " << displacement[2];
+        } else if (spacedim == 2) {
+            vtk_file << " 0.0";  // Add z=0 for 2D
+        }
+        vtk_file << "\n";
+    }
+
+    // Write density as scalar data
+    vtk_file << "SCALARS " << density_name << " double 1\n"
+             << "LOOKUP_TABLE default\n";
+    for (std::size_t i = 0; i < n_points; ++i) {
+        vtk_file << density[i] << "\n";
+    }
+
+    vtk_file.close();
+    
+    std::cout << "Points with displacement and density saved to: " << filename << std::endl;
+    return true;
 }
 
 /**

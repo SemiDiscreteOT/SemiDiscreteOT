@@ -155,6 +155,7 @@ public:
     virtual void save_results(const std::string& output_dir) const = 0;
 
 protected:
+    std::vector<Point<spacedim>> source_points;
     std::vector<Point<spacedim>> mapped_points;
     std::vector<double> transport_density;
 };

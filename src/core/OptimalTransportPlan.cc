@@ -1,4 +1,5 @@
 #include "SemiDiscreteOT/core/OptimalTransportPlan.h"
+#include "SemiDiscreteOT/utils/utils.h"
 
 namespace fs = std::filesystem;
 
@@ -122,6 +123,9 @@ void ModalStrategy<spacedim>::compute_map(
     this->mapped_points.resize(source_points.size());
     this->transport_density.resize(source_points.size());
 
+    // Store source points for displacement computation
+    this->source_points = source_points;
+
     // Determine if we use truncation or consider all points
     const bool use_truncation = (truncation_radius > 0.0);
 
@@ -187,23 +191,28 @@ void ModalStrategy<spacedim>::compute_map(
 template <int spacedim>
 void ModalStrategy<spacedim>::save_results(const std::string& output_dir) const
 {
-    // Save mapped points
+    // Save text files for backward compatibility
     Utils::write_vector(this->mapped_points, output_dir + "/mapped_points", "txt");
     Utils::write_vector(this->transport_density, output_dir + "/transport_density", "txt");
 
-    // Save as VTK for visualization
-    std::ofstream out(output_dir + "/transport_map.vtk");
-    out << "# vtk DataFile Version 3.0\n"
-        << "Transport map (modal strategy)\n"
-        << "ASCII\n"
-        << "DATASET UNSTRUCTURED_GRID\n"
-        << "POINTS " << this->mapped_points.size() << " double\n";
+    // 1. Source triangulation with displacement field using utility function
+    Utils::write_points_with_displacement_vtk<spacedim>(
+        this->source_points, 
+        this->mapped_points, 
+        this->transport_density,
+        output_dir + "/source_triangulation_with_displacement.vtk",
+        "Source triangulation with displacement vectors",
+        "source_density"
+    );
 
-    // Write points
-    for (const auto& p : this->mapped_points)
-        out << p << "\n";
-
-    out.close();
+    // 2. Mapped points with density scalars using utility function
+    Utils::write_points_with_density_vtk<spacedim>(
+        this->mapped_points, 
+        this->transport_density,
+        output_dir + "/mapped_points_with_density.vtk",
+        "Mapped points with density values",
+        "transport_density"
+    );
 }
 
 // Implementation of BarycentricStrategy
@@ -233,6 +242,9 @@ void BarycentricStrategy<spacedim>::compute_map(
     this->mapped_points.resize(source_points.size());
     this->transport_density.resize(source_points.size());
 
+    // Store source points for displacement computation
+    this->source_points = source_points;
+
     // Determine if we use truncation or consider all points
     const bool use_truncation = (truncation_radius > 0.0);
 
@@ -240,7 +252,6 @@ void BarycentricStrategy<spacedim>::compute_map(
     for (std::size_t i = 0; i < source_points.size(); ++i) {
         const Point<spacedim>& x = source_points[i];
         Point<spacedim> weighted_sum;
-        double total_weight = 0.0;
         
         // Determine which target points to consider
         std::vector<IndexedPoint> candidates;
@@ -270,25 +281,41 @@ void BarycentricStrategy<spacedim>::compute_map(
             }
         }
 
-        // Compute barycentric weights and weighted sum
+        // Log-sum-exp trick for numerical stability
+        // First compute all exponent terms and find maximum
+        std::vector<double> exponent_terms;
+        exponent_terms.reserve(candidates.size());
+        double max_exponent = -std::numeric_limits<double>::infinity();
+        
         for (const auto& candidate : candidates) {
             const Point<spacedim>& y = candidate.first;
             const std::size_t j = candidate.second;
             
             double squared_dist = std::pow(distance_function(x, y), 2);
-
-            // Weight formula: target_density * exp((potential - 0.5*squared_dist) / regularization_param)
-            double weight = target_density[j] * 
-                            std::exp((potential[j] - 0.5 * squared_dist) / regularization_param);
-
+            double exponent = (potential[j] - 0.5 * squared_dist) / regularization_param;
+            
+            exponent_terms.push_back(exponent);
+            max_exponent = std::max(max_exponent, exponent);
+        }
+        
+        // Compute weighted sum using the log-sum-exp trick
+        double sum_exp = 0.0;
+        for (std::size_t k = 0; k < candidates.size(); ++k) {
+            const auto& candidate = candidates[k];
+            const Point<spacedim>& y = candidate.first;
+            const std::size_t j = candidate.second;
+            
+            // Subtract max_exponent for numerical stability
+            double stable_exp = std::exp(exponent_terms[k] - max_exponent);
+            double weight = target_density[j] * stable_exp;
             
             weighted_sum += weight * y;
-            total_weight += weight;
+            sum_exp += weight;
         }
 
         // Normalize the weighted sum
-        if (total_weight > 0) {
-            this->mapped_points[i] = weighted_sum / total_weight;
+        if (sum_exp > 0) {
+            this->mapped_points[i] = weighted_sum / sum_exp;
         } else {
             // If all weights are zero, map to nearest target point
             std::vector<IndexedPoint> nearest;
@@ -303,23 +330,28 @@ void BarycentricStrategy<spacedim>::compute_map(
 template <int spacedim>
 void BarycentricStrategy<spacedim>::save_results(const std::string& output_dir) const
 {
-    // Save mapped points and density
+    // Save text files for backward compatibility
     Utils::write_vector(this->mapped_points, output_dir + "/mapped_points", "txt");
     Utils::write_vector(this->transport_density, output_dir + "/transport_density", "txt");
 
-    // Save as VTK with interpolation weights
-    std::ofstream out(output_dir + "/transport_map.vtk");
-    out << "# vtk DataFile Version 3.0\n"
-        << "Transport map with barycentric interpolation\n"
-        << "ASCII\n"
-        << "DATASET UNSTRUCTURED_GRID\n"
-        << "POINTS " << this->mapped_points.size() << " double\n";
+    // 1. Source triangulation with displacement field using utility function
+    Utils::write_points_with_displacement_vtk<spacedim>(
+        this->source_points, 
+        this->mapped_points, 
+        this->transport_density,
+        output_dir + "/source_triangulation_with_displacement.vtk",
+        "Source triangulation with displacement vectors (barycentric)",
+        "source_density"
+    );
 
-    // Write points
-    for (const auto& p : this->mapped_points)
-        out << p << "\n";
-
-    out.close();
+    // 2. Mapped points with density scalars using utility function
+    Utils::write_points_with_density_vtk<spacedim>(
+        this->mapped_points, 
+        this->transport_density,
+        output_dir + "/mapped_points_with_density.vtk",
+        "Mapped points with density values (barycentric)",
+        "transport_density"
+    );
 }
 
 // Explicit instantiation
