@@ -71,7 +71,8 @@ public:
                       const FiniteElement<dim, spacedim>& fe,
                       const LinearAlgebra::distributed::Vector<double>& source_density,
                       unsigned int quadrature_order,
-                      double distance_threshold);
+                      double distance_threshold,
+                      bool use_log_sum_exp_trick = true);
 
     // Main computation method
     Vector<double> compute_refinement(
@@ -110,6 +111,7 @@ private:
     // Current computation state
     double current_lambda{0.0};
     const double current_distance_threshold;
+    const bool use_log_sum_exp_trick;
     const std::vector<Point<spacedim>>* current_target_points_fine{nullptr};
     const Vector<double>* current_target_density_fine{nullptr};
     const std::vector<Point<spacedim>>* current_target_points_coarse{nullptr};

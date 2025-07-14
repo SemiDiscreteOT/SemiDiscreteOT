@@ -61,6 +61,15 @@ void SotSolver<dim, spacedim>::setup_target(
 }
 
 template <int dim, int spacedim>
+void SotSolver<dim, spacedim>::configure(
+    const SotParameterManager::SolverParameters& params)
+{
+    // Store parameters for later use
+    current_params = params;
+    current_epsilon = params.epsilon;
+}
+
+template <int dim, int spacedim>
 bool SotSolver<dim, spacedim>::validate_measures() const
 {
     if (!source_measure.dof_handler) {
@@ -951,7 +960,7 @@ void SotSolver<dim, spacedim>::compute_weighted_barycenters_euclidean(
         barycenters_out.resize(target_measure.points.size());
         for (unsigned int i = 0; i < target_measure.points.size(); ++i) {
             for (unsigned int d = 0; d < spacedim; ++d) {
-                barycenters_out[i][d] = barycenters[spacedim * i + d];
+                barycenters_out[i][d] = barycenters[spacedim * i + d]/target_measure.density[i];
             }
         }
 
@@ -969,6 +978,7 @@ void SotSolver<dim, spacedim>::get_potential_conditioned_density(
     const std::vector<unsigned int> &potential_indices,
     std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> &conditioned_densities)
 {
+    std::cout << "Current epsilon: " << current_epsilon << std::endl;
     auto locally_owned_dofs = dof_handler.locally_owned_dofs();
     conditioned_densities.resize(potential_indices.size());
 

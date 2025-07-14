@@ -51,17 +51,20 @@ template <int dim, int spacedim>
 void SemiDiscreteOT<dim, spacedim>::setup_source_measure(
     Triangulation<dim, spacedim>& tria,
     const DoFHandler<dim, spacedim>& dh,
-    const Vector<double>& density)
+    const Vector<double>& density,
+    const std::string& name)
 {
     pcout << "Setting up source measure from standard dealii objects (simplified API)..." << std::endl;
 
-
+    // Store the source mesh name for later use
+    if (!name.empty())
+        source_mesh_name = name;
 
     if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0)
     {
         std::string mesh_directory = "output/data_mesh";
         mesh_manager->write_mesh(tria,
-                mesh_directory + "/source",
+                mesh_directory + "/" + source_mesh_name,
               std::vector<std::string>{"vtk", "msh"});
     }
 
@@ -142,6 +145,28 @@ void SemiDiscreteOT<dim, spacedim>::setup_target_measure(
 
     sot_solver->setup_target(target_points, target_density);
 
+    // Save target points and density to files
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0)
+    {
+        // Create output directory if it doesn't exist
+        std::string output_dir_points = "output/data_points";
+        fs::create_directories(output_dir_points);
+
+        // Save points to file
+        Utils::write_vector(target_points, output_dir_points + "/target_points", io_coding);
+
+        std::string output_dir_density = "output/data_density";
+        fs::create_directories(output_dir_density);
+        
+        // Save density to file
+        std::string density_file = output_dir_density + "/target_density";
+        std::vector<double> output_density_values(target_density.begin(), target_density.end());
+        Utils::write_vector(output_density_values, density_file, io_coding);
+        
+        pcout << "Target points saved to " << output_dir_points << "/target_points" << std::endl;
+        pcout << "Target density saved to " << density_file << std::endl;
+    }
+
     pcout << "Target measure setup complete with " << target_points.size() << " points." << std::endl;
 }
 
@@ -168,7 +193,7 @@ void SemiDiscreteOT<dim, spacedim>::prepare_multilevel_hierarchies()
 }
 
 template <int dim, int spacedim>
-Vector<double> SemiDiscreteOT<dim, spacedim>::solve()
+Vector<double> SemiDiscreteOT<dim, spacedim>::solve(const Vector<double>& initial_potential)
 {
     const bool use_multilevel = multilevel_params.source_enabled || multilevel_params.target_enabled;
 
@@ -176,18 +201,16 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::solve()
 
     if (use_multilevel)
     {
-        final_potentials = run_multilevel();
+        final_potentials = run_multilevel(initial_potential);
     }
     else
     {
-        final_potentials = run_sot();
+        final_potentials = run_sot(initial_potential);
     }
 
     pcout << Color::green << Color::bold << "OT solve sequence finished." << Color::reset << std::endl;
     return final_potentials;
 }
-
-
 
 template <int dim, int spacedim>
 void SemiDiscreteOT<dim, spacedim>::mesh_generation()
@@ -455,7 +478,10 @@ void SemiDiscreteOT<dim, spacedim>::setup_source_finite_elements(const bool is_m
     }
 
     source_density.update_ghost_values();
-    normalize_density(source_density);
+    if ( selected_task != "map")
+    {
+        normalize_density(source_density);
+    }
 
     unsigned int n_locally_owned = 0;
     for (const auto &cell : dof_handler_source.active_cell_iterators())
@@ -608,6 +634,15 @@ void SemiDiscreteOT<dim, spacedim>::setup_target_finite_elements()
 
         Utils::write_vector(output_density_values, density_file, io_coding);
         pcout << "Target density saved to " << density_file << std::endl;
+        
+        // Save target points with density as VTK file
+        Utils::write_points_with_density_vtk<spacedim>(
+            target_points,
+            output_density_values,
+            output_dir + "/target_points_with_density.vtk",
+            "Target points with density values",
+            "target_density"
+        );
     }
 }
 
@@ -662,7 +697,8 @@ void SemiDiscreteOT<dim, spacedim>::assign_potentials_by_hierarchy(
             *fe_system,
             source_density,
             solver_params.quadrature_order,
-            current_distance_threshold);
+            current_distance_threshold,
+            solver_params.use_log_sum_exp_trick);
 
         // Add timer for softmax refinement
         Timer softmax_timer;
@@ -708,9 +744,8 @@ void SemiDiscreteOT<dim, spacedim>::assign_potentials_by_hierarchy(
     }
 }
 
-// run single sot optimization with epsilon scaling
 template <int dim, int spacedim>
-Vector<double> SemiDiscreteOT<dim, spacedim>::run_sot()
+Vector<double> SemiDiscreteOT<dim, spacedim>::run_sot(const Vector<double>& initial_potential)
 {
     Timer timer;
     timer.start();
@@ -737,7 +772,22 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_sot()
     // Set up target measure
     sot_solver->setup_target(target_points, target_density);
 
-    Vector<double> potential(target_points.size());
+    // Initialize potential vector
+    Vector<double> potential;
+    if (initial_potential.size() > 0) {
+        // Verify that the initial potential has the correct size
+        if (initial_potential.size() != target_points.size()) {
+            pcout << Color::red << Color::bold << "Error: Initial potential size (" << initial_potential.size() 
+                  << ") does not match target points size (" << target_points.size() << ")" << Color::reset << std::endl;
+            return Vector<double>();
+        }
+        pcout << Color::green << "Using provided initial potential" << Color::reset << std::endl;
+        potential = initial_potential;
+    } else {
+        // Initialize with zeros
+        potential.reinit(target_points.size());
+        potential = 0.0;
+    }
 
     try
     {
@@ -830,7 +880,7 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_sot()
 }
 
 template <int dim, int spacedim>
-Vector<double> SemiDiscreteOT<dim, spacedim>::run_target_multilevel()
+Vector<double> SemiDiscreteOT<dim, spacedim>::run_target_multilevel(const Vector<double>& initial_potential)
 {
     Timer global_timer;
     global_timer.start();
@@ -843,7 +893,7 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_target_multilevel()
     // Load source mesh based on input parameters
     if (!is_setup_programmatically_)
     {
-        mesh_manager->load_source_mesh(source_mesh);
+        mesh_manager->load_source_mesh(source_mesh, source_mesh_name);
         setup_source_finite_elements();
     }
 
@@ -992,6 +1042,26 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_target_multilevel()
                 total_softmax_time += transfer_timer.wall_time();
             }
         }
+        else
+        {
+            // For the coarsest level (level == 0), use the provided initial potential
+            if (initial_potential.size() > 0)
+            {
+                if (initial_potential.size() != target_points.size())
+                {
+                    pcout << Color::red << Color::bold << "Error: Initial potential size (" << initial_potential.size() 
+                          << ") does not match coarsest target points size (" << target_points.size() << ")" << Color::reset << std::endl;
+                    return Vector<double>();
+                }
+                pcout << Color::green << "Using provided initial potential for coarsest level " << level_number << Color::reset << std::endl;
+                current_level_potentials = initial_potential;
+            }
+            else
+            {
+                // Initialize with zeros for coarsest level
+                current_level_potentials = 0.0;
+            }
+        }
 
         Timer level_timer;
         level_timer.start();
@@ -1115,6 +1185,12 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_target_multilevel()
 
         // Store potentials for next level
         level_potentials = current_level_potentials;
+        
+        // Store coarsest potential for the first level (level == 0)
+        if (level == 0)
+        {
+            coarsest_potential = current_level_potentials;
+        }
     }
 
     // Save final potentials in the top-level directory
@@ -1163,7 +1239,7 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_target_multilevel()
 }
 
 template <int dim, int spacedim>
-Vector<double> SemiDiscreteOT<dim, spacedim>::run_source_multilevel()
+Vector<double> SemiDiscreteOT<dim, spacedim>::run_source_multilevel(const Vector<double>& initial_potential)
 {
     Timer global_timer;
     global_timer.start();
@@ -1261,7 +1337,7 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_source_multilevel()
     Vector<double> previous_source_potentials;
 
     if (!is_setup_programmatically_) {
-        mesh_manager->load_source_mesh(source_mesh);
+        mesh_manager->load_source_mesh(source_mesh, source_mesh_name);
         setup_source_finite_elements();
         setup_target_points();
     }
@@ -1290,7 +1366,22 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_source_multilevel()
         if (source_level_idx == 0)
         {
             level_potentials.reinit(target_points.size());
-            level_potentials = 0.0; // Initialize potentials for the coarsest level
+            // For the coarsest level, use the provided initial potential
+            if (initial_potential.size() > 0)
+            {
+                if (initial_potential.size() != target_points.size())
+                {
+                    pcout << Color::red << Color::bold << "Error: Initial potential size (" << initial_potential.size() 
+                          << ") does not match target points size (" << target_points.size() << ")" << Color::reset << std::endl;
+                    return Vector<double>();
+                }
+                pcout << Color::green << "Using provided initial potential for coarsest source level " << current_level_display_name << Color::reset << std::endl;
+                level_potentials = initial_potential;
+            }
+            else
+            {
+                level_potentials = 0.0; // Initialize potentials for the coarsest level
+            }
         }
         else
         {
@@ -1331,6 +1422,8 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_source_multilevel()
         if (source_level_idx == source_mesh_files.size() - 1)
         {
             final_potentials = level_potentials;
+            // Store final potential for source multilevel (finest source level)
+            coarsest_potential = level_potentials;
         }
     }
 
@@ -1376,7 +1469,7 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_source_multilevel()
 
 // TODO check if there are bug with dim, spacedim, custom distance
 template <int dim, int spacedim>
-Vector<double> SemiDiscreteOT<dim, spacedim>::run_combined_multilevel()
+Vector<double> SemiDiscreteOT<dim, spacedim>::run_combined_multilevel(const Vector<double>& initial_potential)
 {
     Timer global_timer;
     global_timer.start();
@@ -1469,10 +1562,6 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_combined_multilevel()
         std::string current_target_density_file;
 
         if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
-            pcout << "target_hierarchy_files.size(): " << target_hierarchy_files.size() << std::endl;
-            pcout << "current_target_idx: " << current_target_idx << std::endl;
-            // print dir target
-            pcout << "target_hierarchy_dir: " << multilevel_params.target_hierarchy_dir << std::endl;
             current_target_points_file = target_hierarchy_files[current_target_idx].first;
             current_target_density_file = target_hierarchy_files[current_target_idx].second;
         }
@@ -1516,8 +1605,20 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_combined_multilevel()
         // Initialize potentials
         Vector<double> potentials_for_this_level(target_points.size());
 
-        potentials_for_this_level = 0.0;  // Default initialization
-        if (combined_iter > 0) {
+        if (combined_iter == 0) {
+            // For the first iteration (coarsest level), use the provided initial potential
+            if (initial_potential.size() > 0) {
+                if (initial_potential.size() != target_points.size()) {
+                    pcout << Color::red << Color::bold << "Error: Initial potential size (" << initial_potential.size() 
+                          << ") does not match coarsest target points size (" << target_points.size() << ")" << Color::reset << std::endl;
+                    return Vector<double>();
+                }
+                pcout << Color::green << "Using provided initial potential for coarsest combined level " << combined_iter << Color::reset << std::endl;
+                potentials_for_this_level = initial_potential;
+            } else {
+                potentials_for_this_level = 0.0;  // Default initialization
+            }
+        } else {
             bool target_level_changed = (current_actual_target_level_num != prev_actual_target_level_num);
             bool hierarchical_transfer_possible = target_level_changed &&
                                                 (prev_actual_target_level_num == current_actual_target_level_num + 1);
@@ -1590,6 +1691,12 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_combined_multilevel()
         current_potentials = potentials_for_this_level;
         prev_actual_target_level_num = current_actual_target_level_num;
         current_distance_threshold = sot_solver->get_last_distance_threshold();
+        
+        // Store coarsest potential for the first iteration (combined_iter == 0)
+        if (combined_iter == 0)
+        {
+            coarsest_potential = potentials_for_this_level;
+        }
 
         level_timer.stop();
         const double level_time = level_timer.wall_time();
@@ -1649,7 +1756,7 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_combined_multilevel()
 }
 
 template <int dim, int spacedim>
-Vector<double> SemiDiscreteOT<dim, spacedim>::run_multilevel()
+Vector<double> SemiDiscreteOT<dim, spacedim>::run_multilevel(const Vector<double>& initial_potential)
 {
     pcout << Color::yellow << Color::bold << "Starting multilevel SOT computation (dispatcher)..." << Color::reset << std::endl;
 
@@ -1659,17 +1766,17 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_multilevel()
     if (source_ml_enabled && !target_ml_enabled)
     {
         pcout << "Executing Source-Only Multilevel SOT." << std::endl;
-        return run_source_multilevel();
+        return run_source_multilevel(initial_potential);
     }
     else if (!source_ml_enabled && target_ml_enabled)
     {
         pcout << "Executing Target-Only Multilevel SOT." << std::endl;
-        return run_target_multilevel();
+        return run_target_multilevel(initial_potential);
     }
     else if (source_ml_enabled && target_ml_enabled)
     {
         pcout << "Executing Combined Source and Target Multilevel SOT." << std::endl;
-        return run_combined_multilevel();
+        return run_combined_multilevel(initial_potential);
     }
     else
     {
@@ -1747,7 +1854,7 @@ void SemiDiscreteOT<dim, spacedim>::prepare_source_multilevel()
             multilevel_params.source_min_vertices,
             multilevel_params.source_max_vertices);
 
-        std::string source_mesh_file = "output/data_mesh/source.msh";
+        std::string source_mesh_file = "output/data_mesh/" + source_mesh_name + ".msh";
 
         // Check if source mesh file exists
         if (!std::filesystem::exists(source_mesh_file))
@@ -1922,7 +2029,7 @@ void SemiDiscreteOT<dim, spacedim>::compute_transport_map()
 
     // Get source points and density (serial version)
     std::vector<Point<spacedim>> source_points;
-    Vector<double> source_density;
+    pcout << "Source density size: " << source_density.size() << std::endl;
 
     const std::string directory = "output/data_points";
     bool points_loaded = false;
@@ -1930,6 +2037,7 @@ void SemiDiscreteOT<dim, spacedim>::compute_transport_map()
     {
         points_loaded = true;
         std::cout << "Source points loaded from file" << std::endl;
+        std::cout << "First 4 values of source density: ";
     }
 
     if (!points_loaded)
@@ -1946,9 +2054,6 @@ void SemiDiscreteOT<dim, spacedim>::compute_transport_map()
         Utils::write_vector(source_points, directory + "/source_points", io_coding);
         std::cout << "Source points computed and saved to file" << std::endl;
     }
-
-    source_density.reinit(source_points.size());
-    source_density = 1.0 / source_points.size();
 
     // Convert densities to vectors
     std::vector<double> source_density_vec(source_density.begin(), source_density.end());
@@ -2131,6 +2236,171 @@ void SemiDiscreteOT<dim, spacedim>::compute_power_diagram()
 }
 
 template <int dim, int spacedim>
+void SemiDiscreteOT<dim, spacedim>::compute_conditional_density()
+{
+    load_meshes();
+    setup_finite_elements();
+
+    // Set up source measure
+    sot_solver->setup_source(dof_handler_source,
+                             *mapping,
+                             *fe_system,
+                             source_density,
+                             solver_params.quadrature_order);
+
+    // Set up target measure
+    sot_solver->setup_target(target_points, target_density);
+    sot_solver->configure(solver_params);
+    
+    // Use indices and folder from parameters
+    std::vector<unsigned int> indices = param_manager.conditional_density_params.indices;
+    std::string potential_folder = param_manager.conditional_density_params.potential_folder;
+    
+    // If indices are empty, log error and return
+    if (indices.empty())
+    {
+        pcout << Color::red << Color::bold << "Error: No indices specified for conditional density computation." << Color::reset << std::endl;
+        pcout << "Please specify indices in the parameter file under conditional_density_parameters/indices." << std::endl;
+        return;
+    }
+    
+    // Determine which folder to use
+    std::string selected_folder;
+    if (potential_folder.empty())
+    {
+        // Let user select which folder to use (similar to transport map)
+        std::vector<std::string> selected_folders;
+        try
+        {
+            selected_folders = Utils::select_folder();
+            if (selected_folders.empty())
+            {
+                pcout << "No folder selected. Exiting." << std::endl;
+                return;
+            }
+            selected_folder = selected_folders[0]; // Use first selected folder
+        }
+        catch (const std::exception &e)
+        {
+            pcout << "Error: " << e.what() << std::endl;
+            return;
+        }
+    }
+    else
+    {
+        selected_folder = potential_folder;
+    }
+    
+    pcout << "Computing conditional densities for folder: " << selected_folder << std::endl;
+    pcout << "Indices: ";
+    for (size_t i = 0; i < indices.size(); ++i)
+    {
+        if (i > 0) pcout << ", ";
+        pcout << indices[i];
+    }
+    pcout << std::endl;
+    
+    // Read potentials from selected folder
+    std::vector<double> potentials_vec;
+    bool success = Utils::read_vector(potentials_vec, "output/" + selected_folder + "/potentials", io_coding);
+    if (!success)
+    {
+        pcout << "Failed to read potentials from output/" + selected_folder + "/potentials" << std::endl;
+        return;
+    }
+    
+    if (potentials_vec.size() != target_points.size())
+    {
+        pcout << Color::red << Color::bold << "Error: Mismatch between potentials size (" << potentials_vec.size()
+              << ") and target points size (" << target_points.size() << ")" << Color::reset << std::endl;
+        return;
+    }
+    
+    // Convert to dealii::Vector
+    Vector<double> potentials(potentials_vec.size());
+    std::copy(potentials_vec.begin(), potentials_vec.end(), potentials.begin());
+    
+    // Validate indices
+    for (unsigned int idx : indices)
+    {
+        if (idx >= target_points.size())
+        {
+            pcout << Color::red << Color::bold << "Error: Index " << idx << " is out of bounds. Maximum index is "
+                  << target_points.size() - 1 << "." << Color::reset << std::endl;
+            return;
+        }
+    }
+    
+    // Compute conditional densities using SOT solver
+    std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> conditioned_densities;
+    
+    // Set truncation radius if specified
+    if (param_manager.conditional_density_params.truncation_radius > 0.0)
+    {
+        pcout << "Using truncation radius: " << param_manager.conditional_density_params.truncation_radius << std::endl;
+        sot_solver->set_distance_threshold(param_manager.conditional_density_params.truncation_radius);
+    }
+    
+    pcout << "Computing conditional densities..." << std::endl;
+    sot_solver->get_potential_conditioned_density(
+        dof_handler_source, *mapping,
+        potentials, indices, conditioned_densities);
+    
+    // Create output directory
+    const std::string output_dir = "output/" + selected_folder + "/conditional_densities";
+    fs::create_directories(output_dir);
+    
+    // Save conditional densities
+    DataOut<dim, spacedim> data_out;
+    data_out.attach_dof_handler(dof_handler_source);
+    
+    std::vector<DataComponentInterpretation::DataComponentInterpretation>
+        interpretation(1, DataComponentInterpretation::component_is_scalar);
+    
+    pcout << "Saving " << conditioned_densities.size() << " conditional densities..." << std::endl;
+    
+    for (unsigned int i = 0; i < conditioned_densities.size(); ++i)
+    {
+        data_out.add_data_vector(
+            conditioned_densities[i],
+            std::string("conditional_density_") + std::to_string(indices[i]),
+            DataOut<dim, spacedim>::type_dof_data,
+            interpretation);
+    }
+    
+    data_out.build_patches(*mapping, fe_system->degree);
+    
+    const std::string filename_base = "conditional_densities";
+    data_out.write_vtu_with_pvtu_record(output_dir + "/",
+                                       filename_base,
+                                       0,
+                                       mpi_communicator);
+    
+    pcout << "Conditional densities saved to " << output_dir << "/" << filename_base << "_0.pvtu" << std::endl;
+    
+    // Save individual VTU files for each conditional density
+    for (unsigned int i = 0; i < conditioned_densities.size(); ++i)
+    {
+        DataOut<dim, spacedim> individual_data_out;
+        individual_data_out.attach_dof_handler(dof_handler_source);
+        individual_data_out.add_data_vector(
+            conditioned_densities[i],
+            std::string("conditional_density_") + std::to_string(indices[i]),
+            DataOut<dim, spacedim>::type_dof_data,
+            interpretation);
+        individual_data_out.build_patches(*mapping, fe_system->degree);
+        
+        const std::string individual_filename = "conditional_density_" + std::to_string(indices[i]);
+        individual_data_out.write_vtu_with_pvtu_record(output_dir + "/",
+                                                      individual_filename,
+                                                      0,
+                                                      mpi_communicator);
+    }
+    
+    pcout << "Conditional density computation completed successfully." << std::endl;
+}
+
+template <int dim, int spacedim>
 void SemiDiscreteOT<dim, spacedim>::save_discrete_measures()
 {
     load_meshes();
@@ -2310,7 +2580,7 @@ void SemiDiscreteOT<dim, spacedim>::save_interpolated_fields()
                 }
             }
         }
-    }
+        }
 
     pcout << "\n"
           << Color::green << Color::bold
@@ -2395,6 +2665,10 @@ void SemiDiscreteOT<dim, spacedim>::run()
     else if (selected_task == "map")
     {
         compute_transport_map();
+    }
+    else if (selected_task == "conditional_density")
+    {
+        compute_conditional_density();
     }
     else if (selected_task == "save_discrete_measures")
     {

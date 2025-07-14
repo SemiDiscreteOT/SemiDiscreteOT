@@ -1,14 +1,14 @@
-subsection ParameterManager
+subsection SotParameterManager
 
-  set selected_task =  exact_sot    # Options: mesh_generation, load_meshes, sot, exact_sot, power_diagram, map, prepare_source_multilevel, prepare_target_multilevel, multilevel_sot, save_multilevel_source_interpolation
+  set selected_task =  save_discrete_measures    # Options: mesh_generation, load_meshes, sot, exact_sot, power_diagram, map, prepare_source_multilevel, prepare_target_multilevel, multilevel_sot, save_multilevel_source_interpolation
   set io_coding = txt
 
   subsection mesh_generation
     subsection source
-      set number of refinements = 4
+      set number of refinements = 6
       set grid generator function = hyper_cube
       set grid generator arguments = -1 : 1 : false
-      set use tetrahedral mesh = true
+      set use tetrahedral mesh = false
       set use custom density = false
       set density file path  = output/density_field/source_density.vtu
       set density field name = p
@@ -58,7 +58,7 @@ subsection ParameterManager
     set solver_control_type = l1norm
     set verbose_output = true
     set solver_type = BFGS
-    set quadrature_order = 3
+    set quadrature_order = 1
     set number_of_threads = 0
     set use_log_sum_exp_trick = false
     set use_epsilon_scaling = false

@@ -77,7 +77,7 @@ public:
      */
     struct MultilevelParameters {
         // Source mesh hierarchy parameters
-        bool source_enabled = true;             ///< Whether to use source multilevel approach
+        bool source_enabled = false;             ///< Whether to use source multilevel approach
         int source_min_vertices = 1000;         ///< Minimum vertices for coarsest source level
         int source_max_vertices = 10000;        ///< Maximum vertices for finest source level
         std::string source_hierarchy_dir = "output/data_multilevel/source_multilevel";  ///< Source hierarchy directory
@@ -111,6 +111,15 @@ public:
         double truncation_radius = -1.0;        ///< Truncation radius for map approximation (-1 = disabled)
     };
 
+    /**
+     * Parameters for conditional density computation.
+     */
+    struct ConditionalDensityParameters {
+        std::vector<unsigned int> indices;      ///< Indices for conditional density computation
+        std::string potential_folder = "";      ///< Folder to load potential from (empty = default)
+        double truncation_radius = -1.0;        ///< Truncation radius for conditional density computation (-1 = disabled)
+    };
+
     // Const access to parameters through getters
     const MeshParameters& get_source_params() const { return source_params; }
     const MeshParameters& get_target_params() const { return target_params; }
@@ -118,6 +127,7 @@ public:
     const MultilevelParameters& get_multilevel_params() const { return multilevel_params; }
     const PowerDiagramParameters& get_power_diagram_params() const { return power_diagram_params; }
     const TransportMapParameters& get_transport_map_params() const { return transport_map_params; }
+    const ConditionalDensityParameters& get_conditional_density_params() const { return conditional_density_params; }
 
     // Direct access to parameters through references
     MeshParameters& source_params;
@@ -126,6 +136,7 @@ public:
     MultilevelParameters& multilevel_params;
     PowerDiagramParameters& power_diagram_params;
     TransportMapParameters& transport_map_params;
+    ConditionalDensityParameters& conditional_density_params;
     std::string& selected_task;
     std::string& io_coding;
 
@@ -152,6 +163,7 @@ protected:
     void print_multilevel_parameters() const;
     void print_power_diagram_parameters() const;
     void print_transport_map_parameters() const;
+    void print_conditional_density_parameters() const;
     void print_task_information() const;
     void print_section_header(const std::string& section_name) const;
     
@@ -166,6 +178,7 @@ private:
     MultilevelParameters multilevel_params_storage;
     PowerDiagramParameters power_diagram_params_storage;
     TransportMapParameters transport_map_params_storage;
+    ConditionalDensityParameters conditional_density_params_storage;
 };
 
 /**

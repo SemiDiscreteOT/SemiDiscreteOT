@@ -9,6 +9,7 @@ SotParameterManager::SotParameterManager(const MPI_Comm &comm)
     , multilevel_params(multilevel_params_storage)
     , power_diagram_params(power_diagram_params_storage)
     , transport_map_params(transport_map_params_storage)
+    , conditional_density_params(conditional_density_params_storage)
     , selected_task(selected_task_storage)
     , io_coding(io_coding_storage)
     , mpi_communicator(comm)
@@ -143,6 +144,17 @@ SotParameterManager::SotParameterManager(const MPI_Comm &comm)
                      "Truncation radius for map approximation (-1 = disabled)");
     }
     leave_subsection();
+
+    enter_subsection("conditional_density_parameters");
+    {
+        add_parameter("indices", conditional_density_params.indices,
+                     "Indices for conditional density computation");
+        add_parameter("potential_folder", conditional_density_params.potential_folder,
+                     "Folder to load potential from (empty = default)");
+        add_parameter("truncation_radius", conditional_density_params.truncation_radius,
+                     "Truncation radius for conditional density computation (-1 = disabled)");
+    }
+    leave_subsection();
 }
 
 
@@ -222,6 +234,12 @@ void SotParameterManager::print_parameters() const
         print_transport_map_parameters();
     }
 
+    if (selected_task == "conditional_density")
+    {
+        print_section_header("CONDITIONAL DENSITY PARAMETERS");
+        print_conditional_density_parameters();
+    }
+
     pcout << std::endl;
 }
 
@@ -251,7 +269,8 @@ void SotParameterManager::print_task_information() const
         {"map", "Compute transport map between source and target"},
         {"prepare_source_multilevel", "Prepare source mesh hierarchy for multilevel approach"},
         {"prepare_target_multilevel", "Prepare target point cloud hierarchy for multilevel approach"},
-        {"multilevel_sot", "Run multilevel semidiscrete optimal transport"}
+        {"multilevel_sot", "Run multilevel semidiscrete optimal transport"},
+        {"conditional_density", "Compute conditional densities for specified indices"}
     };
     
     // Print each task with proper formatting
@@ -367,6 +386,26 @@ void SotParameterManager::print_transport_map_parameters() const
     pcout << CYAN << "  Transport Map Settings:" << RESET << std::endl;
     pcout << "    Truncation Radius: " << BOLD << (transport_map_params.truncation_radius < 0 ? "disabled" : 
                                                  std::to_string(transport_map_params.truncation_radius)) << RESET << std::endl;
+    pcout << std::endl;
+}
+
+void SotParameterManager::print_conditional_density_parameters() const
+{
+    pcout << CYAN << "  Conditional Density Settings:" << RESET << std::endl;
+    pcout << "    Indices: " << BOLD;
+    if (conditional_density_params.indices.empty()) {
+        pcout << "none specified";
+    } else {
+        for (size_t i = 0; i < conditional_density_params.indices.size(); ++i) {
+            if (i > 0) pcout << ", ";
+            pcout << conditional_density_params.indices[i];
+        }
+    }
+    pcout << RESET << std::endl;
+    pcout << "    Potential Folder: " << BOLD << (conditional_density_params.potential_folder.empty() ? "default" : 
+                                                 conditional_density_params.potential_folder) << RESET << std::endl;
+    pcout << "    Truncation Radius: " << BOLD << (conditional_density_params.truncation_radius < 0 ? "disabled" : 
+                                                 std::to_string(conditional_density_params.truncation_radius)) << RESET << std::endl;
     pcout << std::endl;
 } 
 

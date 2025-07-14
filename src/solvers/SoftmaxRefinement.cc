@@ -9,7 +9,8 @@ SoftmaxRefinement<dim, spacedim>::SoftmaxRefinement(
     const FiniteElement<dim, spacedim>& fe,
     const LinearAlgebra::distributed::Vector<double>& source_density,
     unsigned int quadrature_order,
-    double distance_threshold)
+    double distance_threshold,
+    bool use_log_sum_exp_trick)
     : mpi_communicator(mpi_comm)
     , n_mpi_processes(Utilities::MPI::n_mpi_processes(mpi_comm))
     , this_mpi_process(Utilities::MPI::this_mpi_process(mpi_comm))
@@ -20,6 +21,7 @@ SoftmaxRefinement<dim, spacedim>::SoftmaxRefinement(
     , source_density(source_density)
     , quadrature_order(quadrature_order)
     , current_distance_threshold(distance_threshold)
+    , use_log_sum_exp_trick(use_log_sum_exp_trick)
 {
     distance_function = [](const Point<spacedim> x, const Point<spacedim> y) { return euclidean_distance<spacedim>(x, y); };
 }
@@ -139,23 +141,51 @@ void SoftmaxRefinement<dim, spacedim>::local_assemble(
         
         // First compute normalization using coarse points
         double total_sum_exp = 0.0;
+        double max_exponent = -std::numeric_limits<double>::max();
         std::vector<double> exp_terms_coarse(n_target_points_coarse);
-
-        #pragma omp simd reduction(+:total_sum_exp)
-        for (size_t i = 0; i < n_target_points_coarse; ++i) {
-            const double local_dist2 = std::pow(distance_function(x,  target_positions_coarse[i]), 2);
-            if (local_dist2 <= threshold_sq) {
-                exp_terms_coarse[i] = target_densities_coarse[i] * 
-                    std::exp((potential_values_coarse[i] - 0.5 * local_dist2) * lambda_inv);
-                total_sum_exp += exp_terms_coarse[i];
+        
+        if (use_log_sum_exp_trick) {
+            // First pass: find maximum exponent
+            #pragma omp simd reduction(max:max_exponent)
+            for (size_t i = 0; i < n_target_points_coarse; ++i) {
+                const double local_dist2 = std::pow(distance_function(x,  target_positions_coarse[i]), 2);
+                if (local_dist2 <= threshold_sq) {
+                    const double exponent = (potential_values_coarse[i] - 0.5 * local_dist2) * lambda_inv;
+                    max_exponent = std::max(max_exponent, exponent);
+                }
+            }
+            
+            // Second pass: compute shifted exponentials  
+            #pragma omp simd reduction(+:total_sum_exp)
+            for (size_t i = 0; i < n_target_points_coarse; ++i) {
+                const double local_dist2 = std::pow(distance_function(x,  target_positions_coarse[i]), 2);
+                if (local_dist2 <= threshold_sq) {
+                    const double shifted_exp = std::exp((potential_values_coarse[i] - 0.5 * local_dist2) * lambda_inv - max_exponent);
+                    exp_terms_coarse[i] = target_densities_coarse[i] * shifted_exp;
+                    total_sum_exp += exp_terms_coarse[i];
+                }
+            }
+        } else {
+            // Original computation method
+            #pragma omp simd reduction(+:total_sum_exp)
+            for (size_t i = 0; i < n_target_points_coarse; ++i) {
+                const double local_dist2 = std::pow(distance_function(x,  target_positions_coarse[i]), 2);
+                if (local_dist2 <= threshold_sq) {
+                    exp_terms_coarse[i] = target_densities_coarse[i] * 
+                        std::exp((potential_values_coarse[i] - 0.5 * local_dist2) * lambda_inv);
+                    total_sum_exp += exp_terms_coarse[i];
+                }
             }
         }
 
         if (total_sum_exp <= 0.0) continue;
 
         // Now update potential for fine points using their parent's exp term for normalization
-        const double scale = density_value * JxW / total_sum_exp;
-        
+        double scale = density_value * JxW / total_sum_exp;
+        if (use_log_sum_exp_trick) {
+            scale *= std::exp(-max_exponent);
+        }
+
         #pragma omp simd
         for (size_t i = 0; i < n_target_points_fine; ++i) {
             const double local_dist2_fine = std::pow(distance_function(x,  target_positions_fine[i]), 2);

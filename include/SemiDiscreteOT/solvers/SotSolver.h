@@ -41,19 +41,6 @@
 #include "SemiDiscreteOT/utils/ColorDefinitions.h"
 #include "SemiDiscreteOT/solvers/Distance.h"
 
-namespace LA
-{
-#if defined(DEAL_II_WITH_PETSC)
-  using namespace dealii::LinearAlgebraPETSc;
-#define USE_PETSC_LA
-#elif defined(DEAL_II_WITH_TRILINOS)
-  using namespace dealii::LinearAlgebraTrilinos;
-#define USE_TRILINOS_LA
-#else
-#error DEAL_II_WITH_PETSC or DEAL_II_WITH_TRILINOS required
-#endif
-} // namespace LA
-
 using namespace dealii;
 
 template <int dim, int spacedim=dim>
@@ -170,6 +157,9 @@ public:
     void setup_target(const std::vector<Point<spacedim>>& target_points,
                      const Vector<double>& target_density);
 
+    // Configuration method
+    void configure(const SotParameterManager::SolverParameters& params);
+
     // Main solver interface
     void solve(Vector<double>& potential,
               const SotParameterManager::SolverParameters& params);
@@ -191,6 +181,9 @@ public:
     bool get_convergence_status() const;
     double get_last_distance_threshold() const { return current_distance_threshold; }
     double get_C_global() const { return C_global; }
+    
+    // Setter for distance threshold (useful for conditional density with truncation)
+    void set_distance_threshold(double threshold) { current_distance_threshold = threshold; }
 
     /**
      * @brief Computes the covering radius of the target measure with respect to the source domain
