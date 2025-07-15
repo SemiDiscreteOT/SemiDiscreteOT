@@ -43,6 +43,14 @@
 
 using namespace dealii;
 
+/**
+ * @brief A solver for semi-discrete optimal transport problems.
+ *
+ * This class implements a solver for the dual formulation of the regularized semi-discrete optimal transport problem.
+ *
+ * @tparam dim The dimension of the source mesh.
+ * @tparam spacedim The dimension of the space the mesh is embedded in.
+ */
 template <int dim, int spacedim=dim>
 class SotSolver {
 public:
@@ -52,16 +60,21 @@ public:
     using RTreeParams = boost::geometry::index::rstar<8>;
     using RTree = boost::geometry::index::rtree<IndexedPoint, RTreeParams>;
 
-    // Source measure data structure
+    /**
+     * @brief A struct to hold all the necessary information about the source measure.
+     */
     struct SourceMeasure {
-        bool initialized = false; // Flag to check if source measure is set up
-        SmartPointer<const DoFHandler<dim, spacedim>> dof_handler;
-        SmartPointer<const Mapping<dim, spacedim>> mapping;
-        SmartPointer<const FiniteElement<dim, spacedim>> fe;
-        SmartPointer<const LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> density;
-        unsigned int quadrature_order;
+        bool initialized = false; ///< Flag to check if source measure is set up
+        SmartPointer<const DoFHandler<dim, spacedim>> dof_handler; ///< Pointer to the DoF handler for the source mesh.
+        SmartPointer<const Mapping<dim, spacedim>> mapping; ///< Pointer to the mapping for the source mesh.
+        SmartPointer<const FiniteElement<dim, spacedim>> fe; ///< Pointer to the finite element for the source mesh.
+        SmartPointer<const LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> density; ///< Pointer to the density vector of the source measure.
+        unsigned int quadrature_order; ///< The order of the quadrature rule to use for integration.
         
         SourceMeasure() = default;
+        /**
+         * @brief Constructor for the SourceMeasure struct.
+         */
         SourceMeasure(const DoFHandler<dim, spacedim>& dof_handler_,
                      const Mapping<dim, spacedim>& mapping_,
                      const FiniteElement<dim, spacedim>& fe_,
@@ -76,14 +89,19 @@ public:
         {}
     };
 
-    // Target measure data structure
+    /**
+     * @brief A struct to hold all the necessary information about the target measure.
+     */
     struct TargetMeasure {
-        bool initialized = false; // Flag to check if target measure is set up
-        std::vector<Point<spacedim>> points;
-        Vector<double> density;
-        RTree rtree;
+        bool initialized = false; ///< Flag to check if target measure is set up
+        std::vector<Point<spacedim>> points; ///< The points of the discrete target measure.
+        Vector<double> density; ///< The weights of the discrete target measure.
+        RTree rtree; ///< An R-tree for fast spatial queries on the target points.
         
         TargetMeasure() = default;
+        /**
+         * @brief Constructor for the TargetMeasure struct.
+         */
         TargetMeasure(const std::vector<Point<spacedim>>& points_,
                      const Vector<double>& density_)
             : initialized(true)
@@ -95,6 +113,9 @@ public:
             initialize_rtree();
         }
 
+        /**
+         * @brief Initializes the R-tree with the target points.
+         */
         void initialize_rtree() {
             std::vector<IndexedPoint> indexed_points;
             indexed_points.reserve(points.size());
@@ -105,7 +126,9 @@ public:
         }
     };
 
-    // Per-cell scratch data for parallel assembly
+    /**
+     * @brief A struct to hold scratch data for parallel assembly.
+     */
     struct ScratchData {
         ScratchData(const FiniteElement<dim, spacedim>& fe,
                    const Mapping<dim, spacedim>& mapping,
@@ -121,18 +144,20 @@ public:
                        update_values | update_quadrature_points | update_JxW_values)
             , density_values(other.density_values) {}
 
-        FEValues<dim, spacedim> fe_values;
-        std::vector<double> density_values;
+        FEValues<dim, spacedim> fe_values; ///< FEValues object for the current cell.
+        std::vector<double> density_values; ///< The density values at the quadrature points of the current cell.
     };
 
-    // Per-cell copy data for parallel assembly
+    /**
+     * @brief A struct to hold copy data for parallel assembly.
+     */
     struct CopyData {
-        double functional_value{0.0};
-        Vector<double> gradient_values;  // Local gradient contribution
-        Vector<double> potential_values;  // For softmax refinement
-        double local_C_sum = 0.0; // Sum of scale terms for this cell
+        double functional_value{0.0}; ///< The value of the functional on the current cell.
+        Vector<double> gradient_values;  ///< The local contribution to the gradient.
+        Vector<double> potential_values;  ///< The potential values at the target points.
+        double local_C_sum = 0.0; ///< The sum of the scale terms for this cell.
 
-        Vector<double> barycenters_values; // Needed for LLoyd
+        Vector<double> barycenters_values; ///< The barycenter values for the current cell.
 
         CopyData(const unsigned int n_target_points)
             : gradient_values(n_target_points),
@@ -144,45 +169,96 @@ public:
         }
     };
 
-    // Constructor
+    /**
+     * @brief Constructor for the SotSolver.
+     * @param comm The MPI communicator.
+     */
     SotSolver(const MPI_Comm& comm);
 
-    // Setup methods
+    /**
+     * @brief Sets up the source measure for the solver.
+     * @param dof_handler The DoF handler for the source mesh.
+     * @param mapping The mapping for the source mesh.
+     * @param fe The finite element for the source mesh.
+     * @param source_density The density of the source measure.
+     * @param quadrature_order The order of the quadrature rule to use for integration.
+     */
     void setup_source(const DoFHandler<dim, spacedim>& dof_handler,
                      const Mapping<dim, spacedim>& mapping,
                      const FiniteElement<dim, spacedim>& fe,
                      const LinearAlgebra::distributed::Vector<double, MemorySpace::Host>& source_density,
                      const unsigned int quadrature_order);
 
+    /**
+     * @brief Sets up the target measure for the solver.
+     * @param target_points The points of the discrete target measure.
+     * @param target_density The weights of the discrete target measure.
+     */
     void setup_target(const std::vector<Point<spacedim>>& target_points,
                      const Vector<double>& target_density);
 
-    // Configuration method
+    /**
+     * @brief Configures the solver with the given parameters.
+     * @param params The solver parameters.
+     */
     void configure(const SotParameterManager::SolverParameters& params);
 
-    // Main solver interface
+    /**
+     * @brief Solves the optimal transport problem.
+     * @param potential The vector to store the computed optimal transport potential.
+     * @param params The solver parameters.
+     */
     void solve(Vector<double>& potential,
               const SotParameterManager::SolverParameters& params);
 
-    // Alternative solve interface if measures not set up beforehand
+    /**
+     * @brief Alternative solve interface if measures are not set up beforehand.
+     * @param potential The vector to store the computed optimal transport potential.
+     * @param source The source measure.
+     * @param target The target measure.
+     * @param params The solver parameters.
+     */
     void solve(Vector<double>& potential,
               const SourceMeasure& source,
               const TargetMeasure& target,
               const SotParameterManager::SolverParameters& params);
     
+    /**
+     * @brief Evaluates the weighted barycenters of the power cells.
+     * @param potentials The optimal transport potentials.
+     * @param barycenters_out The vector to store the computed barycenters.
+     * @param params The solver parameters.
+     */
     void evaluate_weighted_barycenters(
         const Vector<double>& potentials,
         std::vector<Point<spacedim>>& barycenters_out,
         const SotParameterManager::SolverParameters& params);
     
-    // Getters for solver results
+    /**
+     * @brief Returns the value of the functional at the last iteration.
+     */
     double get_last_functional_value() const { return global_functional; }
+    /**
+     * @brief Returns the number of iterations of the last solve.
+     */
     unsigned int get_last_iteration_count() const;
+    /**
+     * @brief Returns the convergence status of the last solve.
+     */
     bool get_convergence_status() const;
+    /**
+     * @brief Returns the distance threshold used in the last solve.
+     */
     double get_last_distance_threshold() const { return current_distance_threshold; }
+    /**
+     * @brief Returns the global C value.
+     */
     double get_C_global() const { return C_global; }
     
-    // Setter for distance threshold (useful for conditional density with truncation)
+    /**
+     * @brief Sets the distance threshold for the solver.
+     * @param threshold The distance threshold.
+     */
     void set_distance_threshold(double threshold) { current_distance_threshold = threshold; }
 
     /**
@@ -222,9 +298,20 @@ public:
         const double epsilon,
         const double tolerance) const;
     
-    // distance function methods
+    /**
+     * @brief Sets the distance function to be used by the solver.
+     * @param distance_name The name of the distance function.
+     */
     void set_distance_function(const std::string &distance_name);
 
+    /**
+     * @brief Computes the conditional density of the source measure given a potential.
+     * @param dof_handler The DoF handler for the source mesh.
+     * @param mapping The mapping for the source mesh.
+     * @param potential The optimal transport potential.
+     * @param potential_indices The indices of the potential to use.
+     * @param conditioned_densities The vector to store the computed conditional densities.
+     */
     void get_potential_conditioned_density(
         const DoFHandler<dim, spacedim> &dof_handler,
         const Mapping<dim, spacedim> &mapping,
@@ -233,25 +320,37 @@ public:
         std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> &conditioned_densities);
 
     // Distance function
-    std::string distance_name;
-    std::function<double(const Point<spacedim>&, const Point<spacedim>&)> distance_function;
-    std::function<Vector<double>(const Point<spacedim>&, const Point<spacedim>&)> distance_function_gradient;
-    std::function<Point<spacedim>(const Point<spacedim>&, const Vector<double>&)> distance_function_exponential_map;
+    std::string distance_name; ///< The name of the distance function.
+    std::function<double(const Point<spacedim>&, const Point<spacedim>&)> distance_function; ///< The distance function.
+    std::function<Vector<double>(const Point<spacedim>&, const Point<spacedim>&)> distance_function_gradient; ///< The gradient of the distance function.
+    std::function<Point<spacedim>(const Point<spacedim>&, const Vector<double>&)> distance_function_exponential_map; ///< The exponential map of the distance function.
 
-    // Core evaluation method
+    /**
+     * @brief Evaluates the dual functional and its gradient.
+     * @param potential The potential at which to evaluate the functional.
+     * @param gradient_out The vector to store the computed gradient.
+     * @return The value of the functional.
+     */
     double evaluate_functional(const Vector<double>& potential,
                              Vector<double>& gradient_out);
 
-    // Compute Hessian matrix for Newton solver
+    /**
+     * @brief Computes the Hessian matrix of the dual functional.
+     * @param potential The potential at which to compute the Hessian.
+     * @param hessian_out The matrix to store the computed Hessian.
+     */
     void compute_hessian(const Vector<double>& potential,
                         LAPACKFullMatrix<double>& hessian_out);
 
     // Source and target measures
-    SourceMeasure source_measure;
-    TargetMeasure target_measure;
+    SourceMeasure source_measure; ///< The source measure.
+    TargetMeasure target_measure; ///< The target measure.
 
 private:
 
+    /**
+     * @brief A verbose solver control class that prints the progress of the solver.
+     */
     class VerboseSolverControl : public SolverControl
     {
     public:

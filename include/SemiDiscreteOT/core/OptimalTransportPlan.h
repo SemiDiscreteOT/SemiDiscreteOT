@@ -35,20 +35,24 @@ namespace OptimalTransportPlanSpace {
 template <int spacedim> class MapApproximationStrategy;
 
 /**
- * Class for computing and managing optimal transport map approximations.
+ * @brief A class for computing and managing optimal transport map approximations.
+ *
  * This class provides various strategies for approximating the optimal transport
  * map given source/target measures and optimal transport potentials.
+ *
+ * @tparam spacedim The dimension of the space the mesh is embedded in.
  */
 template <int spacedim>
 class OptimalTransportPlan : public ParameterAcceptor {
 public:
     /**
-     * Constructor taking an optional strategy name.
+     * @brief Constructor taking an optional strategy name.
+     * @param strategy_name The name of the approximation strategy to use.
      */
     OptimalTransportPlan(const std::string& strategy_name = "modal");
 
     /**
-     * Set the distance function used to compute distances between points.
+     * @brief Set the distance function used to compute distances between points.
      * This function accepts a callable object (e.g., lambda) that takes two points
      * as input and returns a double representing their distance.
      *
@@ -60,7 +64,7 @@ public:
     }
 
     /**
-     * Set the source measure data.
+     * @brief Set the source measure data.
      * @param points Vector of source points
      * @param density Vector of density values at source points
      */
@@ -68,7 +72,7 @@ public:
                           const std::vector<double>& density);
 
     /**
-     * Set the target measure data.
+     * @brief Set the target measure data.
      * @param points Vector of target points
      * @param density Vector of density values at target points
      */
@@ -76,7 +80,7 @@ public:
                           const std::vector<double>& density);
 
     /**
-     * Set the optimal transport potential.
+     * @brief Set the optimal transport potential.
      * @param potential Vector of potential values at target points
      * @param regularization_param The regularization parameter used (if any)
      */
@@ -84,7 +88,7 @@ public:
                       const double regularization_param = 0.0);
 
     /**
-     * Set the truncation radius for map computation.
+     * @brief Set the truncation radius for map computation.
      * Points outside this radius will not be considered in the map computation.
      * A negative value means no truncation (all points are considered).
      * @param radius The truncation radius
@@ -92,24 +96,25 @@ public:
     void set_truncation_radius(double radius);
 
     /**
-     * Compute the optimal transport map approximation using the current strategy.
+     * @brief Compute the optimal transport map approximation using the current strategy.
      */
     void compute_map();
 
     /**
-     * Save the computed transport map to files.
+     * @brief Save the computed transport map to files.
      * @param output_dir Directory where to save the results
      */
     void save_map(const std::string& output_dir) const;
 
     /**
-     * Change the approximation strategy.
+     * @brief Change the approximation strategy.
      * @param strategy_name Name of the strategy to use
      */
     void set_strategy(const std::string& strategy_name);
 
     /**
-     * Get available strategy names.
+     * @brief Get available strategy names.
+     * @return A vector of strings containing the names of the available strategies.
      */
     static std::vector<std::string> get_available_strategies();
 
@@ -135,13 +140,26 @@ private:
 };
 
 /**
- * Abstract base class for map approximation strategies.
+ * @brief Abstract base class for map approximation strategies.
+ *
+ * @tparam spacedim The dimension of the space the mesh is embedded in.
  */
 template <int spacedim>
 class MapApproximationStrategy {
 public:
     virtual ~MapApproximationStrategy() = default;
 
+    /**
+     * @brief Computes the transport map.
+     * @param distance_function The distance function.
+     * @param source_points The source points.
+     * @param source_density The source density.
+     * @param target_points The target points.
+     * @param target_density The target density.
+     * @param potential The optimal transport potential.
+     * @param regularization_param The regularization parameter.
+     * @param truncation_radius The truncation radius.
+     */
     virtual void compute_map(
         const std::function<double(const Point<spacedim>&, const Point<spacedim>&)> distance_function,
         const std::vector<Point<spacedim>>& source_points,
@@ -152,22 +170,40 @@ public:
         const double regularization_param,
         const double truncation_radius) = 0;
 
+    /**
+     * @brief Saves the results to a file.
+     * @param output_dir The directory to save the results to.
+     */
     virtual void save_results(const std::string& output_dir) const = 0;
 
 protected:
-    std::vector<Point<spacedim>> source_points;
-    std::vector<Point<spacedim>> mapped_points;
-    std::vector<double> transport_density;
+    std::vector<Point<spacedim>> source_points; ///< The source points.
+    std::vector<Point<spacedim>> mapped_points; ///< The mapped points.
+    std::vector<double> transport_density; ///< The transported density.
 };
 
 /**
- * Modal strategy for map approximation.
+ * @brief Modal strategy for map approximation.
+ *
  * Maps each source point to the target point that maximizes:
  * score = potential[j] - 0.5*||x-y||^2 + regularization_param * log(target_density[j])
+ *
+ * @tparam spacedim The dimension of the space the mesh is embedded in.
  */
  template <int spacedim>
  class ModalStrategy : public MapApproximationStrategy<spacedim> {
  public:
+     /**
+      * @brief Computes the transport map.
+      * @param distance_function The distance function.
+      * @param source_points The source points.
+      * @param source_density The source density.
+      * @param target_points The target points.
+      * @param target_density The target density.
+      * @param potential The optimal transport potential.
+      * @param regularization_param The regularization parameter.
+      * @param truncation_radius The truncation radius.
+      */
      void compute_map(
         const std::function<double(const Point<spacedim>&, const Point<spacedim>&)> distance_function,
         const std::vector<Point<spacedim>>& source_points,
@@ -178,17 +214,35 @@ protected:
         const double regularization_param,
         const double truncation_radius) override;
  
+     /**
+      * @brief Saves the results to a file.
+      * @param output_dir The directory to save the results to.
+      */
      void save_results(const std::string& output_dir) const override;
  };
 
 /**
- * Barycentric interpolation strategy for map approximation.
+ * @brief Barycentric interpolation strategy for map approximation.
+ *
  * Computes a weighted average of target points where weights are:
  * w_j = target_density[j] * exp((potential[j] - 0.5*||x-y||^2) / regularization_param)
+ *
+ * @tparam spacedim The dimension of the space the mesh is embedded in.
  */
 template <int spacedim>
 class BarycentricStrategy : public MapApproximationStrategy<spacedim> {
 public:
+    /**
+     * @brief Computes the transport map.
+     * @param distance_function The distance function.
+     * @param source_points The source points.
+     * @param source_density The source density.
+     * @param target_points The target points.
+     * @param target_density The target density.
+     * @param potential The optimal transport potential.
+     * @param regularization_param The regularization parameter.
+     * @param truncation_radius The truncation radius.
+     */
     void compute_map(
         const std::function<double(const Point<spacedim>&, const Point<spacedim>&)> distance_function,
         const std::vector<Point<spacedim>>& source_points,
@@ -199,6 +253,10 @@ public:
         const double regularization_param,
         const double truncation_radius) override;
 
+    /**
+     * @brief Saves the results to a file.
+     * @param output_dir The directory to save the results to.
+     */
     void save_results(const std::string& output_dir) const override;
 };
 

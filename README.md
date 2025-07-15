@@ -6,80 +6,64 @@
 
 ## Overview
 
-SemiDiscreteOT is a high-performance C++ library for solving regularized semi-discrete optimal transport problems. It implements efficient numerical strategies for computing optimal transport plans between continuous and discrete probability measures, with a focus on large-scale applications.
+SemiDiscreteOT is a high-performance C++ library for solving regularized semi-discrete optimal transport problems. It provides efficient numerical strategies for computing optimal transport plans between continuous and discrete probability measures, with a focus on large-scale applications.
 
-## Publication
-
-**EFFICIENT NUMERICAL STRATEGIES FOR REGULARIZED SEMI-DISCRETE OPTIMAL TRANSPORT**  
-*Moaad Khamlich, Francesco Romor, and Gianluigi Rozza*
-
-*Abstract:* Semi-discrete optimal transport (SOT), which deals with mapping a continuous probability measure to a discrete one, is a fundamental problem with wide-ranging applications. Entropic regularization is often employed to ensure smoother transport plans and enable efficient computation via convex duality. However, solving the regularized semi-discrete optimal transport (RSOT) dual problem presents a significant computational challenge, particularly when the discrete measure involves a large number of support points, as the objective function evaluation involves dense interactions. This paper presents a cohesive set of numerical strategies designed to efficiently tackle the RSOT dual problem. We focus on accelerating the evaluation of the dual objective and its gradient by combining distance-based truncation of interactions with fast spatial query structures (R-trees). We further enhance performance through an optional computational cache that exploits temporal coherence during optimization. To handle large-scale problems, we incorporate multilevel acceleration techniques based on hierarchies of both the continuous source mesh and the discrete target measure, including a discussion on potential transfer schemes between levels. Finally, we integrate a strategy for scheduling the regularization parameter. These methods, when combined, significantly reduce the computational burden associated with RSOT, making it practical for large-scale applications.
+The methods implemented in this library are detailed in the publication: **"Efficient Numerical Strategies for Regularized Semi-Discrete Optimal Transport"** by Moaad Khamlich, Francesco Romor, and Gianluigi Rozza.
 
 ## Features
 
-- Efficient computation of regularized semi-discrete optimal transport
-- Distance-based truncation of interactions
-- Fast spatial query structures using R-trees
-- Computational cache for temporal coherence
-- Multilevel acceleration techniques
-- Adaptive regularization parameter scheduling
-- Integration with Deal.II for finite element computations
-- Support for both structured and unstructured meshes
-- Python bindings for easy integration
+*   **Efficient Solvers:** Fast and scalable algorithms for regularized semi-discrete optimal transport.
+*   **Performance Optimizations:** Includes distance-based truncation based on R-tree spatial queries.
+*   **Multilevel Acceleration:** Supports multilevel techniques for both source and target measures to handle large-scale problems.
+*   **Flexible:** Integrates with Deal.II for finite element computations and supports both structured and unstructured meshes.
 
 ## Dependencies
 
-- Deal.II 9.5.0 or later
-- Geogram
-- VTK (optional, for visualization)
-- CMake 3.13.0 or later
-- C++17 compatible compiler
+*   Deal.II (9.5.0 or later)
+*   Geogram
+*   VTK 
+*   CMake (3.13.0 or later)
+*   A C++17 compatible compiler
 
-## Installation
+## Quick Start
 
-1. Clone the repository:
-```bash
-git clone https://github.com/yourusername/SemiDiscreteOT.git
-cd SemiDiscreteOT
-```
+1.  **Clone the repository:**
+    ```bash
+    git clone https://github.com/yourusername/SemiDiscreteOT.git
+    cd SemiDiscreteOT
+    ```
 
-2. Create a build directory and configure with CMake:
-```bash
-mkdir build && cd build
-cmake ..
-```
+2.  **Build the library:**
+    ```bash
+    mkdir build && cd build
+    cmake ..
+    make
+    ```
 
-3. Build the library:
-```bash
-make
-```
-
-## Usage
-
-Basic example of using SemiDiscreteOT:
-
-```cpp
-#include <SemiDiscreteOT/SemiDiscreteOT.h>
-
-// Initialize the solver
-SotSolver solver;
-
-// Set up source and target measures
-// ...
-
-// Solve the optimal transport problem
-solver.solve();
-```
-
-For more detailed examples, please refer to the `examples` directory.
+3.  **Run an example:**
+    Check out the `examples` directory for detailed use cases.
 
 ## Documentation
 
-Detailed documentation is available in the `docs` directory. You can build the documentation using:
+Detailed documentation is available in the `docs` directory. To build it, run:
 
 ```bash
 cd docs
 make html
+```
+
+## How to Cite
+
+If you use SemiDiscreteOT in your research, please cite the following publication:
+
+```bibtex
+@article{khamlich2024efficient,
+  title={Efficient Numerical Strategies for Regularized Semi-Discrete Optimal Transport},
+  author={Khamlich, Moaad and Romor, Francesco and Rozza, Gianluigi},
+  journal={arXiv preprint},
+  year={2024},
+  note={Available at: \url{https://github.com/yourusername/SemiDiscreteOT}}
+}
 ```
 
 ## Contributing

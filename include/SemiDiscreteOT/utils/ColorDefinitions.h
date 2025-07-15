@@ -1,5 +1,8 @@
 #pragma once
 
+/**
+ * @brief Defines a set of inline string constants for ANSI color codes to be used in console output.
+ */
 namespace Color {
     inline const std::string reset   = "\033[0m";
     inline const std::string bold    = "\033[1m";

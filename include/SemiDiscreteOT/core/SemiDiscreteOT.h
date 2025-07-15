@@ -63,10 +63,27 @@
 
 using namespace dealii;
 
+/**
+ * @brief Main class for the semi-discrete optimal transport solver.
+ *
+ * This class orchestrates the entire process of solving a semi-discrete
+ * optimal transport problem. It manages the source and target measures,
+ * the solver, and the various numerical strategies that can be employed.
+ *
+ * @tparam dim The dimension of the source mesh.
+ * @tparam spacedim The dimension of the space the mesh is embedded in.
+ */
 template <int dim, int spacedim = dim>
 class SemiDiscreteOT {
 public:
+    /**
+     * @brief Constructor for the SemiDiscreteOT class.
+     * @param mpi_communicator The MPI communicator.
+     */
     SemiDiscreteOT(const MPI_Comm &mpi_communicator);
+    /**
+     * @brief Runs the solver with the current configuration.
+     */
     void run();
 
     /**
@@ -78,7 +95,7 @@ public:
 
 
     /**
-     * @brief Setup source measure from standard dealii objects (simplified API for tutorials)
+     * @brief Setup source measure from standard deal.II objects (simplified API for tutorials)
      * @param tria A standard Triangulation
      * @param dh A DoFHandler on the provided triangulation
      * @param density A standard Vector containing the density values
@@ -148,76 +165,98 @@ public:
      */
     Vector<double> solve(const Vector<double>& initial_potential = Vector<double>());
 
+    /**
+     * @brief Saves the discrete source and target measures to files.
+     */
     void save_discrete_measures();
     
+    /**
+     * @brief Sets the distance function to be used by the solver.
+     * @param dist The distance function.
+     */
     void set_distance_function(
         const std::function<double(const Point<spacedim>&, const Point<spacedim>&)>& dist)
         {
             sot_solver->distance_function = dist;
         }
         
-        ConditionalOStream pcout;
+        ConditionalOStream pcout; ///< A conditional output stream for parallel printing.
 protected:
     // MPI-related members
-    MPI_Comm mpi_communicator;
-    const unsigned int n_mpi_processes;
-    const unsigned int this_mpi_process;
+    MPI_Comm mpi_communicator; ///< The MPI communicator.
+    const unsigned int n_mpi_processes; ///< The number of MPI processes.
+    const unsigned int this_mpi_process; ///< The rank of the current MPI process.
 
     // Solver member
-    std::unique_ptr<SotSolver<dim, spacedim>> sot_solver;
+    std::unique_ptr<SotSolver<dim, spacedim>> sot_solver; ///< The semi-discrete optimal transport solver.
 
     // Parameter manager and references
-    SotParameterManager param_manager;
-    SotParameterManager::MeshParameters& source_params;
-    SotParameterManager::MeshParameters& target_params;
-    SotParameterManager::SolverParameters& solver_params;
-    SotParameterManager::MultilevelParameters& multilevel_params;
-    SotParameterManager::PowerDiagramParameters& power_diagram_params;
-    SotParameterManager::TransportMapParameters& transport_map_params;
-    std::string& selected_task;
-    std::string& io_coding;
+    SotParameterManager param_manager; ///< The parameter manager.
+    SotParameterManager::MeshParameters& source_params; ///< A reference to the source mesh parameters.
+    SotParameterManager::MeshParameters& target_params; ///< A reference to the target mesh parameters.
+    SotParameterManager::SolverParameters& solver_params; ///< A reference to the solver parameters.
+    SotParameterManager::MultilevelParameters& multilevel_params; ///< A reference to the multilevel parameters.
+    SotParameterManager::PowerDiagramParameters& power_diagram_params; ///< A reference to the power diagram parameters.
+    SotParameterManager::TransportMapParameters& transport_map_params; ///< A reference to the transport map parameters.
+    std::string& selected_task; ///< A reference to the selected task.
+    std::string& io_coding; ///< A reference to the I/O coding.
 
-    std::unique_ptr<DoFHandler<dim, spacedim>> initial_fine_dof_handler;
-    std::unique_ptr<Vector<double>> initial_fine_density;
-    bool is_setup_programmatically_ = false; 
+    std::unique_ptr<DoFHandler<dim, spacedim>> initial_fine_dof_handler; ///< The initial fine DoF handler.
+    std::unique_ptr<Vector<double>> initial_fine_density; ///< The initial fine density.
+    bool is_setup_programmatically_ = false; ///< A flag to indicate if the setup is done programmatically.
 
     // Source mesh name for saving and hierarchy generation
-    std::string source_mesh_name = "source";
+    std::string source_mesh_name = "source"; ///< The name of the source mesh.
 
     // Mesh and DoF handler members
-    parallel::fullydistributed::Triangulation<dim, spacedim> source_mesh;
-    Triangulation<dim, spacedim> target_mesh;
-    DoFHandler<dim, spacedim> dof_handler_source;
-    DoFHandler<dim, spacedim> dof_handler_target;
+    parallel::fullydistributed::Triangulation<dim, spacedim> source_mesh; ///< The source mesh.
+    Triangulation<dim, spacedim> target_mesh; ///< The target mesh.
+    DoFHandler<dim, spacedim> dof_handler_source; ///< The DoF handler for the source mesh.
+    DoFHandler<dim, spacedim> dof_handler_target; ///< The DoF handler for the target mesh.
 
-    std::unique_ptr<VTKHandler<dim,spacedim>> source_vtk_handler;
-    DoFHandler<dim,spacedim> vtk_dof_handler_source;
-    Vector<double> vtk_field_source;
-    Triangulation<dim,spacedim> vtk_tria_source;
+    std::unique_ptr<VTKHandler<dim,spacedim>> source_vtk_handler; ///< The VTK handler for the source mesh.
+    DoFHandler<dim,spacedim> vtk_dof_handler_source; ///< The DoF handler for the source VTK mesh.
+    Vector<double> vtk_field_source; ///< The source field from the VTK file.
+    Triangulation<dim,spacedim> vtk_tria_source; ///< The triangulation from the source VTK file.
     // Finite element and mapping members
-    std::unique_ptr<FiniteElement<dim, spacedim>> fe_system;
-    std::unique_ptr<Mapping<dim, spacedim>> mapping;
-    std::unique_ptr<FiniteElement<dim, spacedim>> fe_system_target;
-    std::unique_ptr<Mapping<dim, spacedim>> mapping_target;
-    LinearAlgebra::distributed::Vector<double> source_density;
-    Vector<double> target_density;
-    std::vector<Point<spacedim>> target_points;
-    std::vector<Point<spacedim>> source_points;
+    std::unique_ptr<FiniteElement<dim, spacedim>> fe_system; ///< The finite element system.
+    std::unique_ptr<Mapping<dim, spacedim>> mapping; ///< The mapping.
+    std::unique_ptr<FiniteElement<dim, spacedim>> fe_system_target; ///< The target finite element system.
+    std::unique_ptr<Mapping<dim, spacedim>> mapping_target; ///< The target mapping.
+    LinearAlgebra::distributed::Vector<double> source_density; ///< The source density.
+    Vector<double> target_density; ///< The target density.
+    std::vector<Point<spacedim>> target_points; ///< The target points.
+    std::vector<Point<spacedim>> source_points; ///< The source points.
 
     // Mesh manager
-    std::unique_ptr<MeshManager<dim, spacedim>> mesh_manager;
+    std::unique_ptr<MeshManager<dim, spacedim>> mesh_manager; ///< The mesh manager.
     
     // Epsilon scaling handler
-    std::unique_ptr<EpsilonScalingHandler> epsilon_scaling_handler;
+    std::unique_ptr<EpsilonScalingHandler> epsilon_scaling_handler; ///< The epsilon scaling handler.
     
+    /**
+     * @brief Saves the results of the computation.
+     * @param potentials The computed optimal transport potentials.
+     * @param filename The name of the file to save the results to.
+     * @param add_epsilon_prefix Whether to add an epsilon prefix to the filename.
+     */
     void save_results(const Vector<double>& potentials, const std::string& filename, bool add_epsilon_prefix = true);
     
-    // Density normalization helper
+    /**
+     * @brief Normalizes the density vector.
+     * @param density The density vector to normalize.
+     */
     void normalize_density(LinearAlgebra::distributed::Vector<double>& density);
 private:
 
     // Core functionality methods
+    /**
+     * @brief Generates the source and target meshes.
+     */
     void mesh_generation();
+    /**
+     * @brief Loads the source and target meshes from files.
+     */
     void load_meshes();
     
     /**
@@ -227,8 +266,17 @@ private:
      */
     Vector<double> run_sot(const Vector<double>& initial_potential = Vector<double>());
     
+    /**
+     * @brief Computes the power diagram of the target points.
+     */
     void compute_power_diagram();
+    /**
+     * @brief Computes the transport map from the source to the target measure.
+     */
     void compute_transport_map();
+    /**
+     * @brief Computes the conditional density of the source measure.
+     */
     void compute_conditional_density();
 
 
@@ -262,36 +310,80 @@ private:
     Vector<double> run_target_multilevel(const Vector<double>& initial_potential = Vector<double>());
 
     // Setup methods
+    /**
+     * @brief Sets up the finite elements for the source mesh.
+     * @param is_multilevel Whether the setup is for a multilevel computation.
+     */
     void setup_source_finite_elements(bool is_multilevel = false);
+    /**
+     * @brief Sets up the finite elements for the target mesh.
+     */
     void setup_target_finite_elements();
+    /**
+     * @brief Sets up the finite elements for both the source and target meshes.
+     */
     void setup_finite_elements();
+    /**
+     * @brief Sets up the target points.
+     */
     void setup_target_points();
+    /**
+     * @brief Sets up the finite elements for a multilevel computation.
+     */
     void setup_multilevel_finite_elements();
 
     // Exact SOT method (3D only)
+    /**
+     * @brief Runs the exact semi-discrete optimal transport solver.
+     */
     template <int d = dim, int s = spacedim>
     typename std::enable_if<d == 3 && s == 3>::type run_exact_sot();    
 
     // Hierarchy-related members
-    std::vector<std::vector<std::vector<size_t>>> child_indices_;
-    bool has_hierarchy_data_{false};
+    std::vector<std::vector<std::vector<size_t>>> child_indices_; ///< The child indices for the multilevel hierarchy.
+    bool has_hierarchy_data_{false}; ///< A flag to indicate if the hierarchy data is loaded.
+    /**
+     * @brief Loads the hierarchy data from a directory.
+     * @param hierarchy_dir The directory containing the hierarchy data.
+     * @param specific_level The specific level to load.
+     */
     void load_hierarchy_data(const std::string& hierarchy_dir, int specific_level = -1);
 
     // Multilevel computation state
-    std::vector<Point<spacedim>> target_points_coarse;  // Coarse level target points
-    Vector<double> target_density_coarse;          // Coarse level densities
-    mutable double current_distance_threshold{0.0}; // Current distance threshold for computations
-    Vector<double> coarsest_potential;             // Coarsest level potential for multilevel solve
+    std::vector<Point<spacedim>> target_points_coarse;  ///< The coarse level target points.
+    Vector<double> target_density_coarse;          ///< The coarse level target densities.
+    mutable double current_distance_threshold{0.0}; ///< The current distance threshold for computations.
+    Vector<double> coarsest_potential;             ///< The coarsest level potential for the multilevel solve.
 
     // Potential transfer between hierarchy levels
+    /**
+     * @brief Assigns potentials by hierarchy.
+     * @param potentials The potentials to assign.
+     * @param coarse_level The coarse level.
+     * @param fine_level The fine level.
+     * @param prev_potentials The previous potentials.
+     */
     void assign_potentials_by_hierarchy(Vector<double>& potentials, 
                                    int coarse_level, 
                                    int fine_level, 
                                    const Vector<double>& prev_potentials);
 
     // Helper methods
+    /**
+     * @brief Gets the target hierarchy files.
+     * @return A vector of pairs of strings, where each pair contains the path to the points file and the density file.
+     */
     std::vector<std::pair<std::string, std::string>> get_target_hierarchy_files() const;
+    /**
+     * @brief Gets the mesh hierarchy files.
+     * @return A vector of strings, where each string is the path to a mesh file.
+     */
     std::vector<std::string> get_mesh_hierarchy_files() const;
+    /**
+     * @brief Loads the target points at a specific level.
+     * @param points_file The path to the points file.
+     * @param density_file The path to the density file.
+     */
     void load_target_points_at_level(const std::string& points_file, 
                                    const std::string& density_file);
 

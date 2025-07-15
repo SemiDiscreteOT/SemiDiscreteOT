@@ -3,16 +3,35 @@
 
 #include <deal.II/base/point.h>
 
+/**
+ * @file
+ * @brief A collection of distance functions, their gradients, and exponential maps.
+ */
+
+#include <deal.II/base/point.h>
+
 using namespace dealii;
 
 // TODO implement factory
 
+/**
+ * @brief Computes the Euclidean distance between two points.
+ * @param a The first point.
+ * @param b The second point.
+ * @return The Euclidean distance between a and b.
+ */
 template <int spacedim>
 double euclidean_distance(
     const Point<spacedim> a, const Point<spacedim> b) {
     return (a-b).norm();
 }
 
+/**
+ * @brief Computes the spherical distance between two points.
+ * @param a The first point.
+ * @param b The second point.
+ * @return The spherical distance between a and b.
+ */
 template <int spacedim>
 double spherical_distance(
     const Point<spacedim> a, const Point<spacedim> b) {
@@ -33,6 +52,12 @@ double spherical_distance(
 
 // distance gradients: grad of d^2
 
+/**
+ * @brief Computes the gradient of the squared Euclidean distance.
+ * @param a The first point.
+ * @param b The second point.
+ * @return The gradient of the squared Euclidean distance.
+ */
 template <int spacedim>
 Vector<double> euclidean_distance_gradient(
     const Point<spacedim> a, const Point<spacedim> b) {
@@ -44,6 +69,12 @@ Vector<double> euclidean_distance_gradient(
 }
 
 // it is actually the log map and grad of d^2, mind the order, x is the evaluation point
+/**
+ * @brief Computes the gradient of the squared spherical distance.
+ * @param a The first point.
+ * @param b The second point.
+ * @return The gradient of the squared spherical distance.
+ */
 template <int spacedim>
 Vector<double> spherical_distance_gradient(
     const Point<spacedim> a, const Point<spacedim> b) {
@@ -62,6 +93,12 @@ Vector<double> spherical_distance_gradient(
 }
 
 // exponential maps
+/**
+ * @brief Computes the exponential map for the Euclidean distance.
+ * @param a The point.
+ * @param v The vector.
+ * @return The exponential map.
+ */
 template <int spacedim>
 Point<spacedim> euclidean_distance_exp_map(
     const Point<spacedim> a, const Vector<double> v) {
@@ -73,6 +110,12 @@ Point<spacedim> euclidean_distance_exp_map(
 }
 
 // v must be different form 0, a perpendicular to v
+/**
+ * @brief Computes the exponential map for the spherical distance.
+ * @param a The point.
+ * @param v The vector.
+ * @return The exponential map.
+ */
 template <int spacedim>
 Point<spacedim> spherical_distance_exp_map(
     const Point<spacedim> a, const Vector<double> v) {

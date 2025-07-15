@@ -1,6 +1,9 @@
 #ifndef MESH_MANAGER_TEMPLATES_H
 #define MESH_MANAGER_TEMPLATES_H
 
+// This file contains the template implementations for the MeshManager class.
+// See MeshManager.h for the class documentation.
+
 template <int dim, int spacedim>
 MeshManager<dim, spacedim>::MeshManager(const MPI_Comm& comm)
     : mpi_communicator(comm)
