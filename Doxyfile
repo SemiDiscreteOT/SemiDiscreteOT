@@ -1,0 +1,84 @@
+# Project information
+PROJECT_NAME           = "SemiDiscreteOT"
+PROJECT_NUMBER         = "1.0"
+PROJECT_BRIEF          = "Semi-Discrete Optimal Transport Library"
+PROJECT_LOGO           = docs/images/logo_SemiDiscreteOT.png
+LOGO_HEIGHT            = 10
+
+# Input settings
+INPUT                  = include/ src/ docs/index.md docs/images/
+RECURSIVE              = YES
+FILE_PATTERNS          = *.h *.hpp *.cc *.cpp *.md *.png
+IMAGE_PATH             = docs/images
+
+# Output settings
+OUTPUT_DIRECTORY       = docs/doxygen/
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+GENERATE_XML           = YES
+XML_OUTPUT             = xml
+
+# HTML customization
+HTML_HEADER            =
+HTML_FOOTER            =
+HTML_STYLESHEET        =
+HTML_EXTRA_STYLESHEET  = docs/doxygen_custom.css
+HTML_EXTRA_FILES       = docs/images/logo_SemiDiscreteOT.png
+HTML_COLORSTYLE_HUE    = 220
+HTML_COLORSTYLE_SAT    = 100
+HTML_COLORSTYLE_GAMMA  = 80
+HTML_TIMESTAMP         = YES
+HTML_DYNAMIC_MENUS     = YES
+HTML_DYNAMIC_SECTIONS  = NO
+HTML_INDEX_NUM_ENTRIES = 100
+
+# Source browsing
+SOURCE_BROWSER         = YES
+INLINE_SOURCES         = NO
+
+# Graphs and diagrams
+HAVE_DOT               = YES
+CALL_GRAPH             = YES
+CALLER_GRAPH           = YES
+CLASS_GRAPH            = YES
+COLLABORATION_GRAPH    = YES
+
+# Extract everything
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = YES
+EXTRACT_STATIC         = YES
+
+# Use markdown
+USE_MDFILE_AS_MAINPAGE = docs/index.md
+
+# Add to your Doxyfile
+PREDEFINED             =
+MACRO_EXPANSION        = YES
+EXPAND_ONLY_PREDEF     = NO
+SEARCH_INCLUDES        = YES
+INCLUDE_PATH           =
+INCLUDE_FILE_PATTERNS  =
+ENABLE_PREPROCESSING   = YES
+SKIP_FUNCTION_MACROS   = YES
+
+# Better C++ parsing
+CPP_CLI_SUPPORT        = NO
+SIP_SUPPORT            = NO
+IDL_PROPERTY_SUPPORT   = YES
+DISTRIBUTE_GROUP_DOC   = NO
+SUBGROUPING            = YES
+INLINE_GROUPED_CLASSES = NO
+INLINE_SIMPLE_STRUCTS  = NO
+TYPEDEF_HIDES_STRUCT   = NO
+
+# Handle templates better
+TEMPLATE_RELATIONS     = YES
+HIDE_SCOPE_NAMES       = NO
+SHOW_INCLUDE_FILES     = YES
+FORCE_LOCAL_INCLUDES   = NO
+INLINE_INFO            = YES
+SORT_MEMBER_DOCS       = NO
+SORT_BRIEF_DOCS        = NO
+SORT_MEMBERS_CTORS_1ST = NO
+SORT_GROUP_NAMES       = NO
+SORT_BY_SCOPE_NAME     = NO

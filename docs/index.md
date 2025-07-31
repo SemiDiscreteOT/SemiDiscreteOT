@@ -1,7 +1,7 @@
-# SemiDiscreteOT
+#         Efficient Numerical Strategies for Entropy-Regularized Semidiscrete Optimal Transport
 
 <div align="center">
-  <img src="docs/images/logo_SemiDiscreteOT.png" alt="SemiDiscreteOT Logo" width="400"/>
+  <img src="logo_SemiDiscreteOT.png" alt="SemiDiscreteOT Logo" width="400"/>
 </div>
 
 <div align="center">
