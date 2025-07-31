@@ -4,11 +4,21 @@
   <img src="docs/images/logo_SemiDiscreteOT.png" alt="SemiDiscreteOT Logo" width="400"/>
 </div>
 
+<div align="center">
+
+[![License: LGPL v3](https://img.shields.io/badge/License-LGPL_v3-blue.svg)](https://www.gnu.org/licenses/lgpl-3.0)
+[![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
+[![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/SemiDiscreteOT/SemiDiscreteOT)
+[![arXiv](https://img.shields.io/badge/arXiv-TEMP--LINK-red.svg)](https://arxiv.org/abs/TEMP-LINK)
+[![DOI](https://img.shields.io/badge/DOI-pending-orange.svg)](https://github.com/SemiDiscreteOT/SemiDiscreteOT)
+
+</div>
+
 ## Overview
 
 SemiDiscreteOT is a high-performance C++ library for solving regularized semi-discrete optimal transport problems. It provides efficient numerical strategies for computing optimal transport plans between continuous and discrete probability measures, with a focus on large-scale applications.
 
-The methods implemented in this library are detailed in the publication: **"Efficient Numerical Strategies for Regularized Semi-Discrete Optimal Transport"** by Moaad Khamlich, Francesco Romor, and Gianluigi Rozza.
+The methods implemented in this library are detailed in the publication: [**"Efficient Numerical Strategies for Entropy-Regularized Semi-Discrete Optimal Transport"**](https://arxiv.org/abs/TEMP-LINK) by Moaad Khamlich, Francesco Romor, and Gianluigi Rozza (2025).
 
 ## Features
 
@@ -29,7 +39,7 @@ The methods implemented in this library are detailed in the publication: **"Effi
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/yourusername/SemiDiscreteOT.git
+    git clone https://github.com/SemiDiscreteOT/SemiDiscreteOT.git
     cd SemiDiscreteOT
     ```
 
@@ -41,7 +51,7 @@ The methods implemented in this library are detailed in the publication: **"Effi
     ```
 
 3.  **Run an example:**
-    Check out the `examples` directory for detailed use cases.
+    Check out the [`examples`](https://github.com/SemiDiscreteOT/SemiDiscreteOT/tree/master/examples) directory for detailed use cases.
 
 ## Documentation
 
@@ -58,11 +68,11 @@ If you use SemiDiscreteOT in your research, please cite the following publicatio
 
 ```bibtex
 @article{khamlich2024efficient,
-  title={Efficient Numerical Strategies for Regularized Semi-Discrete Optimal Transport},
+  title={Efficient Numerical Strategies for Entropy-Regularized Semi-Discrete Optimal Transport},
   author={Khamlich, Moaad and Romor, Francesco and Rozza, Gianluigi},
   journal={arXiv preprint},
-  year={2024},
-  note={Available at: \url{https://github.com/yourusername/SemiDiscreteOT}}
+  year={2025},
+  note={Available at: \url{https://github.com/SemiDiscreteOT/SemiDiscreteOT}}
 }
 ```
 
@@ -72,9 +82,9 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the GNU Lesser General Public License v3.0 (LGPL-3.0) - see the [LICENSE](LICENSE) file for details. For more information about LGPL-3.0, visit the [GNU website](https://www.gnu.org/licenses/lgpl-3.0.html).
 
 ## Authors
 
-- Moaad Khamlich (PhD student at SISSA)
-- Francesco Romor (Postdoc at Weierstrass Institute, Berlin)
+- [Moaad Khamlich](https://scholar.google.com/citations?user=0ONdrqkAAAAJ&hl=it) (PhD student at [SISSA](https://www.sissa.it/))
+- [Francesco Romor](https://scholar.google.com/citations?user=gcTE3TgAAAAJ&hl=en) (Postdoc at [Weierstrass Institute](https://www.wias-berlin.de/), Berlin)

@@ -163,7 +163,7 @@ INSTALL(FILES
 )
 
 # Add examples subdirectory if building examples
-OPTION(BUILD_EXAMPLES "Build the examples" OFF)
+OPTION(BUILD_EXAMPLES "Build the examples" ON)
 IF(BUILD_EXAMPLES)
     ADD_SUBDIRECTORY(examples)
 ENDIF()
