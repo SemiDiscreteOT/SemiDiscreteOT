@@ -1,6 +1,6 @@
 subsection SotParameterManager
 
-  set selected_task =  save_discrete_measures    # Options: mesh_generation, load_meshes, sot, exact_sot, power_diagram, map, prepare_source_multilevel, prepare_target_multilevel, multilevel_sot, save_multilevel_source_interpolation
+  set selected_task =  mesh_generation    # Options: mesh_generation, load_meshes, sot, exact_sot, power_diagram, map, prepare_source_multilevel, prepare_target_multilevel, multilevel_sot, save_multilevel_source_interpolation
   set io_coding = txt
 
   subsection mesh_generation
