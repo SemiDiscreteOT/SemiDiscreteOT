@@ -20,6 +20,7 @@ namespace Applications
   {
     add_parameter("number of refinements", n_refinements);
     add_parameter("number of eigenfunctions", n_evecs);
+    add_parameter("n samples", n_samples);
 
     // Create output directory structure
     if (!std::filesystem::exists("output"))
@@ -397,7 +398,7 @@ namespace Applications
 
     // manually set up the target density
     this->target_points.clear();
-    for (unsigned int i = 0; i < n_evecs-1; ++i)
+    for (unsigned int i = 0; i < n_samples; ++i)
     {
       Point<3> point;
 
@@ -417,6 +418,10 @@ namespace Applications
       {
         point[1] *= -1;
         point[2] *= -1;
+      } else
+      {
+        point[1] = static_cast<double>(rand()) / RAND_MAX;
+        point[2] = static_cast<double>(rand()) / RAND_MAX;
       }
 
       double norm = point.norm();

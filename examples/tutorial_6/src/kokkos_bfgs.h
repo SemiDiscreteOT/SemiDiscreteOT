@@ -13,8 +13,10 @@
  
 #include <Kokkos_Core.hpp>
 
+using memory_space = Kokkos::CudaSpace; // CudaUVMSpace
+
 double l2norm(
-  const Kokkos::View<double*> g)
+  const Kokkos::View<double*, memory_space> g)
 {
   double g_l2_norm = 0.0;
   Kokkos::parallel_reduce(
@@ -27,7 +29,7 @@ double l2norm(
 }
 
 double l1norm(
-  const Kokkos::View<double*> g)
+  const Kokkos::View<double*, memory_space> g)
 {
   double g_l1_norm = 0.0;
   Kokkos::parallel_reduce(
@@ -40,8 +42,8 @@ double l1norm(
 }
 
 void init(
-  Kokkos::View<double*> src,
-  const Kokkos::View<double*> trg)
+  Kokkos::View<double*, memory_space> src,
+  const Kokkos::View<double*, memory_space> trg)
 {
   Kokkos::parallel_for(
     "initialize", trg.extent(0), KOKKOS_LAMBDA(const int i) {
@@ -50,8 +52,8 @@ void init(
 }
 
 double dot(
-  const Kokkos::View<double*> a,
-  const Kokkos::View<double*> b)
+  const Kokkos::View<double*, memory_space> a,
+  const Kokkos::View<double*, memory_space> b)
 {
   double result = 0.0;
   Kokkos::parallel_reduce(
@@ -64,9 +66,9 @@ double dot(
 }
 
 void add(
-  Kokkos::View<double*> src,
+  Kokkos::View<double*, memory_space> src,
   const double               &c,
-  const Kokkos::View<double*> trg)
+  const Kokkos::View<double*, memory_space> trg)
 {
   Kokkos::parallel_for(
     "add", trg.extent(0), KOKKOS_LAMBDA(const int i) {
@@ -75,8 +77,8 @@ void add(
 }
 
 void sadd(
-  Kokkos::View<double*> src,
-  const Kokkos::View<double*> trg,
+  Kokkos::View<double*, memory_space> src,
+  const Kokkos::View<double*, memory_space> trg,
   const double               &c1 = 1.,
   const double               &c2 = 1.)
 {
@@ -87,7 +89,7 @@ void sadd(
 }
 
 void negate(
-  Kokkos::View<double*> src)
+  Kokkos::View<double*, memory_space> src)
 {
   Kokkos::parallel_for(
     "negate", src.extent(0), KOKKOS_LAMBDA(const int i) {
@@ -134,18 +136,18 @@ public:
   void
   solve(
     const std::function<double(
-      const Kokkos::View<double*> x, Kokkos::View<double*> g)> &compute,
-    Kokkos::View<double*> x);
+      const Kokkos::View<double*, memory_space> x, Kokkos::View<double*, memory_space> g)> &compute,
+    Kokkos::View<double*, memory_space> x);
   
   double line_search(
     const std::function<double(
-      const Kokkos::View<double*> x, Kokkos::View<double*> g)> &compute,
+      const Kokkos::View<double*, memory_space> x, Kokkos::View<double*, memory_space> g)> &compute,
     bool   &first_step,
     double &f,
     double &f_prev,
-    Kokkos::View<double*> x,
-    Kokkos::View<double*> g,
-    Kokkos::View<double*> p);
+    Kokkos::View<double*, memory_space> x,
+    Kokkos::View<double*, memory_space> g,
+    Kokkos::View<double*, memory_space> p);
  
  
 protected:
@@ -177,15 +179,15 @@ SolverKokkosBFGS::SolverKokkosBFGS(
  
 double SolverKokkosBFGS::line_search(
   const std::function<double(
-    const Kokkos::View<double*> x, Kokkos::View<double*> g)> &compute,
+    const Kokkos::View<double*, memory_space> x, Kokkos::View<double*, memory_space> g)> &compute,
   bool   &first_step,
   double &f,
   double &f_prev,
-  Kokkos::View<double*> x,
-  Kokkos::View<double*> g,
-  Kokkos::View<double*> p) {
+  Kokkos::View<double*, memory_space> x,
+  Kokkos::View<double*, memory_space> g,
+  Kokkos::View<double*, memory_space> p) {
 
-  Kokkos::View<double*> x0("x0", x.extent(0));
+  Kokkos::View<double*, memory_space> x0("x0", x.extent(0));
   init(x0, x);
 
   const double f0 = f;
@@ -214,7 +216,7 @@ double SolverKokkosBFGS::line_search(
   f_prev = f0;
 
   // 1d line-search function
-  Kokkos::View<double*> x1("x1", x.extent(0));
+  Kokkos::View<double*, memory_space> x1("x1", x.extent(0));
   const auto line_func =
     [x, x0, g, p, &f, &compute](const double &x_line) -> std::pair<double, double> {
     init(x, x0);
@@ -233,6 +235,8 @@ double SolverKokkosBFGS::line_search(
     a1,
     0.9,
     0.001);
+    // std::numeric_limits<double>::max(),
+    // 100); // n_iterations
 
   if (first_step)
     first_step = false;
@@ -260,9 +264,9 @@ SolverKokkosBFGS::BFGSControl::Status SolverKokkosBFGS::BFGSControl::check(const
 void
 SolverKokkosBFGS::solve(
   const std::function<double(
-    const Kokkos::View<double*> x,
-    Kokkos::View<double*> f)> &compute,
-  Kokkos::View<double*> x)
+    const Kokkos::View<double*, memory_space> x,
+    Kokkos::View<double*, memory_space> f)> &compute,
+  Kokkos::View<double*, memory_space> x)
 {
   // Also see scipy Fortran implementation
   // https://github.com/scipy/scipy/blob/master/scipy/optimize/lbfgsb_src/lbfgsb.f
@@ -279,17 +283,17 @@ SolverKokkosBFGS::solve(
   // gradient tolerance, default 1e-5
   // SolverBase and/or BFGSControl need extension
  
-  Kokkos::View<double*> g("g", x.extent(0));
-  Kokkos::View<double*> p("p", x.extent(0));
-  Kokkos::View<double*> y_k("y_k", x.extent(0));
-  Kokkos::View<double*> s_k("s_k", x.extent(0));
+  Kokkos::View<double*, memory_space> g("g", x.extent(0));
+  Kokkos::View<double*, memory_space> p("p", x.extent(0));
+  Kokkos::View<double*, memory_space> y_k("y_k", x.extent(0));
+  Kokkos::View<double*, memory_space> s_k("s_k", x.extent(0));
  
   std::vector<double> c1;
   c1.reserve(additional_data.max_history_size);
  
   // limited history
-  std::deque<Kokkos::View<double*>> y;
-  std::deque<Kokkos::View<double*>> s;
+  std::deque<Kokkos::View<double*, memory_space>> y;
+  std::deque<Kokkos::View<double*, memory_space>> s;
   std::deque<double>     rho;
  
   unsigned int m = 0;
@@ -355,8 +359,8 @@ SolverKokkosBFGS::solve(
 
     if (curvature > 0. && additional_data.max_history_size > 0)
     {
-      Kokkos::View<double*> s_k_copy("s_k_copy", s_k.extent(0));
-      Kokkos::View<double*> y_k_copy("y_k_copy", y_k.extent(0));
+      Kokkos::View<double*, memory_space> s_k_copy("s_k_copy", s_k.extent(0));
+      Kokkos::View<double*, memory_space> y_k_copy("y_k_copy", y_k.extent(0));
 
       init(s_k_copy, s_k);
       init(y_k_copy, y_k);
@@ -388,10 +392,11 @@ SolverKokkosBFGS::solve(
     g_l2_norm = l2norm(g);
     g_l1_norm = l1norm(g);
     double elapsed = timer.seconds();
+    Kokkos::fence();
     std::cout << "Iteration " << k << " in " << elapsed*1e6 << " mus, "
-              << " Functional value: " << f
-              << ", L2-norm grad: " << g_l2_norm
-              << ", L1-norm grad: " << g_l1_norm << std::endl;
+          << " Functional value: " << f
+          << ", L2-norm grad: " << g_l2_norm
+          << ", L1-norm grad: " << g_l1_norm << std::endl;
   }
 }
    

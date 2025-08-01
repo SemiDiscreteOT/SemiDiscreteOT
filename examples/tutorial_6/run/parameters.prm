@@ -9,7 +9,7 @@ subsection Tutorial 3
   subsection SotParameterManager
     set selected_task = sot
     set io_coding = txt
-
+    
     subsection mesh_generation
       subsection source
         set number of refinements = 6
@@ -36,7 +36,7 @@ subsection Tutorial 3
       set solver_control_type = l1norm
       set verbose_output = true
       set solver_type = BFGS
-      set quadrature_order = 1
+      set quadrature_order = 3
       set number_of_threads = 0
       set use_log_sum_exp_trick = true
       set use_epsilon_scaling = false
@@ -45,4 +45,3 @@ subsection Tutorial 3
     end
   end
 end
-

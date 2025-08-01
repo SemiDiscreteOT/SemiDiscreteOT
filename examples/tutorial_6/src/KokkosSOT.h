@@ -95,6 +95,8 @@ namespace LA
 namespace Applications
 {
   using namespace dealii;
+  using memory_space = Kokkos::CudaSpace; // CudaUVMSpace
+
 
   class KokkosSOT : public ParameterAcceptor, public SemiDiscreteOT<3>
   {
@@ -107,22 +109,22 @@ namespace Applications
     void run();
     void kokkos_semidiscrete_ot(Vector<double> &potential);
     double evaluate_functional_sot(
-      const Kokkos::View<double*> phi,
-      Kokkos::View<double*> grad,
-      const Kokkos::DualView<double*[3]> y,
-      const Kokkos::DualView<double*> nu,
-      const Kokkos::DualView<double*[3]> x,
-      const Kokkos::DualView<double*> mu);
+      const Kokkos::View<double*, memory_space> phi,
+      Kokkos::View<double*, memory_space> grad,
+      const Kokkos::DualView<double*[3], memory_space> y,
+      const Kokkos::DualView<double*, memory_space> nu,
+      const Kokkos::DualView<double*[3], memory_space> x,
+      const Kokkos::DualView<double*, memory_space> mu);
 
     void kokkos_regularized_semidiscrete_ot(Vector<double> &potential);
     double evaluate_functional_rsot(
       double epsilon,
-      const Kokkos::View<double*> phi,
-      Kokkos::View<double*> grad,
-      const Kokkos::DualView<double*[3]> y,
-      const Kokkos::DualView<double*> nu,
-      const Kokkos::DualView<double*[3]> x,
-      const Kokkos::DualView<double*> mu);
+      const Kokkos::View<double*, memory_space> phi,
+      Kokkos::View<double*, memory_space> grad,
+      const Kokkos::DualView<double*[3], memory_space> y,
+      const Kokkos::DualView<double*, memory_space> nu,
+      const Kokkos::DualView<double*[3], memory_space> x,
+      const Kokkos::DualView<double*, memory_space> mu);
   private:
     void setup_system();
     void assemble_system();
@@ -135,10 +137,10 @@ namespace Applications
       LinearAlgebra::distributed::Vector<double, MemorySpace::Host> &target_indices,
       std::vector<unsigned int> &potential_indices) const;
     void kokkos_init(
-      Kokkos::DualView<double*[3]>y,
-      Kokkos::DualView<double*>nu,
-      Kokkos::DualView<double*[3]>x,
-      Kokkos::DualView<double*>mu);
+      Kokkos::DualView<double*[3], memory_space>y,
+      Kokkos::DualView<double*, memory_space>nu,
+      Kokkos::DualView<double*[3], memory_space>x,
+      Kokkos::DualView<double*, memory_space>mu);
 
     MPI_Comm mpi_communicator;
     ConditionalOStream pcout;

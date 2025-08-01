@@ -140,6 +140,7 @@ namespace Applications
 
     unsigned int n_refinements;
     unsigned int n_evecs        = 5;
+    unsigned int n_samples      = 5;
   };
 
   struct ScratchData
