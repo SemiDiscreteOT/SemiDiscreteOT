@@ -17,6 +17,9 @@
 #include <deal.II/fe/mapping_q.h>
 #include <deal.II/lac/vector.h>
 #include <deal.II/numerics/vector_tools.h>
+#include <boost/geometry.hpp>
+#include <boost/geometry/geometries/point.hpp>
+#include <boost/geometry/index/rtree.hpp>
 #include <fstream>
 #include <cmath>
 #include <algorithm>
@@ -25,6 +28,70 @@
 #include <iomanip>
 
 using namespace dealii;
+
+// Boost geometry types for rtree
+namespace bg = boost::geometry;
+namespace bgi = boost::geometry::index;
+using BoostPoint = bg::model::point<double, 3, bg::cs::cartesian>;
+using IndexedPoint = std::pair<BoostPoint, std::size_t>;
+
+// Global variables for rtree and distance threshold
+bgi::rtree<IndexedPoint, bgi::rstar<16>> target_rtree;
+double current_distance_threshold = 1.5;
+
+
+// Function to find nearest target points using rtree
+template<int spacedim>
+std::vector<std::size_t> find_nearest_target_points(
+    const Point<spacedim>& query_point,
+    const bgi::rtree<IndexedPoint, bgi::rstar<16>>& rtree,
+    double distance_threshold)
+{
+    std::vector<std::size_t> indices;
+    
+    // Convert dealii Point to BoostPoint
+    BoostPoint boost_query;
+    if constexpr (spacedim >= 1) bg::set<0>(boost_query, query_point[0]);
+    if constexpr (spacedim >= 2) bg::set<1>(boost_query, query_point[1]);
+    if constexpr (spacedim >= 3) bg::set<2>(boost_query, query_point[2]);
+    if constexpr (spacedim < 3) bg::set<2>(boost_query, 0.0);
+    
+    // Find points within distance threshold
+    for (const auto& indexed_point : rtree |
+        bgi::adaptors::queried(bgi::satisfies([&](const IndexedPoint& p) {
+            Point<spacedim> dealii_point;
+            if constexpr (spacedim >= 1) dealii_point[0] = bg::get<0>(p.first);
+            if constexpr (spacedim >= 2) dealii_point[1] = bg::get<1>(p.first);
+            if constexpr (spacedim >= 3) dealii_point[2] = bg::get<2>(p.first);
+            return euclidean_distance<spacedim>(dealii_point, query_point) <= distance_threshold;
+        })))
+    {
+        indices.push_back(indexed_point.second);
+    }
+
+    return indices;
+}
+
+// Function to initialize rtree with target points
+template<int spacedim>
+void initialize_target_rtree(const std::vector<Point<spacedim>>& target_points,
+                            bgi::rtree<IndexedPoint, bgi::rstar<16>>& rtree)
+{
+    rtree.clear();
+    std::vector<IndexedPoint> indexed_points;
+    indexed_points.reserve(target_points.size());
+    
+    for (std::size_t i = 0; i < target_points.size(); ++i) {
+        BoostPoint boost_point;
+        if constexpr (spacedim >= 1) bg::set<0>(boost_point, target_points[i][0]);
+        if constexpr (spacedim >= 2) bg::set<1>(boost_point, target_points[i][1]);
+        if constexpr (spacedim >= 3) bg::set<2>(boost_point, target_points[i][2]);
+        if constexpr (spacedim < 3) bg::set<2>(boost_point, 0.0);
+        indexed_points.emplace_back(boost_point, i);
+    }
+    
+    rtree = bgi::rtree<IndexedPoint, bgi::rstar<16>>(indexed_points);
+}
 
 // Parameter classes using ParameterAcceptor
 class BarycenterParameters : public ParameterAcceptor
@@ -225,22 +292,14 @@ void local_assemble_barycenter_gradient(
     const double distance_threshold)
 {
     const unsigned int n_q_points = scratch.fe_values.n_quadrature_points;
-    const unsigned int n_target_points = target_points.size();
 
     scratch.fe_values.reinit(cell);
     scratch.fe_values.get_function_values(source_density, scratch.density_values);
 
     copy.grad_support_points = 0.0;
 
-    std::vector<unsigned int> nearby_targets;
-    const auto &cell_center = cell->center();
-    for (unsigned int j = 0; j < n_target_points; ++j)
-    {
-        if (cell_center.distance(target_points[j]) <= distance_threshold)
-        {
-            nearby_targets.push_back(j);
-        }
-    }
+    std::vector<std::size_t> nearby_targets = find_nearest_target_points<spacedim>(
+        cell->center(), target_rtree, distance_threshold);
 
     if (nearby_targets.empty())
         return;
@@ -258,17 +317,17 @@ void local_assemble_barycenter_gradient(
         double sum_weights = 0.0;
         double max_exponent = -std::numeric_limits<double>::infinity();
 
-        for (unsigned int idx = 0; idx < nearby_targets.size(); ++idx)
+        for (std::size_t idx = 0; idx < nearby_targets.size(); ++idx)
         {
-            const unsigned int j = nearby_targets[idx];
+            const std::size_t j = nearby_targets[idx];
             const double dist_sq = x.distance_square(target_points[j]);
             const double exponent = (potentials[j] - 0.5 * dist_sq) / epsilon;
             max_exponent = std::max(max_exponent, exponent);
         }
 
-        for (unsigned int idx = 0; idx < nearby_targets.size(); ++idx)
+        for (std::size_t idx = 0; idx < nearby_targets.size(); ++idx)
         {
-            const unsigned int j = nearby_targets[idx];
+            const std::size_t j = nearby_targets[idx];
             const double dist_sq = x.distance_square(target_points[j]);
             const double exponent = (potentials[j] - 0.5 * dist_sq) / epsilon;
             weights[idx] = target_weights(j) * std::exp(exponent - max_exponent);
@@ -278,9 +337,9 @@ void local_assemble_barycenter_gradient(
         if (sum_weights < 1e-12)
             continue;
 
-        for (unsigned int idx = 0; idx < nearby_targets.size(); ++idx)
+        for (std::size_t idx = 0; idx < nearby_targets.size(); ++idx)
         {
-            const unsigned int j = nearby_targets[idx];
+            const std::size_t j = nearby_targets[idx];
             const double weight = weights[idx] / sum_weights;
             const double scaled_weight = weight * rho_x * JxW;
 
@@ -653,6 +712,10 @@ int main(int argc, char *argv[])
     }
     for (auto &p : barycenter_points) p = Utilities::MPI::broadcast(mpi_comm, p, 0);
     pcout << "Initialized barycenter with " << barycenter_points.size() << " points." << std::endl;
+    
+    // Initialize rtree with barycenter points
+    initialize_target_rtree<spacedim>(barycenter_points, target_rtree);
+    current_distance_threshold = ot_params.distance_threshold;
 
     // Initialize step controller
     AdaptiveStepController step_controller(step_params);
@@ -728,6 +791,9 @@ int main(int argc, char *argv[])
                 barycenter_points[i][d] -= alpha * total_grad_points[i * spacedim + d];
             }
         }
+        
+        // Update rtree with new barycenter points
+        initialize_target_rtree<spacedim>(barycenter_points, target_rtree);
 
         // Check convergence
         double point_change = 0.0;
