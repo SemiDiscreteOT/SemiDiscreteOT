@@ -294,7 +294,7 @@ end
 
 ## Distance Threshold Types
 
-The library supports three different methods for computing distance thresholds, controlled by the `distance_threshold_type` parameter. For theoretical details, see Section 4.1 of our paper: [Efficient Numerical Strategies for Entropy-Regularized Semi-Discrete Optimal Transport](https://arxiv.org/abs/TEMP-LINK) (ArXiv link coming soon).
+The library supports three different methods for computing distance thresholds, controlled by the `distance_threshold_type` parameter. For theoretical details, see Section 4.1 of our paper: [Efficient Numerical Strategies for Entropy-Regularized Semi-Discrete Optimal Transport](https://arxiv.org/abs/2507.23602).
 
 ### Available Types:
 
