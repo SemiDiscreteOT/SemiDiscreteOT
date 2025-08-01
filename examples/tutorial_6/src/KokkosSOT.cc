@@ -1,6 +1,4 @@
 #include "KokkosSOT.h"
-// #include <Kokkos_Core.hpp>
-// #include <iostream>
 
 namespace Applications
 {
@@ -442,12 +440,11 @@ namespace Applications
   }
 
   void KokkosSOT::kokkos_init(
-    Kokkos::DualView<double*[3]>y,
-    Kokkos::DualView<double*>nu,
-    Kokkos::DualView<double*[3]>x,
-    Kokkos::DualView<double*>mu)
+    Kokkos::DualView<double*[3], memory_space>y,
+    Kokkos::DualView<double*, memory_space>nu,
+    Kokkos::DualView<double*[3], memory_space>x,
+    Kokkos::DualView<double*, memory_space>mu)
   {
-    print_used_cuda_memory();
     auto quadrature = Utils::create_quadrature_for_mesh<3>(tria_1, solver_params.quadrature_order);
     FEValues<3> fe_values(mapping, fe, *quadrature,
                            update_values | update_JxW_values | update_quadrature_points);
@@ -463,6 +460,8 @@ namespace Applications
     y.sync_device();
     nu.modify_host();
     nu.sync_device();
+    std::cout << "Device pointer: " << y.d_view.data() << std::endl;
+    std::cout << "Host pointer:   " << y.h_view.data() << std::endl;
 
     unsigned int source_index = 0;
     for (const auto &cell : dof_handler_1.active_cell_iterators())
@@ -487,25 +486,24 @@ namespace Applications
     x.sync_device();
     mu.modify_host();
     mu.sync_device();
-    print_used_cuda_memory();
     pcout << "End Kokkos view\n";
   }
 
   double KokkosSOT::evaluate_functional_sot(
-    const Kokkos::View<double*> phi,
-    Kokkos::View<double*> grad,
-    const Kokkos::DualView<double*[3]> y,
-    const Kokkos::DualView<double*> nu,
-    const Kokkos::DualView<double*[3]> x,
-    const Kokkos::DualView<double*> mu)
+    const Kokkos::View<double*, memory_space> phi,
+    Kokkos::View<double*, memory_space> grad,
+    const Kokkos::DualView<double*[3], memory_space> y,
+    const Kokkos::DualView<double*, memory_space> nu,
+    const Kokkos::DualView<double*[3], memory_space> x,
+    const Kokkos::DualView<double*, memory_space> mu)
   {
-    Kokkos::View<int*> argmax("argmax", x.extent(0));
-    Kokkos::View<double*> max("max", x.extent(0));
+    Kokkos::View<int*, memory_space> argmax("argmax", x.extent(0));
+    Kokkos::View<double*, memory_space> maxs("maxs", x.extent(0));
 
     Kokkos::parallel_for("ComputeArgmax", x.extent(0), KOKKOS_LAMBDA(int i) {
       double max_kernel = -1e20;
       int max_j = -1;
-      for (long unsigned int j = 0; j < y.extent(0); ++j) {
+      for (int j = 0; j < y.extent(0); ++j) {
         double dist = 0.0;
         for (int d = 0; d < 3; ++d) {
           double tmp = x.d_view(i, d) - y.d_view(j, d); // euclidean distance
@@ -518,7 +516,7 @@ namespace Applications
         }
       }
       argmax(i) = max_j;
-      max(i) = max_kernel;
+      maxs(i) = max_kernel;
     });
 
     // TODO: implement with ScatterView ?
@@ -533,7 +531,7 @@ namespace Applications
     
     double functional_value = 0.0;
     Kokkos::parallel_reduce("ComputeFunctionalValue", x.extent(0), KOKKOS_LAMBDA(int i, double &f_sum) {
-      f_sum += max(i) * mu.d_view(i);
+      f_sum += maxs(i) * mu.d_view(i);
     }, functional_value);
 
     double dot_phi_nu = 0.0;
@@ -541,20 +539,28 @@ namespace Applications
       dot_sum += phi(j) * nu.d_view(j);
     }, dot_phi_nu);
 
+    pcout << "Functional value: " << functional_value << " " << dot_phi_nu << std::endl;
+    double grad_l2_norm = 0.0;
+    Kokkos::parallel_reduce("GradL2Norm", grad.extent(0), KOKKOS_LAMBDA(int i, double &sum) {
+      sum += grad(i) * grad(i);
+    }, grad_l2_norm);
+    grad_l2_norm = std::sqrt(grad_l2_norm);
+    pcout << "Grad L2 norm: " << grad_l2_norm << std::endl;
+
     return functional_value - dot_phi_nu;
   }
 
   void KokkosSOT::kokkos_semidiscrete_ot(Vector<double> &potential)
   {
     const int n_target = this->target_points.size();
-    Kokkos::View<double*> phi("phi", n_target);
-    Kokkos::DualView<double*[3]> y("y", n_target, 3);
-    Kokkos::DualView<double*> nu("nu", n_target);
+    Kokkos::View<double*, memory_space> phi("phi", n_target);
+    Kokkos::DualView<double*[3], memory_space> y("y", n_target, 3);
+    Kokkos::DualView<double*, memory_space> nu("nu", n_target);
 
     auto quadrature = Utils::create_quadrature_for_mesh<3>(tria_1, solver_params.quadrature_order);
     const int n_source = tria_1.n_active_cells() * quadrature->size();
-    Kokkos::DualView<double*[3]> x("x", n_source, 3);
-    Kokkos::DualView<double*> mu("mu", n_source);
+    Kokkos::DualView<double*[3], memory_space> x("x", n_source, 3);
+    Kokkos::DualView<double*, memory_space> mu("mu", n_source);
 
     auto phi_host = Kokkos::create_mirror_view(phi);
     for (int i = 0; i < n_target; ++i)
@@ -569,17 +575,47 @@ namespace Applications
     SotParameterManager::SolverParameters& solver_config = this->solver_params;
     SolverKokkosBFGS::BFGSControl control(solver_config.max_iterations, solver_config.tolerance);
     SolverKokkosBFGS::AdditionalData additional_data;
-    pcout << "Using BFGS solver with max iterations: "
-          << control.max_iter << ", tolerance: " << control.tolerance << std::endl;
+    pcout << "x: " << x.extent(0) << ", y: " << y.extent(0) << std::endl;
+    
+    // pcout << "Using BFGS solver with max iterations: "
+    //       << control.max_iter << ", tolerance: " << control.tolerance << std::endl;
 
-    SolverKokkosBFGS solver(control, additional_data);
-    solver.solve(
-      [this, y, nu, x, mu](const Kokkos::View<double*> phi_, Kokkos::View<double*> grad_) {
-        return this->evaluate_functional_sot(
-          phi_, grad_, y, nu, x, mu);
-      },
-      phi
-    );
+    // SolverKokkosBFGS solver(control, additional_data);
+    // solver.solve(
+    //   [this, y, nu, x, mu](const Kokkos::View<double*, memory_space> phi_, Kokkos::View<double*, memory_space> grad_) {
+    //     return this->evaluate_functional_sot(
+    //       phi_, grad_, y, nu, x, mu);
+    //   },
+    //   phi
+    // );
+
+
+    // Simple gradient descent loop
+    const int max_iters = 100;
+    const double tol = 1e-6;
+    const double step_size = 1e-3;
+    Kokkos::View<double*, memory_space> grad("grad", n_target);
+
+    for (int iter = 0; iter < max_iters; ++iter) {
+      double fval = this->evaluate_functional_sot(phi, grad, y, nu, x, mu);
+
+      // Compute grad L2 norm
+      double grad_l2_norm = 0.0;
+      Kokkos::parallel_reduce("GradL2Norm", grad.extent(0), KOKKOS_LAMBDA(int i, double &sum) {
+      sum += grad(i) * grad(i);
+      }, grad_l2_norm);
+      grad_l2_norm = std::sqrt(grad_l2_norm);
+
+      pcout << "GD iter " << iter << ", fval: " << fval << ", grad norm: " << grad_l2_norm << std::endl;
+
+      if (grad_l2_norm < tol)
+      break;
+
+      // Gradient descent update
+      Kokkos::parallel_for("GDUpdate", grad.extent(0), KOKKOS_LAMBDA(int i) {
+      phi(i) -= step_size * grad(i);
+      });
+    }
 
     Kokkos::deep_copy(phi_host, phi);
     for (int i = 0; i < n_target; ++i)
@@ -589,15 +625,15 @@ namespace Applications
   // TODO: use kokkos nested parallel_for ?
   double KokkosSOT::evaluate_functional_rsot(
     double epsilon,
-    const Kokkos::View<double*> phi,
-    Kokkos::View<double*> grad,
-    const Kokkos::DualView<double*[3]> y,
-    const Kokkos::DualView<double*> nu,
-    const Kokkos::DualView<double*[3]> x,
-    const Kokkos::DualView<double*> mu)
+    const Kokkos::View<double*, memory_space> phi,
+    Kokkos::View<double*, memory_space> grad,
+    const Kokkos::DualView<double*[3], memory_space> y,
+    const Kokkos::DualView<double*, memory_space> nu,
+    const Kokkos::DualView<double*[3], memory_space> x,
+    const Kokkos::DualView<double*, memory_space> mu)
   {
-    Kokkos::View<double*, Kokkos::CudaSpace> sums("sums", x.extent(0));
-    Kokkos::View<double*, Kokkos::CudaSpace> max_exp("Maxexp", x.extent(0));
+    Kokkos::View<double*, memory_space> sums("sums", x.extent(0));
+    Kokkos::View<double*, memory_space> max_exp("Maxexp", x.extent(0));
 
     Kokkos::parallel_for("sumsEval", team_policy(x.extent(0), Kokkos::AUTO), KOKKOS_LAMBDA(const member_type& team) {
       int i = team.league_rank();
@@ -630,7 +666,7 @@ namespace Applications
             dist += tmp * tmp;
           }
           double exp=(phi(j)-0.5*dist)/epsilon;
-          inner_sum += nu.d_view(j)*std::exp(exp - max_exp_);
+          inner_sum += nu.d_view(j)*Kokkos::exp(exp - max_exp_);
         },
       sum_quad_i);
 
@@ -650,16 +686,16 @@ namespace Applications
             dist += tmp * tmp;
           }
           double exp=(phi(j)-0.5*dist)/epsilon;
-          inner_sum += mu.d_view(i)*nu.d_view(j)*std::exp(exp-max_exp(i))/sums(i);
+          inner_sum += mu.d_view(i)*Kokkos::exp(exp-max_exp(i))/sums(i);
         },
       grad_j);
 
-      grad(j) = grad_j-nu.d_view(j);
+      grad(j) = nu.d_view(j)*(grad_j-1.0);
     });
     
     double functional_value = 0.0;
     Kokkos::parallel_reduce("ComputeFunctionalValue", x.extent(0), KOKKOS_LAMBDA(int i, double &f_sum) {
-      f_sum += epsilon * mu.d_view(i) * (max_exp(i)+std::log(sums(i)));
+      f_sum += epsilon * mu.d_view(i) * (max_exp(i)+Kokkos::log(sums(i)));
     }, functional_value);
 
     double dot_phi_nu = 0.0;
@@ -672,17 +708,24 @@ namespace Applications
 
   void KokkosSOT::kokkos_regularized_semidiscrete_ot(Vector<double> &potential)
   {
+    print_used_cuda_memory();
     const int n_target = this->target_points.size();
-    Kokkos::View<double*> phi("phi", n_target);
-    Kokkos::DualView<double*[3]> y("y", n_target, 3);
-    Kokkos::DualView<double*> nu("nu", n_target);
+    Kokkos::View<double*, memory_space> phi("phi", n_target);
+    Kokkos::DualView<double*[3], memory_space> y("y", n_target, 3);
+    Kokkos::DualView<double*, memory_space> nu("nu", n_target);
+
+    pcout << "Memory space: "
+      << typeid(typename decltype(phi)::memory_space).name() << std::endl;
+    pcout << "Running on Kokkos execution space: " 
+        << typeid(Kokkos::DefaultExecutionSpace).name() << std::endl;
 
     auto quadrature = Utils::create_quadrature_for_mesh<3>(tria_1, solver_params.quadrature_order);
     pcout << "Quadrature size: " << quadrature->size() << std::endl;
     const int n_source = tria_1.n_active_cells() * quadrature->size();
-    Kokkos::DualView<double*[3]> x("x", n_source, 3);
-    Kokkos::DualView<double*> mu("mu", n_source);
-
+    Kokkos::DualView<double*[3], memory_space> x("x", n_source, 3);
+    Kokkos::DualView<double*, memory_space> mu("mu", n_source);
+    print_used_cuda_memory();
+    
     auto phi_host = Kokkos::create_mirror_view(phi);
     for (int i = 0; i < n_target; ++i)
       phi_host(i) = potential[i];
@@ -695,17 +738,15 @@ namespace Applications
     this->sot_solver->current_epsilon = epsilon;
     pcout << "Epsilon: " << epsilon << std::endl;
 
-    pcout << "Running on Kokkos execution space: " 
-        << typeid(Kokkos::DefaultExecutionSpace).name() << std::endl;
-
     SolverKokkosBFGS::BFGSControl control(solver_config.max_iterations, solver_config.tolerance);
     SolverKokkosBFGS::AdditionalData additional_data;
     pcout << "Using BFGS solver with max iterations: "
           << control.max_iter << ", tolerance: " << control.tolerance << std::endl;
+    pcout << "x: " << x.extent(0) << ", y: " << y.extent(0) << std::endl;
 
     SolverKokkosBFGS solver(control, additional_data);
     solver.solve(
-      [this, y, nu, x, mu, epsilon](const Kokkos::View<double*> phi_, Kokkos::View<double*> grad_) {
+      [this, y, nu, x, mu, epsilon](const Kokkos::View<double*, memory_space> phi_, Kokkos::View<double*, memory_space> grad_) {
         return this->evaluate_functional_rsot(
           epsilon, phi_, grad_, y, nu, x, mu);
       },
@@ -921,16 +962,16 @@ int main(int argc, char *argv[])
 {
   try
   {
-    InitFinalize mpi_initialization(argc, argv,          InitializeLibrary::MPI | InitializeLibrary::SLEPc | InitializeLibrary::PETSc | InitializeLibrary::Kokkos |
+    InitFinalize mpi_initialization(argc, argv,          InitializeLibrary::MPI | InitializeLibrary::SLEPc | InitializeLibrary::PETSc| InitializeLibrary::Kokkos |
         InitializeLibrary::Zoltan | InitializeLibrary::P4EST);
 
     // Kokkos::initialize(argc, argv);
 
-    printf("Hello World on Kokkos execution space %s\n",
-            typeid(Kokkos::DefaultExecutionSpace).name ());
+    // printf("Hello World on Kokkos execution space %s\n",
+    //         typeid(Kokkos::DefaultExecutionSpace).name ());
 
-    int num_threads = Kokkos::DefaultExecutionSpace().concurrency();
-    printf("Number of available threads: %d\n", num_threads);
+    // int num_threads = Kokkos::DefaultExecutionSpace().concurrency();
+    // printf("Number of available threads: %d\n", num_threads);
         
     using namespace Applications;
 
@@ -953,8 +994,8 @@ int main(int argc, char *argv[])
     conditioned_density_test.run();
 
     // Ensure all Kokkos resources are deallocated before finalizing
-    pcout << "Finalizing Kokkos..." << std::endl;
-    Kokkos::DefaultExecutionSpace().fence();
+    // pcout << "Finalizing Kokkos..." << std::endl;
+    // Kokkos::DefaultExecutionSpace().fence();
     // Kokkos::finalize();
   }
   catch (std::exception &exc)

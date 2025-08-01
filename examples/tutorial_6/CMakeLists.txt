@@ -24,6 +24,8 @@ set(Kokkos_INCLUDE_DIRS /Home/flow/romor/local/gpu_kokkos-4.2.0/include)
 
 # Find Kokkos
 find_package(Kokkos REQUIRED)
+message(STATUS "Kokkos_ENABLE_CUDA_UVM: ${Kokkos_ENABLE_CUDA_UVM}")
+
 if(Kokkos_FOUND)
   set(CMAKE_CXX_COMPILER "${KOKKOS_DIR}/bin/nvcc_wrapper")
   message(STATUS "Found Kokkos: ${Kokkos_DIR} (version \"${Kokkos_VERSION}\")")
