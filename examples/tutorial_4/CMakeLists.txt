@@ -17,11 +17,10 @@ SET(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 SET(SemiDiscreteOT_DIR ../../build)
 FIND_PACKAGE(VTK REQUIRED)
-FIND_PACKAGE(SemiDiscreteOT REQUIRED)
 
 # Create executables
-ADD_EXECUTABLE(tutorial_4_gradient_descent main_gradient_descent.cc)
-ADD_EXECUTABLE(tutorial_4_lloyd main_lloyd.cc)
+ADD_EXECUTABLE(tutorial_4_gradient_descent src/main_gradient_descent.cc)
+ADD_EXECUTABLE(tutorial_4_lloyd src/main_lloyd.cc)
 
 # Add include directories
 TARGET_INCLUDE_DIRECTORIES(tutorial_4_gradient_descent PRIVATE
@@ -32,12 +31,12 @@ TARGET_INCLUDE_DIRECTORIES(tutorial_4_lloyd PRIVATE
 )
 
 # Link with SemiDiscreteOT and Deal.II
-TARGET_LINK_LIBRARIES(tutorial_4_gradient_descent SemiDiscreteOT::SemiDiscreteOT)
-TARGET_LINK_LIBRARIES(tutorial_4_lloyd SemiDiscreteOT::SemiDiscreteOT)
+TARGET_LINK_LIBRARIES(tutorial_4_gradient_descent SemiDiscreteOT)
+TARGET_LINK_LIBRARIES(tutorial_4_lloyd SemiDiscreteOT)
 DEAL_II_SETUP_TARGET(tutorial_4_gradient_descent)
 DEAL_II_SETUP_TARGET(tutorial_4_lloyd)
 
 # Set output directory
 SET_TARGET_PROPERTIES(tutorial_4_gradient_descent tutorial_4_lloyd PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/run
 )

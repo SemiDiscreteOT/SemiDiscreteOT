@@ -12,9 +12,9 @@
 #include <deal.II/grid/grid_tools.h>
 #include <deal.II/dofs/dof_handler.h>
 #include <deal.II/dofs/dof_tools.h>
-#include <deal.II/fe/fe_simplex_p.h>
+#include <deal.II/fe/fe_q.h>
 #include <deal.II/fe/fe_values.h>
-#include <deal.II/fe/mapping_fe.h>
+#include <deal.II/fe/mapping_q.h>
 #include <deal.II/lac/vector.h>
 #include <deal.II/numerics/vector_tools.h>
 #include <fstream>
@@ -32,6 +32,8 @@ class BarycenterParameters : public ParameterAcceptor
 public:
     BarycenterParameters() : ParameterAcceptor("Barycenter")
     {
+        add_parameter("volume_scaling", volume_scaling,
+                     "Volume scaling");
         add_parameter("max_iterations", max_iterations,
                      "Maximum number of barycenter iterations");
         add_parameter("convergence_tolerance", convergence_tolerance,
@@ -52,18 +54,22 @@ public:
                      "Minimum bound for initial barycenter points");
         add_parameter("initial_bounds_max", initial_bounds_max,
                      "Maximum bound for initial barycenter points");
+        add_parameter("sampling_id", sampling_id,
+                     "Source ID to sample from (0=both, 1=source1, 2=source2)");
     }
 
     unsigned int max_iterations = 100;
     double convergence_tolerance = 1e-6;
     double weight_1 = 0.5;
     double weight_2 = 0.5;
-    unsigned int n_barycenter_points = 100;
+    unsigned int n_barycenter_points = 1000;
     unsigned int random_seed = 42;
     unsigned int output_frequency = 5;
-    double initial_bounds_min = -0.5;
-    double initial_bounds_max = 0.5;
     bool random_initialization = true;
+    double initial_bounds_min = -1.0;
+    double initial_bounds_max = 1.0;
+    bool volume_scaling = false;
+    unsigned int sampling_id = 0;
 };
 
 class StepControllerParameters : public ParameterAcceptor
@@ -119,6 +125,14 @@ public:
                      "Minimum number of vertices for source multilevel");
         add_parameter("source_max_vertices", source_max_vertices,
                      "Maximum number of vertices for source multilevel");
+        add_parameter("target_min_points", target_min_points,
+                     "Minimum number of points for target multilevel");
+        add_parameter("target_max_points", target_max_points,
+                     "Maximum number of points for target multilevel");
+        add_parameter("use_python_clustering", use_python_clustering,
+                     "Whether to use Python scripts for clustering");
+        add_parameter("python_script_name", python_script_name,
+                     "Name of the Python script to use");
     }
 
     double epsilon = 1e-2;
@@ -133,6 +147,10 @@ public:
     bool target_multilevel_enabled = false;
     unsigned int source_min_vertices = 100;
     unsigned int source_max_vertices = 500;
+    unsigned int target_min_points = 100;
+    unsigned int target_max_points = 1000;
+    bool use_python_clustering = true;
+    std::string python_script_name = "multilevel_clustering_faiss_cpu.py";
 };
 
 class FileParameters : public ParameterAcceptor
@@ -357,6 +375,99 @@ void save_vtk_output(const std::vector<Point<3>> &points,
     vtk_file.close();
 }
 
+bool load_vtk_points(const std::string &filename, std::vector<Point<3>> &points)
+{
+    std::ifstream vtk_file(filename);
+    if (!vtk_file.is_open()) return false;
+
+    points.clear();
+    std::string line;
+
+    // Skip until we find the POINTS line
+    while (std::getline(vtk_file, line)) {
+        if (line.find("POINTS") != std::string::npos) {
+            std::istringstream iss(line);
+            std::string points_keyword;
+            unsigned int n_points;
+            std::string data_type;
+
+            iss >> points_keyword >> n_points >> data_type;
+            points.reserve(n_points);
+
+            // Read the points
+            for (unsigned int i = 0; i < n_points; ++i) {
+                double x, y, z;
+                if (!(vtk_file >> x >> y >> z)) return false;
+                points.emplace_back(x, y, z);
+            }
+
+            return true;
+        }
+    }
+
+    return false;
+}
+
+template <int dim, int spacedim>
+std::vector<Point<spacedim>> sample_points_from_geometry(const Triangulation<dim, spacedim> &triangulation,
+                                                         unsigned int n_samples,
+                                                         std::mt19937 &rng)
+{
+    std::vector<Point<spacedim>> sampled_points;
+    sampled_points.reserve(n_samples);
+
+    // Calculate volumes of all cells for weighted sampling
+    std::vector<double> cell_volumes;
+    std::vector<typename Triangulation<dim, spacedim>::active_cell_iterator> cells;
+
+    for (const auto &cell : triangulation.active_cell_iterators()) {
+        cells.push_back(cell);
+        cell_volumes.push_back(cell->measure());
+    }
+
+    // Create discrete distribution for cell selection based on volume
+    std::discrete_distribution<> cell_dist(cell_volumes.begin(), cell_volumes.end());
+
+    // Uniform distributions for barycentric coordinates
+    std::uniform_real_distribution<double> uniform_dist(0.0, 1.0);
+
+    for (unsigned int i = 0; i < n_samples; ++i) {
+        // Select a random cell weighted by volume
+        int cell_idx = cell_dist(rng);
+        const auto &cell = cells[cell_idx];
+
+        // Generate random coordinates for quad elements
+        std::vector<double> xi(dim);
+        for (int j = 0; j < dim; ++j) {
+            xi[j] = uniform_dist(rng);
+        }
+
+        // Convert reference coordinates to actual point using bilinear interpolation
+        Point<spacedim> sampled_point;
+        if (dim == 2) {
+            // For 2D quads: bilinear interpolation
+            sampled_point = (1.0 - xi[0]) * (1.0 - xi[1]) * cell->vertex(0) +
+                           xi[0] * (1.0 - xi[1]) * cell->vertex(1) +
+                           xi[0] * xi[1] * cell->vertex(2) +
+                           (1.0 - xi[0]) * xi[1] * cell->vertex(3);
+        } else if (dim == 3) {
+            // For 3D quads (hexahedra): trilinear interpolation
+            sampled_point = (1.0 - xi[0]) * (1.0 - xi[1]) * (1.0 - xi[2]) * cell->vertex(0) +
+                           xi[0] * (1.0 - xi[1]) * (1.0 - xi[2]) * cell->vertex(1) +
+                           xi[0] * xi[1] * (1.0 - xi[2]) * cell->vertex(2) +
+                           (1.0 - xi[0]) * xi[1] * (1.0 - xi[2]) * cell->vertex(3) +
+                           (1.0 - xi[0]) * (1.0 - xi[1]) * xi[2] * cell->vertex(4) +
+                           xi[0] * (1.0 - xi[1]) * xi[2] * cell->vertex(5) +
+                           xi[0] * xi[1] * xi[2] * cell->vertex(6) +
+                           (1.0 - xi[0]) * xi[1] * xi[2] * cell->vertex(7);
+        }
+
+        sampled_points.push_back(sampled_point);
+    }
+
+    return sampled_points;
+}
+
 int main(int argc, char *argv[])
 {
     Utilities::MPI::MPI_InitFinalize mpi_initialization(argc, argv, 1);
@@ -372,28 +483,8 @@ int main(int argc, char *argv[])
     FileParameters file_params;
 
     // Parse parameter file
-    std::string parameter_filename = "parameters.prm";
-    if (argc > 1) {
-        parameter_filename = argv[1];
-    }
-
-    try {
-        ParameterAcceptor::initialize(parameter_filename);
-        pcout << "Successfully loaded parameters from: " << parameter_filename << std::endl;
-    } catch (const std::exception &e) {
-        pcout << "Warning: Could not load parameter file '" << parameter_filename << "'." << std::endl;
-        pcout << "Creating default parameter file..." << std::endl;
-
-        // Create default parameter file
-        std::ofstream param_file(parameter_filename);
-        if (param_file.is_open()) {
-            ParameterAcceptor::prm.print_parameters(param_file, ParameterHandler::Text);
-            param_file.close();
-            pcout << "Default parameter file created: " << parameter_filename << std::endl;
-            pcout << "Please edit the parameters and run again." << std::endl;
-        }
-        return 1;
-    }
+    std::string prm_file = (argc > 1) ? argv[1] : "parameters_gradient.prm";
+    ParameterAcceptor::initialize(prm_file);
 
     // Validate parameters
     if (std::abs(barycenter_params.weight_1 + barycenter_params.weight_2 - 1.0) > 1e-12) {
@@ -403,7 +494,7 @@ int main(int argc, char *argv[])
         barycenter_params.weight_2 /= sum;
     }
 
-    const int dim = 3;
+    const int dim = 2;
     const int spacedim = 3;
 
     // Configure OT solver
@@ -419,7 +510,11 @@ int main(int argc, char *argv[])
         p.multilevel_params.target_enabled = ot_params.target_multilevel_enabled;
         p.multilevel_params.source_min_vertices = ot_params.source_min_vertices;
         p.multilevel_params.source_max_vertices = ot_params.source_max_vertices;
-        p.multilevel_params.source_hierarchy_dir = "source_hierarchy_" + std::to_string(solver_id);
+        p.multilevel_params.target_min_points = ot_params.target_min_points;
+        p.multilevel_params.target_max_points = ot_params.target_max_points;
+        p.multilevel_params.source_hierarchy_dir = "output/barycenter_h/source" + std::to_string(solver_id);
+        p.multilevel_params.use_python_clustering = ot_params.use_python_clustering;
+        p.multilevel_params.python_script_name = ot_params.python_script_name;
     };
 
     SemiDiscreteOT<dim, spacedim> sot_problem_1(mpi_comm);
@@ -439,13 +534,15 @@ int main(int argc, char *argv[])
         }
         grid_in.read_msh(input_file);
 
-        const double volume = GridTools::volume(source1_tria);
-        if (volume > 1e-12) {
-            GridTools::scale(1.0 / std::cbrt(volume), source1_tria);
-            pcout << "Rescaled source 1 to unit volume." << std::endl;
+        if (barycenter_params.volume_scaling) {
+            const double volume = GridTools::volume(source1_tria);
+            if (volume > 1e-12) {
+                GridTools::scale(1.0 / std::cbrt(volume), source1_tria);
+                pcout << "Rescaled source 1 to unit volume." << std::endl;
+            }
         }
     }
-    FE_SimplexP<dim, spacedim> source1_fe(1);
+    FE_Q<dim, spacedim> source1_fe(1);
     DoFHandler<dim, spacedim> source1_dof_handler(source1_tria);
     source1_dof_handler.distribute_dofs(source1_fe);
     Vector<double> source1_density(source1_dof_handler.n_dofs());
@@ -463,82 +560,99 @@ int main(int argc, char *argv[])
         }
         grid_in.read_msh(input_file);
 
-        const double volume = GridTools::volume(source2_tria);
-        if (volume > 1e-12) {
-            GridTools::scale(1.0 / std::cbrt(volume), source2_tria);
-            pcout << "Rescaled source 2 to unit volume." << std::endl;
+        if (barycenter_params.volume_scaling) {
+            const double volume = GridTools::volume(source2_tria);
+            if (volume > 1e-12) {
+                GridTools::scale(1.0 / std::cbrt(volume), source2_tria);
+                pcout << "Rescaled source 2 to unit volume." << std::endl;
+            }
         }
     }
-    FE_SimplexP<dim, spacedim> source2_fe(1);
+    FE_Q<dim, spacedim> source2_fe(1);
     DoFHandler<dim, spacedim> source2_dof_handler(source2_tria);
     source2_dof_handler.distribute_dofs(source2_fe);
     Vector<double> source2_density(source2_dof_handler.n_dofs());
     source2_density = 1.0;
     sot_problem_2.setup_source_measure(source2_tria, source2_dof_handler, source2_density, "source_2");
 
-    sot_problem_1.prepare_multilevel_hierarchies();
-    sot_problem_2.prepare_multilevel_hierarchies();
+    if (ot_params.source_multilevel_enabled) {
+        sot_problem_1.prepare_source_multilevel();
+        sot_problem_2.prepare_source_multilevel();
+    }
 
-    // Initialize barycenter
-    pcout << "Initializing barycenter..." << std::endl;
-    std::vector<Point<spacedim>> barycenter_points;
-    if (barycenter_params.random_initialization) {
-        pcout << "Using random initialization within the bounding box of both geometries" << std::endl;
+    std::vector<Point<spacedim>> barycenter_points(barycenter_params.n_barycenter_points);
+    Vector<double> barycenter_weights(barycenter_params.n_barycenter_points);
+    barycenter_weights = 1.0 / barycenter_params.n_barycenter_points;
 
-        // Compute bounding box of both geometries
-        dealii::BoundingBox<spacedim> bbox1 = GridTools::compute_bounding_box(source1_tria);
-        dealii::BoundingBox<spacedim> bbox2 = GridTools::compute_bounding_box(source2_tria);
-    
-        // Combine bounding boxes
-        Point<spacedim> min_point, max_point;
-        std::pair<Point<spacedim>, Point<spacedim>> bounds1 = bbox1.get_boundary_points();
-        std::pair<Point<spacedim>, Point<spacedim>> bounds2 = bbox2.get_boundary_points();
-    
-        for (unsigned int d = 0; d < spacedim; ++d) {
-            min_point[d] = std::min(bounds1.first[d], bounds2.first[d]);
-            max_point[d] = std::max(bounds1.second[d], bounds2.second[d]);
-        }
-    
-        // Initialize random number generator
-        std::mt19937 rng(barycenter_params.random_seed);
-        std::vector<std::uniform_real_distribution<double>> dist;
-        for (unsigned int d = 0; d < spacedim; ++d) {
-            dist.emplace_back(min_point[d], max_point[d]);
-        }
-    
-        // Generate random points within the bounding box
-        barycenter_points.resize(barycenter_params.n_barycenter_points);
-        for (unsigned int i = 0; i < barycenter_params.n_barycenter_points; ++i) {
-            for (unsigned int d = 0; d < spacedim; ++d) {
-                barycenter_points[i][d] = dist[d](rng);
+    if (Utilities::MPI::this_mpi_process(mpi_comm) == 0) {
+        // Try to load from barycenter_initial.vtk first
+        std::vector<Point<spacedim>> loaded_points;
+        if (load_vtk_points("barycenter_initial.vtk", loaded_points) &&
+            loaded_points.size() == barycenter_params.n_barycenter_points) {
+            pcout << "Successfully loaded barycenter initialization from barycenter_initial.vtk with "
+                  << loaded_points.size() << " points" << std::endl;
+            barycenter_points = loaded_points;
+        } else {
+            if (loaded_points.size() > 0 && loaded_points.size() != barycenter_params.n_barycenter_points) {
+                pcout << "Warning: barycenter_initial.vtk contains " << loaded_points.size()
+                      << " points but expected " << barycenter_params.n_barycenter_points
+                      << ". Using fallback initialization." << std::endl;
+            }
+
+            if (barycenter_params.random_initialization) {
+                pcout << "Using geometry-based initialization: sampling from source geometries" << std::endl;
+
+                // Initialize random number generator
+                std::mt19937 rng(barycenter_params.random_seed);
+
+                // Calculate number of points to sample from each geometry
+                unsigned int n_from_source1 = static_cast<unsigned int>(barycenter_params.weight_1 * barycenter_params.n_barycenter_points);
+                unsigned int n_from_source2 = barycenter_params.n_barycenter_points - n_from_source1;
+
+                // Sample based on sampling_id
+                if (barycenter_params.sampling_id == 1) {
+                    // Sample all points from source 1
+                    pcout << "Sampling all " << barycenter_params.n_barycenter_points << " points from source1 (sampling_id=1)" << std::endl;
+                    barycenter_points = sample_points_from_geometry(source1_tria, barycenter_params.n_barycenter_points, rng);
+                }
+                else if (barycenter_params.sampling_id == 2) {
+                    // Sample all points from source 2
+                    pcout << "Sampling all " << barycenter_params.n_barycenter_points << " points from source2 (sampling_id=2)" << std::endl;
+                    barycenter_points = sample_points_from_geometry(source2_tria, barycenter_params.n_barycenter_points, rng);
+                }
+                else {
+                    // Default behavior: sample from both sources based on weights
+                    pcout << "Sampling " << n_from_source1 << " points from source1 (weight: " << barycenter_params.weight_1 << ")" << std::endl;
+                    pcout << "Sampling " << n_from_source2 << " points from source2 (weight: " << barycenter_params.weight_2 << ")" << std::endl;
+
+                    // Sample points from both geometries
+                    std::vector<Point<spacedim>> points_from_source1 = sample_points_from_geometry(source1_tria, n_from_source1, rng);
+                    std::vector<Point<spacedim>> points_from_source2 = sample_points_from_geometry(source2_tria, n_from_source2, rng);
+
+                    // Combine the sampled points
+                    barycenter_points.clear();
+                    barycenter_points.reserve(barycenter_params.n_barycenter_points);
+                    barycenter_points.insert(barycenter_points.end(), points_from_source1.begin(), points_from_source1.end());
+                    barycenter_points.insert(barycenter_points.end(), points_from_source2.begin(), points_from_source2.end());
+
+                    // Shuffle the combined points to avoid any ordering bias
+                    std::shuffle(barycenter_points.begin(), barycenter_points.end(), rng);
+                }
+            } else {
+                // Use support points of second mesh for initialization
+                std::map<types::global_dof_index, Point<spacedim>> support_points;
+                DoFTools::map_dofs_to_support_points(MappingQ1<dim,spacedim>(), source2_dof_handler, support_points);
+                barycenter_points.resize(support_points.size());
+                unsigned int i = 0;
+                for(const auto& pair : support_points) barycenter_points[i++] = pair.second;
+                barycenter_weights.reinit(barycenter_points.size());
+                barycenter_weights = 1.0 / barycenter_points.size();
             }
         }
+        if (file_params.save_vtk) save_vtk_output(barycenter_points, barycenter_weights, file_params.output_prefix + "_initial.vtk");
     }
-    else {
-        pcout << "Using support points from the second mesh for initialization" << std::endl;
-        std::map<types::global_dof_index, Point<spacedim>> support_points;
-        DoFTools::map_dofs_to_support_points(MappingFE<dim, spacedim>(source2_fe),
-                                            source2_dof_handler,
-                                            support_points);
-        for (const auto& [index, point] : support_points) {
-            barycenter_points.push_back(point);
-        }
-        barycenter_params.n_barycenter_points = barycenter_points.size();
-    }
-
-    Vector<double> barycenter_weights(barycenter_params.n_barycenter_points);
-    if (Utilities::MPI::this_mpi_process(mpi_comm) == 0) {
-        Utils::write_vector(barycenter_points, "barycenter_points.txt");
-        
-        // Save initial barycenter points in VTK format
-        if (file_params.save_vtk) {
-            save_vtk_output(barycenter_points, barycenter_weights,
-                           file_params.output_prefix + "_initial.vtk");
-            pcout << "Saved initial barycenter to " << file_params.output_prefix << "_initial.vtk" << std::endl;
-        }
-    }
-    barycenter_weights = 1.0 / barycenter_params.n_barycenter_points;
-    pcout << "Initialized barycenter with " << barycenter_params.n_barycenter_points << " random points." << std::endl;
+    for (auto &p : barycenter_points) p = Utilities::MPI::broadcast(mpi_comm, p, 0);
+    pcout << "Initialized barycenter with " << barycenter_points.size() << " points." << std::endl;
 
     // Initialize step controller
     AdaptiveStepController step_controller(step_params);
@@ -552,17 +666,25 @@ int main(int argc, char *argv[])
         std::vector<Point<spacedim>> prev_points = barycenter_points;
 
         sot_problem_1.setup_target_measure(barycenter_points, barycenter_weights);
+        if (ot_params.target_multilevel_enabled) {
+            sot_problem_1.prepare_target_multilevel();
+        }
         sot_problem_2.setup_target_measure(barycenter_points, barycenter_weights);
 
-        pcout << "  Solving OT problems..." << std::endl;
-        potentials_1 = sot_problem_1.solve(potentials_1);
-        potentials_2 = sot_problem_2.solve(potentials_2);
+        if (ot_params.target_multilevel_enabled) {
+            potentials_1 = sot_problem_1.solve();
+            potentials_2 = sot_problem_2.solve();
+        }
+        else {
+            potentials_1 = sot_problem_1.solve(potentials_1);
+            potentials_2 = sot_problem_2.solve(potentials_2);
+        }
 
         Vector<double> grad_points_1(barycenter_params.n_barycenter_points * spacedim);
         Vector<double> grad_points_2(barycenter_params.n_barycenter_points * spacedim);
 
         // Compute gradients
-        MappingFE<dim, spacedim> source1_mapping(source1_fe);
+        MappingQ1<dim, spacedim> source1_mapping;
         WorkStream::run(
             source1_dof_handler.begin_active(), source1_dof_handler.end(),
             [&](const auto& cell, auto& scratch, auto& copy) {
@@ -576,7 +698,7 @@ int main(int argc, char *argv[])
             BarycenterScratchData<dim, spacedim>(source1_fe, source1_mapping, 2),
             BarycenterCopyData<spacedim>(barycenter_params.n_barycenter_points, spacedim));
 
-        MappingFE<dim, spacedim> source2_mapping(source2_fe);
+        MappingQ1<dim, spacedim> source2_mapping;
         WorkStream::run(
             source2_dof_handler.begin_active(), source2_dof_handler.end(),
             [&](const auto& cell, auto& scratch, auto& copy) {
@@ -617,7 +739,7 @@ int main(int argc, char *argv[])
         step_controller.update(point_change);
 
         pcout << "  RMS Point Change: " << std::scientific << std::setprecision(3) << point_change
-              << ", Step Size: " << std::fixed << std::setprecision(4) << alpha << std::endl;
+              << ", Step Size: " << std::scientific << std::setprecision(3) << alpha << std::endl;
 
         if (point_change < barycenter_params.convergence_tolerance)
         {

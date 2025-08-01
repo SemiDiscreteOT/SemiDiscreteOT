@@ -12,9 +12,9 @@
 #include <deal.II/grid/grid_tools.h>
 #include <deal.II/dofs/dof_handler.h>
 #include <deal.II/dofs/dof_tools.h>
-#include <deal.II/fe/fe_simplex_p.h>
+#include <deal.II/fe/fe_q.h>
 #include <deal.II/fe/fe_values.h>
-#include <deal.II/fe/mapping_fe.h>
+#include <deal.II/fe/mapping_q.h>
 #include <deal.II/lac/vector.h>
 #include <deal.II/numerics/vector_tools.h>
 #include <fstream>
@@ -160,10 +160,10 @@ bool load_vtk_points(const std::string &filename, std::vector<Point<3>> &points)
 {
     std::ifstream vtk_file(filename);
     if (!vtk_file.is_open()) return false;
-    
+
     points.clear();
     std::string line;
-    
+
     // Skip until we find the POINTS line
     while (std::getline(vtk_file, line)) {
         if (line.find("POINTS") != std::string::npos) {
@@ -171,21 +171,21 @@ bool load_vtk_points(const std::string &filename, std::vector<Point<3>> &points)
             std::string points_keyword;
             unsigned int n_points;
             std::string data_type;
-            
+
             iss >> points_keyword >> n_points >> data_type;
             points.reserve(n_points);
-            
+
             // Read the points
             for (unsigned int i = 0; i < n_points; ++i) {
                 double x, y, z;
                 if (!(vtk_file >> x >> y >> z)) return false;
                 points.emplace_back(x, y, z);
             }
-            
+
             return true;
         }
     }
-    
+
     return false;
 }
 
@@ -217,27 +217,30 @@ std::vector<Point<spacedim>> sample_points_from_geometry(const Triangulation<dim
         int cell_idx = cell_dist(rng);
         const auto &cell = cells[cell_idx];
 
-        // Generate random barycentric coordinates
-        std::vector<double> barycentric(dim + 1);
-
-        // Generate random numbers and sort them
-        std::vector<double> random_vals(dim);
+        // Generate random coordinates for quad elements
+        std::vector<double> xi(dim);
         for (int j = 0; j < dim; ++j) {
-            random_vals[j] = uniform_dist(rng);
+            xi[j] = uniform_dist(rng);
         }
-        std::sort(random_vals.begin(), random_vals.end());
 
-        // Convert to barycentric coordinates
-        barycentric[0] = random_vals[0];
-        for (int j = 1; j < dim; ++j) {
-            barycentric[j] = random_vals[j] - random_vals[j-1];
-        }
-        barycentric[dim] = 1.0 - random_vals[dim-1];
-
-        // Convert barycentric coordinates to actual point
+        // Convert reference coordinates to actual point using bilinear interpolation
         Point<spacedim> sampled_point;
-        for (unsigned int v = 0; v < cell->n_vertices(); ++v) {
-            sampled_point += barycentric[v] * cell->vertex(v);
+        if (dim == 2) {
+            // For 2D quads: bilinear interpolation
+            sampled_point = (1.0 - xi[0]) * (1.0 - xi[1]) * cell->vertex(0) +
+                           xi[0] * (1.0 - xi[1]) * cell->vertex(1) +
+                           xi[0] * xi[1] * cell->vertex(2) +
+                           (1.0 - xi[0]) * xi[1] * cell->vertex(3);
+        } else if (dim == 3) {
+            // For 3D quads (hexahedra): trilinear interpolation
+            sampled_point = (1.0 - xi[0]) * (1.0 - xi[1]) * (1.0 - xi[2]) * cell->vertex(0) +
+                           xi[0] * (1.0 - xi[1]) * (1.0 - xi[2]) * cell->vertex(1) +
+                           xi[0] * xi[1] * (1.0 - xi[2]) * cell->vertex(2) +
+                           (1.0 - xi[0]) * xi[1] * (1.0 - xi[2]) * cell->vertex(3) +
+                           (1.0 - xi[0]) * (1.0 - xi[1]) * xi[2] * cell->vertex(4) +
+                           xi[0] * (1.0 - xi[1]) * xi[2] * cell->vertex(5) +
+                           xi[0] * xi[1] * xi[2] * cell->vertex(6) +
+                           (1.0 - xi[0]) * xi[1] * xi[2] * cell->vertex(7);
         }
 
         sampled_points.push_back(sampled_point);
@@ -259,7 +262,7 @@ int main(int argc, char *argv[])
     OptimalTransportParameters ot_params;
     FileParameters file_params;
 
-    std::string prm_file = (argc > 1) ? argv[1] : "parameters.prm";
+    std::string prm_file = (argc > 1) ? argv[1] : "parameters_lloyd.prm";
     ParameterAcceptor::initialize(prm_file);
 
     if (std::abs(barycenter_params.weight_1 + barycenter_params.weight_2 - 1.0) > 1e-12) {
@@ -269,7 +272,7 @@ int main(int argc, char *argv[])
     }
     pcout << "Weight 1: " << barycenter_params.weight_1 << ", Weight 2: " << barycenter_params.weight_2 << std::endl;
 
-    const int dim = 3, spacedim = 3;
+    const int dim = 2, spacedim = 3;
 
     auto configure_solver = [&](SotParameterManager &p, int solver_id) {
         p.solver_params.epsilon = ot_params.epsilon;
@@ -318,7 +321,7 @@ int main(int argc, char *argv[])
             }
         }
     }
-    FE_SimplexP<dim, spacedim> source1_fe(1);
+    FE_Q<dim,spacedim> source1_fe(1);
     DoFHandler<dim, spacedim> source1_dof_handler(source1_tria);
     source1_dof_handler.distribute_dofs(source1_fe);
     Vector<double> source1_density(source1_dof_handler.n_dofs());
@@ -344,7 +347,7 @@ int main(int argc, char *argv[])
             }
         }
     }
-    FE_SimplexP<dim, spacedim> source2_fe(1);
+    FE_Q<dim,spacedim> source2_fe(1);
     DoFHandler<dim, spacedim> source2_dof_handler(source2_tria);
     source2_dof_handler.distribute_dofs(source2_fe);
     Vector<double> source2_density(source2_dof_handler.n_dofs());
@@ -364,18 +367,18 @@ int main(int argc, char *argv[])
     if (Utilities::MPI::this_mpi_process(mpi_comm) == 0) {
         // Try to load from barycenter_initial.vtk first
         std::vector<Point<spacedim>> loaded_points;
-        if (load_vtk_points("barycenter_initial.vtk", loaded_points) && 
+        if (load_vtk_points("barycenter_initial.vtk", loaded_points) &&
             loaded_points.size() == barycenter_params.n_barycenter_points) {
-            pcout << "Successfully loaded barycenter initialization from barycenter_initial.vtk with " 
+            pcout << "Successfully loaded barycenter initialization from barycenter_initial.vtk with "
                   << loaded_points.size() << " points" << std::endl;
             barycenter_points = loaded_points;
         } else {
             if (loaded_points.size() > 0 && loaded_points.size() != barycenter_params.n_barycenter_points) {
-                pcout << "Warning: barycenter_initial.vtk contains " << loaded_points.size() 
-                      << " points but expected " << barycenter_params.n_barycenter_points 
+                pcout << "Warning: barycenter_initial.vtk contains " << loaded_points.size()
+                      << " points but expected " << barycenter_params.n_barycenter_points
                       << ". Using fallback initialization." << std::endl;
             }
-            
+
             if (barycenter_params.random_initialization) {
                 pcout << "Using geometry-based initialization: sampling from source geometries" << std::endl;
 
@@ -391,7 +394,7 @@ int main(int argc, char *argv[])
                     // Sample all points from source 1
                     pcout << "Sampling all " << barycenter_params.n_barycenter_points << " points from source1 (sampling_id=1)" << std::endl;
                     barycenter_points = sample_points_from_geometry(source1_tria, barycenter_params.n_barycenter_points, rng);
-                } 
+                }
                 else if (barycenter_params.sampling_id == 2) {
                     // Sample all points from source 2
                     pcout << "Sampling all " << barycenter_params.n_barycenter_points << " points from source2 (sampling_id=2)" << std::endl;
@@ -418,7 +421,7 @@ int main(int argc, char *argv[])
             } else {
                 // Use support points of second mesh for initialization
                 std::map<types::global_dof_index, Point<spacedim>> support_points;
-                DoFTools::map_dofs_to_support_points(MappingFE<dim>(source2_fe), source2_dof_handler, support_points);
+                DoFTools::map_dofs_to_support_points(MappingQ1<dim,spacedim>(), source2_dof_handler, support_points);
                 barycenter_points.resize(support_points.size());
                 unsigned int i = 0;
                 for(const auto& pair : support_points) barycenter_points[i++] = pair.second;

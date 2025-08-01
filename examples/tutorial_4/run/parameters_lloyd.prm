@@ -4,7 +4,7 @@ subsection Barycenter
   # Maximum number of barycenter iterations
   set max_iterations = 100
   # Convergence tolerance for barycenter iterations
-  set convergence_tolerance = 1e-5
+  set convergence_tolerance = 1e-3
   # Weight for first source measure
   set weight_1 = 0.5
   # Weight for second source measure
@@ -12,7 +12,7 @@ subsection Barycenter
   # Use random initialization for barycenter points
   set random_initialization = true
   # Source ID to sample from (0=both, 1=source1, 2=source2)
-  set sampling_id = 0
+  set sampling_id = 1
   # Number of points in barycenter discretization
   set n_barycenter_points = 1000
   # Random seed for barycenter initialization
@@ -42,7 +42,7 @@ end
 
 subsection Optimal Transport
   # Regularization parameter
-  set epsilon = 5e-6
+  set epsilon = 1e-2
   # Distance threshold for computational efficiency
   set distance_threshold = 10
   # Numerical stability parameter
@@ -50,7 +50,7 @@ subsection Optimal Transport
   # Maximum iterations for OT solver
   set max_iterations = 50000
   # Tolerance for OT solver
-  set tolerance = 1e-5
+  set tolerance = 1e-3
   # Use log-sum-exp trick for numerical stability
   set use_log_sum_exp_trick = true
   # Enable verbose output for OT solver
@@ -77,9 +77,9 @@ end
 
 subsection Files
   # Filename for first source mesh
-  set source1_filename = source1.msh
+  set source1_filename = sphere.msh
   # Filename for second source mesh
-  set source2_filename = source2.msh
+  set source2_filename = cylinder.msh
   # Prefix for output files
   set output_prefix = barycenter
   # Save results in VTK format
