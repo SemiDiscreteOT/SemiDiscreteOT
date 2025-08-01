@@ -32,7 +32,7 @@ jobs:
       run: |
         # Update Doxyfile for GitHub Pages
         sed -i 's|OUTPUT_DIRECTORY.*|OUTPUT_DIRECTORY = ./docs|g' Doxyfile
-        sed -i 's|HTML_OUTPUT.*|HTML_OUTPUT = .|g' Doxyfile
+        sed -i 's|HTML_OUTPUT.*|HTML_OUTPUT = html|g' Doxyfile
         
     - name: Generate Documentation
       run: |
@@ -44,7 +44,7 @@ jobs:
     - name: Upload Documentation
       uses: actions/upload-pages-artifact@v3
       with:
-        path: './docs'
+        path: './docs/html'
 
   deploy-docs:
     if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
