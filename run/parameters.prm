@@ -1,17 +1,17 @@
 subsection SotParameterManager
 
-  set selected_task =  mesh_generation    # Options: mesh_generation, load_meshes, sot, exact_sot, power_diagram, map, prepare_source_multilevel, prepare_target_multilevel, multilevel_sot, save_multilevel_source_interpolation
+  set selected_task =  sot    # Options: mesh_generation, load_meshes, sot, exact_sot, power_diagram, map, prepare_source_multilevel, prepare_target_multilevel, multilevel_sot, save_multilevel_source_interpolation
   set io_coding = txt
 
   subsection mesh_generation
     subsection source
-      set number of refinements = 6
+      set number of refinements = 4
       set grid generator function = hyper_cube
       set grid generator arguments = -1 : 1 : false
       set use tetrahedral mesh = false
-      set use custom density = false
-      set density file path  = output/density_field/source_density.vtu
-      set density field name = p
+      set use custom density = true
+      set density file path  = output/density_field/source_density.vtk
+      set density field name = normalized_density
       set density file format = vtk
     end
 
@@ -19,10 +19,10 @@ subsection SotParameterManager
       set number of refinements = 3
       set grid generator function = hyper_ball
       set grid generator arguments = 0, 0, 0 : 1 : true
-      set use tetrahedral mesh = true
-      set use custom density = false
-      set density file path  = output/density_field/target_density.vtu
-      set density field name = p
+      set use tetrahedral mesh = false
+      set use custom density = true
+      set density file path  = output/density_field/target_density.vtk
+      set density field name = normalized_density
       set density file format = vtk
     end
 
@@ -52,13 +52,13 @@ subsection SotParameterManager
   subsection rsot_solver
     set max_iterations = 10000
     set epsilon = 1e-2
-    set tau = 1e-1  # Truncation error tolerance for integral radius bound
+    set tau = 1e-8  # Truncation error tolerance for integral radius bound
     set tolerance = 1e-2
     set distance_threshold_type = pointwise # Options: pointwise/integral
     set solver_control_type = l1norm
-    set verbose_output = true
+    set verbose_output = false
     set solver_type = BFGS
-    set quadrature_order = 1
+    set quadrature_order = 3
     set number_of_threads = 0
     set use_log_sum_exp_trick = false
     set use_epsilon_scaling = false

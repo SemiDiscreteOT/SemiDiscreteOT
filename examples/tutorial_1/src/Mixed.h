@@ -67,6 +67,7 @@
 #include <iostream>
 
 #include "PressureDensityField.h"
+#include <SemiDiscreteOT/core/SemiDiscreteOT.h>
 
 namespace fs = std::filesystem;
 

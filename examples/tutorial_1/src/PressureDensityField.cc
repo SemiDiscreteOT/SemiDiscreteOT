@@ -36,7 +36,7 @@ namespace Applications
   {
     const FESystem<dim>& fe = dof_handler->get_fe();
     
-    // Create FEValues for integration
+    // Create FEValues for integration - only for the pressure component
     QGauss<dim> quadrature_formula(fe.degree + 1);
     FEValues<dim> fe_values(fe, 
                            quadrature_formula,
@@ -46,6 +46,9 @@ namespace Applications
     const unsigned int n_q_points = quadrature_formula.size();
     std::vector<double> pressure_values(n_q_points);
     
+    // Extract pressure component (component dim for mixed system)
+    const FEValuesExtractors::Scalar pressure(dim);
+    
     double local_integral = 0.0;
     double global_integral = 0.0;
 
@@ -54,7 +57,8 @@ namespace Applications
       if (cell->is_locally_owned())
       {
         fe_values.reinit(cell);
-        fe_values.get_function_values(pressure_field, pressure_values);
+        // Use the full solution vector and extract pressure component
+        fe_values[pressure].get_function_values(*solution, pressure_values);
         
         for (unsigned int q = 0; q < n_q_points; ++q)
           local_integral += pressure_values[q] * fe_values.JxW(q);

@@ -479,6 +479,7 @@ namespace Applications
         locally_relevant_solution_2);
   }
 
+
   template <int dim>
   void Mixed<dim>::setup_density_fields()
   {
@@ -502,8 +503,80 @@ namespace Applications
   template <int dim>
   void Mixed<dim>::compute_optimal_transport()
   {
-    // This will be implemented once we integrate with SemiDiscreteOT
     pcout << "Computing optimal transport between density fields..." << std::endl;
+    SemiDiscreteOT<dim, dim> ot_problem(mpi_communicator);
+
+    // Configure only the rsot_solver parameters for API usage
+    ot_problem.configure([&](SotParameterManager &params) {
+        // Configure solver parameters (rsot_solver subsection)
+        params.solver_params.max_iterations = 10000;
+        params.solver_params.epsilon = 1e-2;
+        params.solver_params.tau = 1e-5;
+        params.solver_params.tolerance = 1e-2;
+        params.solver_params.distance_threshold_type = "integral";
+        params.solver_params.quadrature_order = 3;
+        // params.solver_params.use_log_sum_exp_trick = true;
+        params.solver_params.verbose_output = true;
+    });
+
+    // Extract density vectors from the PDE solutions
+    const auto& source_density = source_density_field->get_density();
+    const auto& target_density = target_density_field->get_density();
+
+    pcout << "Source density field has " << source_density.size() << " DoFs" << std::endl;
+    pcout << "Target density field has " << target_density.size() << " DoFs" << std::endl;
+
+    // Convert target density field to target points for semi-discrete optimal transport
+    std::vector<Point<dim>> target_points;
+    Vector<double> target_weights;
+
+    // Get support points for target mesh
+    std::map<types::global_dof_index, Point<dim>> target_support_points;
+    DoFTools::map_dofs_to_support_points(mapping, dof_handler_2, target_support_points);
+
+    // Create target points and weights from non-zero density regions
+    std::vector<std::pair<Point<dim>, double>> target_point_weights;
+    for (const auto& [dof_index, point] : target_support_points)
+    {
+      if (dof_index < target_density.size())
+      {
+        target_point_weights.emplace_back(point, target_density[dof_index]);
+      }
+    }
+
+    pcout << "Created " << target_point_weights.size() << " target points from density field" << std::endl;
+
+    if (target_point_weights.empty())
+    {
+      pcout << "Warning: No valid target points found. Skipping optimal transport computation." << std::endl;
+      return;
+    }
+
+    // Extract points and weights
+    target_points.reserve(target_point_weights.size());
+    target_weights.reinit(target_point_weights.size());
+    for (size_t i = 0; i < target_point_weights.size(); ++i)
+    {
+      target_points.push_back(target_point_weights[i].first);
+      target_weights[i] = target_point_weights[i].second;
+    }
+
+    // Setup source measure using the PDE-computed density
+    Vector<double> source_density_copy = source_density;
+    ot_problem.setup_source_measure(triangulation_1, dof_handler_1, source_density_copy);
+    
+    // Setup target measure
+    ot_problem.setup_target_measure(target_points, target_weights);
+    
+    // Prepare multilevel hierarchies
+    pcout << "Preparing multilevel hierarchies..." << std::endl;
+    ot_problem.prepare_multilevel_hierarchies();
+    
+    // Solve the optimal transport problem
+    pcout << "Solving optimal transport problem..." << std::endl;
+    Vector<double> potentials = ot_problem.solve();
+
+    pcout << "Optimal transport computation completed successfully!" << std::endl;
   }
 
   template <int dim>
@@ -518,8 +591,8 @@ namespace Applications
     run_target();
 
     // Add density field processing and optimal transport
-    // setup_density_fields();
-    // compute_optimal_transport();
+    setup_density_fields();
+    compute_optimal_transport();
   }
 } // namespace Applications
 
