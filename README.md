@@ -38,6 +38,22 @@ The methods implemented in this library are detailed in the publication: [**"Eff
 
 ## Quick Start
 
+### Option 1: Using Docker
+
+Docker images for linux/amd64 are available on [Docker Hub](https://hub.docker.com/r/moaadkhamlich/semidiscreteot). These images are based on [Deal.II](https://www.dealii.org/) v9.5.0 and include a pre-configured [Geogram](https://github.com/BrunoLevy/geogram) installation, providing an isolated environment with a compiled version of the SemiDiscreteOT library. To pull the image, run the following command:
+
+```bash
+docker pull moaadkhamlich/semidiscreteot:latest
+```
+
+Once the image is downloaded, you can start the container and mount your working directory by executing:
+
+```bash
+docker run -ti --rm -v "${PWD}:/workspace" moaadkhamlich/semidiscreteot:latest
+```
+
+### Option 2: Building from Source
+
 1.  **Clone the repository:**
     ```bash
     git clone https://github.com/SemiDiscreteOT/SemiDiscreteOT.git

@@ -1,4 +1,4 @@
-name: Publish Docker Image
+name: Publish Dependencies Docker Image
 
 on:
   workflow_dispatch:  # Manual trigger only
