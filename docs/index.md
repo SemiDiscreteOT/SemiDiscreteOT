@@ -10,7 +10,7 @@
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/SemiDiscreteOT/SemiDiscreteOT)
 [![Documentation](https://img.shields.io/badge/docs-doxygen-blue.svg)](https://semidiscreteot.github.io/SemiDiscreteOT/)
-[![arXiv](https://img.shields.io/badge/arXiv-TEMP--LINK-red.svg)](https://arxiv.org/abs/TEMP-LINK)
+[![arXiv](https://img.shields.io/badge/arXiv-2507.23602-b31b1b.svg)](https://arxiv.org/abs/2507.23602)
 [![DOI](https://img.shields.io/badge/DOI-pending-orange.svg)](https://github.com/SemiDiscreteOT/SemiDiscreteOT)
 
 </div>
@@ -19,7 +19,7 @@
 
 SemiDiscreteOT is a high-performance C++ library for solving regularized semi-discrete optimal transport problems. It provides efficient numerical strategies for computing optimal transport plans between continuous and discrete probability measures, with a focus on large-scale applications.
 
-The methods implemented in this library are detailed in the publication: [**"Efficient Numerical Strategies for Entropy-Regularized Semi-Discrete Optimal Transport"**](https://arxiv.org/abs/TEMP-LINK) by Moaad Khamlich, Francesco Romor, and Gianluigi Rozza (2025).
+The methods implemented in this library are detailed in the publication: [**"Efficient Numerical Strategies for Entropy-Regularized Semi-Discrete Optimal Transport"**](https://arxiv.org/abs/2507.23602) by Moaad Khamlich, Francesco Romor, and Gianluigi Rozza (2025).
 
 ## Features
 
@@ -72,12 +72,14 @@ xdg-open docs/doxygen/html/index.html
 If you use SemiDiscreteOT in your research, please cite the following publication:
 
 ```bibtex
-@article{khamlich2024efficient,
-  title={Efficient Numerical Strategies for Entropy-Regularized Semi-Discrete Optimal Transport},
-  author={Khamlich, Moaad and Romor, Francesco and Rozza, Gianluigi},
-  journal={arXiv preprint},
-  year={2025},
-  note={Available at: \url{https://github.com/SemiDiscreteOT/SemiDiscreteOT}}
+@misc{khamlich2025efficientnumericalstrategiesentropyregularized,
+      title={Efficient Numerical Strategies for Entropy-Regularized Semi-Discrete Optimal Transport}, 
+      author={Moaad Khamlich and Francesco Romor and Gianluigi Rozza},
+      year={2025},
+      eprint={2507.23602},
+      archivePrefix={arXiv},
+      primaryClass={math.NA},
+      url={https://arxiv.org/abs/2507.23602}, 
 }
 ```
 
