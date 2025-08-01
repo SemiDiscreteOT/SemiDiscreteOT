@@ -1,0 +1,45 @@
+##
+#  CMake script
+##
+
+CMAKE_MINIMUM_REQUIRED(VERSION 3.13.0)
+
+
+# Deal.II setup first
+FIND_PACKAGE(deal.II 9.5.0 REQUIRED)
+DEAL_II_INITIALIZE_CACHED_VARIABLES()
+
+# Set project name
+PROJECT(Tutorial VERSION 1.0.0 LANGUAGES CXX C)
+
+# Set C++ standard
+SET(CMAKE_CXX_STANDARD 17)
+SET(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+SET(SemiDiscreteOT_DIR ../../build)
+FIND_PACKAGE(SemiDiscreteOT REQUIRED)
+MESSAGE(STATUS "SemiDiscreteOT_FOUND: ${SemiDiscreteOT_FOUND}")
+MESSAGE(STATUS "SemiDiscreteOT_DIR: ${SemiDiscreteOT_DIR}")
+MESSAGE(STATUS "SemiDiscreteOT_LIBRARIES: ${SemiDiscreteOT_LIBRARIES}")
+MESSAGE(STATUS "SemiDiscreteOT_INCLUDE_DIRS: ${SemiDiscreteOT_INCLUDE_DIRS}")
+
+FIND_PACKAGE(VTK REQUIRED)
+
+# Collect source files
+FILE(GLOB_RECURSE TUTORIAL_SOURCES "src/*.cc")
+
+# Create executable
+ADD_EXECUTABLE(tutorial_0 ${TUTORIAL_SOURCES})
+
+# Add include directories
+TARGET_INCLUDE_DIRECTORIES(tutorial_0 PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+
+# Link with RSOT and Deal.II
+TARGET_LINK_LIBRARIES(tutorial_0 SemiDiscreteOT::SemiDiscreteOT)
+DEAL_II_SETUP_TARGET(tutorial_0)
+
+# Set output directory
+SET_TARGET_PROPERTIES(tutorial_0 PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/run)
