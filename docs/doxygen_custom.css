@@ -1,0 +1,49 @@
+/* Custom Doxygen CSS for SemiDiscreteOT */
+
+/* Make header more compact */
+#top {
+    height: 110px !important;
+    min-height: 110px !important;
+}
+
+/* Reduce logo container size */
+.header .headertitle {
+    height: 90px !important;
+    padding: 10px 0 !important;
+}
+
+/* Control logo size more precisely */
+.header .headertitle .ingroups img {
+    max-height: 75px !important;
+    max-width: 300px !important;
+    width: auto !important;
+    height: auto !important;
+}
+
+/* Adjust title text positioning */
+.header .headertitle .title {
+    line-height: 75px !important;
+    vertical-align: middle !important;
+}
+
+/* Make header navigation more compact */
+#navrow1, #navrow2, #navrow3, #navrow4 {
+    height: 30px !important;
+    line-height: 30px !important;
+}
+
+/* Reduce overall header padding */
+.header {
+    padding: 5px 0 !important;
+}
+
+/* Logo positioning */
+#projectlogo {
+    vertical-align: middle !important;
+    padding-right: 10px !important;
+}
+
+#projectlogo img {
+    max-height: 75px !important;
+    width: auto !important;
+}
