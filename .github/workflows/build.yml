@@ -8,7 +8,9 @@ on:
 
 env:
   BUILD_TYPE: Release
+  DOCKERHUB_OWNER: moaadkhamlich
   DOCKER_IMAGE_NAME: semidiscreteot-builder
+  LIBRARY_IMAGE_NAME: semidiscreteot
   GEOGRAM_DIR: /usr/local/geogram
 
 jobs:
@@ -24,10 +26,16 @@ jobs:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-    - name: Build project
-      run: |
-        docker run --rm \
-          -v ${{github.workspace}}:/workspace \
-          -e GEOGRAM_DIR=${GEOGRAM_DIR} \
-          ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.DOCKER_IMAGE_NAME }}:latest \
-          bash -c "cmake -B build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DGEOGRAM_DIR=${GEOGRAM_DIR} && cmake --build build --config ${{env.BUILD_TYPE}}"
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build and push library Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile.library
+        push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        tags: |
+          ${{ env.DOCKERHUB_OWNER }}/${{ env.LIBRARY_IMAGE_NAME }}:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max

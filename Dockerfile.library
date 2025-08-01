@@ -1,0 +1,19 @@
+FROM moaadkhamlich/semidiscreteot-builder
+
+# Install Geogram dependencies
+USER root
+
+# Set Geogram installation directory
+ENV GEOGRAM_DIR=/usr/local/geogram
+ENV LD_LIBRARY_PATH="${GEOGRAM_DIR}/lib"
+
+# Copy and build the SemiDiscreteOT library
+COPY . /workspace
+WORKDIR /workspace
+
+# Build the library
+RUN cmake -B build -DCMAKE_BUILD_TYPE=Release -DGEOGRAM_DIR=${GEOGRAM_DIR} \
+    && cmake --build build --config Release \
+    && cd build && make install
+
+CMD ["/bin/bash"]
