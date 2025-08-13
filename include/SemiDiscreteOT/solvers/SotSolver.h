@@ -318,7 +318,6 @@ public:
         const Vector<double> &potential,
         const std::vector<unsigned int> &potential_indices,
         std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> &conditioned_densities,
-        LinearAlgebra::distributed::Vector<double, MemorySpace::Host> &target_indices,
         bool thresholded = true);
 
     // Distance function

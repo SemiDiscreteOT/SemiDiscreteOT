@@ -74,7 +74,8 @@
 #include <deal.II/base/logstream.h>
 #include <deal.II/base/parameter_handler.h>
 
-#include <SemiDiscreteOT/core/Lloyd.h>
+#include <SemiDiscreteOT/core/SemiDiscreteOT.h>
+#include <SemiDiscreteOT/core/PowerDiagram.h>
 #include <SemiDiscreteOT/solvers/Distance.h>
 #include <Kokkos_DualView.hpp>
 
@@ -92,11 +93,15 @@ namespace LA
 #endif
 } // namespace LA
 
+#ifdef MEMORY_SPACE_CUDA
+using memory_space = Kokkos::CudaSpace;// CudaUVMSpace
+#else
+using memory_space = Kokkos::OpenMP;
+#endif
+
 namespace Applications
 {
   using namespace dealii;
-  using memory_space = Kokkos::CudaSpace; // CudaUVMSpace
-
 
   class KokkosSOT : public ParameterAcceptor, public SemiDiscreteOT<3>
   {
@@ -114,7 +119,8 @@ namespace Applications
       const Kokkos::DualView<double*[3], memory_space> y,
       const Kokkos::DualView<double*, memory_space> nu,
       const Kokkos::DualView<double*[3], memory_space> x,
-      const Kokkos::DualView<double*, memory_space> mu);
+      const Kokkos::DualView<double*, memory_space> mu,
+      const bool save = false);
 
     void kokkos_regularized_semidiscrete_ot(Vector<double> &potential);
     double evaluate_functional_rsot(
@@ -125,8 +131,13 @@ namespace Applications
       const Kokkos::DualView<double*, memory_space> nu,
       const Kokkos::DualView<double*[3], memory_space> x,
       const Kokkos::DualView<double*, memory_space> mu);
+    void kokkos_init(
+      Kokkos::DualView<double*[3], memory_space>y,
+      Kokkos::DualView<double*, memory_space>nu,
+      Kokkos::DualView<double*[3], memory_space>x,
+      Kokkos::DualView<double*, memory_space>mu);
   private:
-    void setup_system();
+    void setup_system(const std::string name_1, const std::string name_2);
     void assemble_system();
     unsigned int solve();
     void output_results() const;
@@ -134,13 +145,7 @@ namespace Applications
     void output_normalized_source(LinearAlgebra::distributed::Vector<double, MemorySpace::Host> &source) const;
     void output_conditioned_densities(
       std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> &conditioned_densities,
-      LinearAlgebra::distributed::Vector<double, MemorySpace::Host> &target_indices,
       std::vector<unsigned int> &potential_indices) const;
-    void kokkos_init(
-      Kokkos::DualView<double*[3], memory_space>y,
-      Kokkos::DualView<double*, memory_space>nu,
-      Kokkos::DualView<double*[3], memory_space>x,
-      Kokkos::DualView<double*, memory_space>mu);
 
     MPI_Comm mpi_communicator;
     ConditionalOStream pcout;
@@ -148,13 +153,15 @@ namespace Applications
     const std::string vtk_folder = "vtk";
     const std::string output_dir = "output/density_field/";
 
-    parallel::distributed::Triangulation<3> tria_1;
-    parallel::distributed::Triangulation<3> tria_2;
+    Triangulation<3> tria_1;
+    Triangulation<3> tria_2;
 
     DoFHandler<3> dof_handler_1;
     DoFHandler<3> dof_handler_2;
-    FE_Q<3> fe;
-    MappingQ<3> mapping;
+    // FE_Q<3> fe;
+    // MappingQ<3> mapping;
+    FE_SimplexP<3> fe;
+    MappingFE<3> mapping;
 
     AffineConstraints<double> constraints;
 
@@ -172,6 +179,8 @@ namespace Applications
     unsigned int n_refinements;
     unsigned int n_evecs        = 5;
     unsigned int n_conditioned_densities = 5;
+
+    unsigned int iter_save = 0;
   };
 
   struct ScratchData

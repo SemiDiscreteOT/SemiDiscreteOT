@@ -7,13 +7,17 @@
  
 #include <deal.II/numerics/history.h>
  
-#include <deal.II/optimization/line_minimization.h>
+#include <SemiDiscreteOT/core/line_minimization.h>
  
 #include <limits>
  
 #include <Kokkos_Core.hpp>
 
-using memory_space = Kokkos::CudaSpace; // CudaUVMSpace
+#ifdef MEMORY_SPACE_CUDA
+using memory_space = Kokkos::CudaSpace;
+#else
+using memory_space = Kokkos::OpenMP;
+#endif
 
 double l2norm(
   const Kokkos::View<double*, memory_space> g)
@@ -104,10 +108,12 @@ public:
   struct AdditionalData
   {
     explicit AdditionalData(const unsigned int max_history_size = 5,
-                            const bool         debug_output     = false);
+                            const bool         debug_output     = false,
+                          const unsigned int output_frequency = 10);
  
     unsigned int max_history_size;
     bool debug_output;
+    unsigned int output_frequency = 10; // Frequency of debug output
   };
 
   struct BFGSControl
@@ -159,9 +165,11 @@ protected:
 // -------------------  inline and template functions ----------------
 SolverKokkosBFGS::AdditionalData::AdditionalData(
   const unsigned int max_history_size_,
-  const bool         debug_output_)
+  const bool         debug_output_,
+  const unsigned int output_frequency_)
   : max_history_size(max_history_size_)
   , debug_output(debug_output_)
+  , output_frequency(output_frequency_)
 {}
 
 SolverKokkosBFGS::BFGSControl::BFGSControl(
@@ -227,16 +235,37 @@ double SolverKokkosBFGS::line_search(
   };
 
   // loose line search:
-  std::pair<double, int> res = LineMinimization::line_search<double>(
+  std::pair<double, int> res = WassersteinLineMinimization::line_search<double>(
     line_func,
     f0,
     g0,
-    LineMinimization::poly_fit<double>,
+    WassersteinLineMinimization::poly_fit<double>,
     a1,
     0.9,
-    0.001);
-    // std::numeric_limits<double>::max(),
-    // 100); // n_iterations
+    0.001,
+    std::numeric_limits<double>::max(),
+    50);
+    // ,
+    // 0.1,
+    // 200,
+    // true);
+
+  if (std::isnan(res.first))
+  {
+    double alpha = 0.5;
+    for (unsigned int i = 0; i < 5; ++i)
+    {
+      init(x, x0); // Revert to the previous step
+      add(x, alpha, p); // Update x with p using x_line = 0.001
+      f = compute(x, g);
+      if (f < f_prev)
+        break;
+      alpha *= 0.5; // Reduce step size
+    }
+    Assert(alpha <= std::pow(0.5, 5),
+      ExcMessage("Gradient descent limit reached."));
+    return alpha; // Return a step size of 0
+  }
 
   if (first_step)
     first_step = false;
@@ -393,10 +422,26 @@ SolverKokkosBFGS::solve(
     g_l1_norm = l1norm(g);
     double elapsed = timer.seconds();
     Kokkos::fence();
-    std::cout << "Iteration " << k << " in " << elapsed*1e6 << " mus, "
-          << " Functional value: " << f
+
+    if (k==1 || k % additional_data.output_frequency == 0)
+    {
+      if (g_l1_norm > solver_control.tolerance * 10)
+      {
+        std::cout << "\033[31m" // Red color
+          << "Iteration " << k << " in " << elapsed * 1e6 << " mus, "
+          << "Functional value: " << f
           << ", L2-norm grad: " << g_l2_norm
-          << ", L1-norm grad: " << g_l1_norm << std::endl;
+          << ", L1-norm grad: " << g_l1_norm << "\033[0m" << std::endl;
+      }
+      else
+      {
+        std::cout << "\033[33m" // Yellow color
+          << "Iteration " << k << " in " << elapsed * 1e6 << " mus, "
+          << "Functional value: " << f
+          << ", L2-norm grad: " << g_l2_norm
+          << ", L1-norm grad: " << g_l1_norm << "\033[0m" << std::endl;
+      }
+    }
   }
 }
    

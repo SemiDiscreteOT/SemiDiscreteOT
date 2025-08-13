@@ -987,23 +987,14 @@ void SotSolver<dim, spacedim>::get_potential_conditioned_density(
     DoFTools::map_dofs_to_support_points(
         mapping, dof_handler, sp);
     
-    target_indices.reinit(locally_owned_dofs, mpi_communicator);
     for (unsigned int idensity = 0; idensity < conditioned_densities.size(); ++idensity)
         conditioned_densities[idensity].reinit(locally_owned_dofs, mpi_communicator);
         
     double epsilon_inv = 1.0 / current_epsilon;
-    pcout << "Epsilon conditioned densities: " << current_epsilon << std::endl;
     
     for (auto idx: locally_owned_dofs)
     {
-        std::vector<std::size_t> cell_target_indices;
-        if (thresholded)
-            cell_target_indices = find_nearest_target_points(sp[idx]);
-        else{
-            cell_target_indices.resize(potential.size());
-            std::iota(cell_target_indices.begin(), cell_target_indices.end(), 0);
-        }
-        target_indices[idx] = cell_target_indices.size();
+        std::vector<std::size_t> cell_target_indices = find_nearest_target_points(sp[idx]);
         
         std::vector<double> exp(potential.size(), 0.0);
         double total_sum_exp = 0;
@@ -1048,9 +1039,10 @@ void SotSolver<dim, spacedim>::get_potential_conditioned_density(
         } 
     }
         
-    target_indices.compress(VectorOperation::insert);
     for (unsigned int idensity = 0; idensity < conditioned_densities.size(); ++idensity)
+    {
         conditioned_densities[idensity].compress(VectorOperation::insert);
+    }
 }
 
 

@@ -30,20 +30,20 @@ namespace Applications
         ParameterAcceptor("/Tutorial 3/KokkosSOT"), 
         mpi_communicator(MPI_COMM_WORLD), 
         pcout(std::cout, (Utilities::MPI::this_mpi_process(mpi_communicator) == 0)),
-        tria_1(
-            mpi_communicator,
-            typename Triangulation<3>::MeshSmoothing(
-                Triangulation<3>::smoothing_on_refinement |
-                Triangulation<3>::smoothing_on_coarsening)),
-        tria_2(
-          mpi_communicator,
-          typename Triangulation<3>::MeshSmoothing(
-              Triangulation<3>::smoothing_on_refinement |
-              Triangulation<3>::smoothing_on_coarsening)),
+        // tria_1(
+        //     mpi_communicator,
+        //     typename Triangulation<3>::MeshSmoothing(
+        //         Triangulation<3>::smoothing_on_refinement |
+        //         Triangulation<3>::smoothing_on_coarsening)),
+        // tria_2(
+        //   mpi_communicator,
+        //   typename Triangulation<3>::MeshSmoothing(
+        //       Triangulation<3>::smoothing_on_refinement |
+        //       Triangulation<3>::smoothing_on_coarsening)),
         dof_handler_1(tria_1), 
         dof_handler_2(tria_2), 
         fe(1), 
-        mapping(1)
+        mapping(fe)
   {
     add_parameter("task", task);
     add_parameter("number of refinements", n_refinements);
@@ -65,19 +65,22 @@ namespace Applications
     }
   }
 
-  void KokkosSOT::setup_system()
+  void KokkosSOT::setup_system(
+    const std::string name_1, const std::string name_2)
   {
-    std::string name_1 = "cube";
-
     // const double centerline_radius = 2.0;
     // const double inner_radius = 0.5;
     // GridGenerator::torus(tria_1, centerline_radius, inner_radius);
 
     const double left = -1.0;
     const double right = 1.0;
-    GridGenerator::hyper_cube(tria_1, left, right);
-    tria_1.refine_global(n_refinements+1);
+    Triangulation<3> tria_tmp;
+    GridGenerator::hyper_cube(tria_tmp, left, right);
+    tria_tmp.refine_global(n_refinements+1);
+    if (task == "kokkossot")
+      tria_tmp.refine_global(1);
 
+    GridGenerator::convert_hypercube_to_simplex_mesh(tria_tmp, tria_1);
     dof_handler_1.distribute_dofs(fe);
 
     pcout << "Number of active cells: "
@@ -88,11 +91,9 @@ namespace Applications
           << "Number of degrees of freedom: " << dof_handler_1.n_dofs() <<  std::endl;
 
     // Save mesh in MSH format
-    GridOutFlags::Msh msh_flags(true, true);
     std::string msh_filename = "output/data_mesh/" + name_1 + ".msh";
     std::ofstream msh_out(msh_filename);
     GridOut grid_out;
-    grid_out.set_flags(msh_flags);
     grid_out.write_msh(tria_1, msh_out);
     pcout << "Saved " << msh_filename << std::endl;
 
@@ -142,24 +143,24 @@ namespace Applications
       eigenfunctions[i].reinit(locally_owned_dofs, mpi_communicator);
     eigenvalues.resize(eigenfunctions.size());
 
-    std::string name_2 = "ball";
     // std::vector<Point<3>> vertices = {
     //   Point<3>(2.5, -2, 0),
     //   Point<3>(-2.5*0.5, -2, 2.5*std::sqrt(3)/2),
     //   Point<3>(0, 2, 0),
     //   Point<3>(-2.5*0.5, -2, -2.5*std::sqrt(3)/2)
     // };
-    // GridGenerator::simplex(tria_2, vertices);
+    // GridGenerator::simplex(tria_tmp, vertices);
     const double radius = 1.0;
-    GridGenerator::hyper_ball(tria_2, Point<3>(0, 0, 0), radius);
-    tria_2.refine_global(n_refinements);
+    GridGenerator::hyper_ball(tria_tmp, Point<3>(0, 0, 0), radius);
+    tria_tmp.refine_global(n_refinements);
+
+    GridGenerator::convert_hypercube_to_simplex_mesh(tria_tmp, tria_2);
     dof_handler_2.distribute_dofs(fe);
 
     // Save mesh in MSH format
     std::string msh_filename_2 = "output/data_mesh/" + name_2 + ".msh";
     std::ofstream msh_out_2(msh_filename_2);
     GridOut grid_out_2;
-    grid_out_2.set_flags(msh_flags);
     grid_out_2.write_msh(tria_2, msh_out_2);
     pcout << "Saved " << msh_filename_2 << std::endl;
 
@@ -397,7 +398,6 @@ namespace Applications
 
   void KokkosSOT::output_conditioned_densities(
     std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> &conditioned_densities,
-    LinearAlgebra::distributed::Vector<double, MemorySpace::Host> &target_indices,
      std::vector<unsigned int> &potential_indices) const
   {
     DataOut<3> data_out;
@@ -423,11 +423,6 @@ namespace Applications
           DataOut<3>::type_dof_data,
           interpretation);
     }
-    data_out.add_data_vector(
-      target_indices,
-      std::string("target_indices"),
-      DataOut<3>::type_dof_data,
-      interpretation);
 
     data_out.build_patches(
       mapping, mapping.get_degree() + 1,
@@ -455,13 +450,22 @@ namespace Applications
       for (unsigned int d = 0; d < 3; ++d)
         y.h_view(i, d) = this->target_points[i][d];
     };
-  
+    
     y.modify_host();
     y.sync_device();
     nu.modify_host();
     nu.sync_device();
     std::cout << "Device pointer: " << y.d_view.data() << std::endl;
     std::cout << "Host pointer:   " << y.h_view.data() << std::endl;
+
+    double nu_l1_norm = 0.0;
+    Kokkos::parallel_reduce("ComputeNuL1Norm", nu.extent(0), KOKKOS_LAMBDA(int it, double &sum) {
+      sum += Kokkos::abs(nu.d_view(it));
+    }, nu_l1_norm);
+
+    if (std::abs(nu_l1_norm - 1.0) > 1e-6) {
+      throw std::runtime_error("The L1 norm of nu is not 1. It is: " + std::to_string(nu_l1_norm));
+    }
 
     unsigned int source_index = 0;
     for (const auto &cell : dof_handler_1.active_cell_iterators())
@@ -489,21 +493,84 @@ namespace Applications
     pcout << "End Kokkos view\n";
   }
 
+  void save_vtk(
+    const Kokkos::DualView<double*[3], memory_space> x,
+    const Kokkos::View<int*, memory_space> argmax,
+    const Kokkos::DualView<double*[3], memory_space> y,
+    const unsigned int iter_save)
+  {
+    std::string vtk_filename = "output/data_mesh/argmax_support_points_"+std::to_string(iter_save)+".vtk";
+    std::ofstream vtk_out;
+    vtk_out.open(vtk_filename);
+
+    // Header
+    vtk_out << "# vtk DataFile Version 3.0\n";
+    vtk_out << "Argmax Support Points\n";
+    vtk_out << "ASCII\n";
+    vtk_out << "DATASET UNSTRUCTURED_GRID\n";
+
+    // Points
+    vtk_out << "POINTS " << x.extent(0) << " double\n";
+    for (unsigned int i = 0; i < x.extent(0); ++i) {
+      vtk_out << static_cast<double>(x.h_view(i, 0)) << " "
+              << static_cast<double>(x.h_view(i, 1)) << " "
+              << static_cast<double>(x.h_view(i, 2)) << "\n";
+    }
+
+    // Cells (each point is a vertex)
+    vtk_out << "CELLS " << x.extent(0) << " " << 2 * x.extent(0) << "\n";
+    for (unsigned int i = 0; i < x.extent(0); ++i) {
+      vtk_out << "1 " << i << "\n";
+    }
+
+    // Cell types (all vertices)
+    vtk_out << "CELL_TYPES " << x.extent(0) << "\n";
+    for (unsigned int i = 0; i < x.extent(0); ++i) {
+      vtk_out << "1\n"; // VTK_VERTEX
+    }
+
+    // Argmax data
+    vtk_out << "POINT_DATA " << x.extent(0) << "\n";
+    vtk_out << "SCALARS argmax int 1\n";
+    vtk_out << "LOOKUP_TABLE default\n";
+
+    auto argmax_host = Kokkos::create_mirror_view(argmax);
+    Kokkos::deep_copy(argmax_host, argmax);
+    for (unsigned int i = 0; i < x.extent(0); ++i) {
+      vtk_out << argmax_host(i) << "\n";
+    }
+
+    // Displacement field
+    vtk_out << "VECTORS displacement double\n";
+    for (unsigned int i = 0; i < x.extent(0); ++i) {
+      vtk_out << y.h_view(argmax_host(i), 0) - x.h_view(i, 0) << " "
+          << y.h_view(argmax_host(i), 1) - x.h_view(i, 1) << " "
+          << y.h_view(argmax_host(i), 2) - x.h_view(i, 2) << "\n";
+    }
+
+    vtk_out.close();
+  }
+
   double KokkosSOT::evaluate_functional_sot(
     const Kokkos::View<double*, memory_space> phi,
     Kokkos::View<double*, memory_space> grad,
     const Kokkos::DualView<double*[3], memory_space> y,
     const Kokkos::DualView<double*, memory_space> nu,
     const Kokkos::DualView<double*[3], memory_space> x,
-    const Kokkos::DualView<double*, memory_space> mu)
+    const Kokkos::DualView<double*, memory_space> mu,
+    const bool save)
   {
+    Kokkos::parallel_for("ResetGrad", grad.extent(0), KOKKOS_LAMBDA(int i) {
+        grad(i) = 0.0;
+      });
+
     Kokkos::View<int*, memory_space> argmax("argmax", x.extent(0));
     Kokkos::View<double*, memory_space> maxs("maxs", x.extent(0));
 
     Kokkos::parallel_for("ComputeArgmax", x.extent(0), KOKKOS_LAMBDA(int i) {
       double max_kernel = -1e20;
       int max_j = -1;
-      for (int j = 0; j < y.extent(0); ++j) {
+      for (int j = 0; j < int(y.extent(0)); ++j) {
         double dist = 0.0;
         for (int d = 0; d < 3; ++d) {
           double tmp = x.d_view(i, d) - y.d_view(j, d); // euclidean distance
@@ -539,14 +606,12 @@ namespace Applications
       dot_sum += phi(j) * nu.d_view(j);
     }, dot_phi_nu);
 
-    pcout << "Functional value: " << functional_value << " " << dot_phi_nu << std::endl;
-    double grad_l2_norm = 0.0;
-    Kokkos::parallel_reduce("GradL2Norm", grad.extent(0), KOKKOS_LAMBDA(int i, double &sum) {
-      sum += grad(i) * grad(i);
-    }, grad_l2_norm);
-    grad_l2_norm = std::sqrt(grad_l2_norm);
-    pcout << "Grad L2 norm: " << grad_l2_norm << std::endl;
-
+    // Save argmax as PLY file with support points
+    if (save)
+    {
+      save_vtk(x, argmax, y, iter_save);
+      ++iter_save;
+    }
     return functional_value - dot_phi_nu;
   }
 
@@ -557,11 +622,17 @@ namespace Applications
     Kokkos::DualView<double*[3], memory_space> y("y", n_target, 3);
     Kokkos::DualView<double*, memory_space> nu("nu", n_target);
 
+    pcout << "Memory space: "
+      << typeid(typename decltype(phi)::memory_space).name() << std::endl;
+    pcout << "Running on Kokkos execution space: " 
+        << typeid(Kokkos::DefaultExecutionSpace).name() << std::endl;
+
     auto quadrature = Utils::create_quadrature_for_mesh<3>(tria_1, solver_params.quadrature_order);
+    pcout << "Quadrature size: " << quadrature->size() << std::endl;
     const int n_source = tria_1.n_active_cells() * quadrature->size();
     Kokkos::DualView<double*[3], memory_space> x("x", n_source, 3);
     Kokkos::DualView<double*, memory_space> mu("mu", n_source);
-
+    
     auto phi_host = Kokkos::create_mirror_view(phi);
     for (int i = 0; i < n_target; ++i)
       phi_host(i) = potential[i];
@@ -573,49 +644,73 @@ namespace Applications
         << typeid(Kokkos::DefaultExecutionSpace).name() << std::endl;
 
     SotParameterManager::SolverParameters& solver_config = this->solver_params;
+
     SolverKokkosBFGS::BFGSControl control(solver_config.max_iterations, solver_config.tolerance);
     SolverKokkosBFGS::AdditionalData additional_data;
+    additional_data.output_frequency = 100;
     pcout << "x: " << x.extent(0) << ", y: " << y.extent(0) << std::endl;
     
-    // pcout << "Using BFGS solver with max iterations: "
-    //       << control.max_iter << ", tolerance: " << control.tolerance << std::endl;
+    pcout << "Using BFGS solver with max iterations: "
+          << control.max_iter << ", tolerance: " << control.tolerance << std::endl;
 
-    // SolverKokkosBFGS solver(control, additional_data);
-    // solver.solve(
-    //   [this, y, nu, x, mu](const Kokkos::View<double*, memory_space> phi_, Kokkos::View<double*, memory_space> grad_) {
-    //     return this->evaluate_functional_sot(
-    //       phi_, grad_, y, nu, x, mu);
-    //   },
-    //   phi
-    // );
+    SolverKokkosBFGS solver(control, additional_data);
+    solver.solve(
+      [this, y, nu, x, mu](const Kokkos::View<double*, memory_space> phi_, Kokkos::View<double*, memory_space> grad_) {
+        return this->evaluate_functional_sot(
+          phi_, grad_, y, nu, x, mu);
+      },
+      phi
+    );
 
-
-    // Simple gradient descent loop
-    const int max_iters = 100;
-    const double tol = 1e-6;
-    const double step_size = 1e-3;
     Kokkos::View<double*, memory_space> grad("grad", n_target);
+    this->evaluate_functional_sot(phi, grad, y, nu, x, mu, true);
 
-    for (int iter = 0; iter < max_iters; ++iter) {
-      double fval = this->evaluate_functional_sot(phi, grad, y, nu, x, mu);
+    // // Simple gradient descent loop
+    // const int max_iters = solver_config.max_iterations;
+    // const double tol = solver_config.tolerance;
+    // pcout << "x: " << x.extent(0) << ", y: " << y.extent(0) << std::endl;
+    // pcout << "Using gradient descent solver with max iterations: "
+    //       << max_iters << ", tolerance: " << tol << ", step size: " << step_size << std::endl;
 
-      // Compute grad L2 norm
-      double grad_l2_norm = 0.0;
-      Kokkos::parallel_reduce("GradL2Norm", grad.extent(0), KOKKOS_LAMBDA(int i, double &sum) {
-      sum += grad(i) * grad(i);
-      }, grad_l2_norm);
-      grad_l2_norm = std::sqrt(grad_l2_norm);
+    // Kokkos::View<double*, memory_space> grad("grad", n_target);
+    // double fval = 0.0;
+    // for (int iter = 0; iter < max_iters; ++iter) {
+    //   if (iter % output_frequency == 0)
+    //   {
+    //     fval = this->evaluate_functional_sot(phi, grad, y, nu, x, mu, true);
+    //   } else {
+    //     fval = this->evaluate_functional_sot(phi, grad, y, nu, x, mu, false);
+    //   }
 
-      pcout << "GD iter " << iter << ", fval: " << fval << ", grad norm: " << grad_l2_norm << std::endl;
+    //   // Compute grad L2 norm
+    //   double grad_l1_norm = 0.0;
+    //   Kokkos::parallel_reduce("GradL1Norm", grad.extent(0), KOKKOS_LAMBDA(int i, double &sum) {
+    //   sum += Kokkos::abs(grad(i));
+    //   }, grad_l1_norm);
 
-      if (grad_l2_norm < tol)
-      break;
+    //   if (iter % output_frequency == 0)
+    //   {
+    //     if (grad_l1_norm > tol * 10)
+    //       pcout << "\033[31mGD iter " << iter << ", fval: " << fval << ", grad l1-norm: " << grad_l1_norm << "\033[0m" << std::endl;
+    //     else
+    //       pcout << "\033[33mGD iter " << iter << ", fval: " << fval << ", grad l1-norm: " << grad_l1_norm << "\033[0m" << std::endl;
+    //   }
 
-      // Gradient descent update
-      Kokkos::parallel_for("GDUpdate", grad.extent(0), KOKKOS_LAMBDA(int i) {
-      phi(i) -= step_size * grad(i);
-      });
-    }
+    //   if (grad_l1_norm < tol)
+    //   break;
+
+    //   // Compute average gradient
+    //   double grad_avg = 0.0;
+    //   Kokkos::parallel_reduce("GradAverage", grad.extent(0), KOKKOS_LAMBDA(int i, double &sum) {
+    //     sum += grad(i);
+    //   }, grad_avg);
+    //   grad_avg /= grad.extent(0);
+
+    //   // Gradient descent update
+    //   Kokkos::parallel_for("GDUpdate", grad.extent(0), KOKKOS_LAMBDA(int i) {
+    //   phi(i) -= step_size * (grad(i)-grad_avg);
+    //   });
+    // }
 
     Kokkos::deep_copy(phi_host, phi);
     for (int i = 0; i < n_target; ++i)
@@ -767,7 +862,10 @@ namespace Applications
     pcout << "n threads: " << dealii::MultithreadInfo::n_threads() << std::endl;
     
     this->param_manager.print_parameters();
-    setup_system();
+
+    std::string name_1 = "cube";
+    std::string name_2 = "ball";
+    setup_system(name_1, name_2);
 
     bool non_uniform_source_density = false;
     if (non_uniform_source_density)
@@ -906,10 +1004,18 @@ namespace Applications
     if (task == "kokkossot")
     {
       potential.reinit(this->target_points.size());
+      for (unsigned int i = 0; i < potential.size(); ++i)
+        potential[i] = 1.0 / potential.size();
       kokkos_semidiscrete_ot(potential);
       this->save_results(potential, "potentials_kokkossot");
       threshold = false;
       save_conditioned_densities = false;
+
+      PowerDiagramSpace::DealIIPowerDiagram<3, 3> power_diagram(
+        tria_1);
+      power_diagram.set_generators(this->target_points, potential);
+      power_diagram.compute_power_diagram();
+      power_diagram.output_vtu(output_dir + "/power_diagram");
     }
     else if (task == "kokkosrsot")
     {
@@ -942,15 +1048,13 @@ namespace Applications
         potential_indices.push_back(i*N);
 
       std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> conditioned_densities;
-      LinearAlgebra::distributed::Vector<double, MemorySpace::Host> target_indices;
   
       this->sot_solver->get_potential_conditioned_density(
         dof_handler_1, mapping,
-        potential, potential_indices, conditioned_densities, target_indices, threshold);
+        potential, potential_indices, conditioned_densities, threshold);
   
       output_conditioned_densities(
         conditioned_densities,
-        target_indices,
         potential_indices);
     }
   }

@@ -9,25 +9,50 @@ SET(CMAKE_BUILD_TYPE "Release")
 CMAKE_MINIMUM_REQUIRED(VERSION 3.13.0)
 project(KokkosSOT)
 
+if(NOT DEFINED ENV{KOKKOS_DIR})
+  message(FATAL_ERROR "Environment variable KOKKOS_DIR is not set. Please set it to the Kokkos installation directory.")
+endif()
+
+if(NOT DEFINED ENV{DEAL_II_DIR})
+  message(FATAL_ERROR "Environment variable DEAL_II_DIR is not set. Please set it to the deal.II installation directory.")
+endif()
+
+if(NOT DEFINED ENV{GEOGRAM_DIR})
+  message(FATAL_ERROR "Environment variable GEOGRAM_DIR is not set. Please set it to the Geogram installation directory.")
+endif()
+
+if(NOT DEFINED ENV{SOT_DIR})
+  message(FATAL_ERROR "Environment variable SOT_DIR is not set. Please set it to the SemiDiscreteOT installation directory.")
+endif()
 # Init dealii
 find_package(deal.II 9.5.0 REQUIRED
   HINTS  $ENV{DEAL_II_DIR}
   )
+
+# Set environment variables for OpenMP
+if(NOT DEFINED ENV{OMP_PROC_BIND})
+  message(WARNING "OMP_PROC_BIND environment variable not set. Setting it to 'spread' for best performance.")
+  set(ENV{OMP_PROC_BIND} "spread")
+endif()
+
+if(NOT DEFINED ENV{OMP_PLACES})
+  message(WARNING "OMP_PLACES environment variable not set. Setting it to 'threads' for best performance.")
+  set(ENV{OMP_PLACES} "threads")
+endif()
+
 deal_ii_initialize_cached_variables()
 message(STATUS "DEAL_II_DIR: $ENV{DEAL_II_DIR}")
 
 # Init Kokkos
 # Tell CMake where to find Kokkos
-set(KOKKOS_DIR "/Home/flow/romor/local/gpu_kokkos-4.2.0")
-set(CMAKE_PREFIX_PATH "/Home/flow/romor/local/gpu_kokkos-4.2.0/lib64/cmake/Kokkos" "/Home/flow/romor/local/sot/lib/cmake/SemiDiscreteOT")
-set(Kokkos_INCLUDE_DIRS /Home/flow/romor/local/gpu_kokkos-4.2.0/include)
 
 # Find Kokkos
-find_package(Kokkos REQUIRED)
-message(STATUS "Kokkos_ENABLE_CUDA_UVM: ${Kokkos_ENABLE_CUDA_UVM}")
+find_package(Kokkos REQUIRED HINTS  $ENV{KOKKOS_DIR})
+set(KOKKOS_INCLUDE_DIRS $ENV{KOKKOS_DIR}/include)
+message(STATUS "KOKKOS_ENABLE_CUDA_UVM: ${KOKKOS_ENABLE_CUDA_UVM}")
 
 if(Kokkos_FOUND)
-  set(CMAKE_CXX_COMPILER "${KOKKOS_DIR}/bin/nvcc_wrapper")
+  set(CMAKE_CXX_COMPILER "$ENV{KOKKOS_DIR}/bin/nvcc_wrapper")
   message(STATUS "Found Kokkos: ${Kokkos_DIR} (version \"${Kokkos_VERSION}\")")
   message(STATUS "CMAKE_CXX_COMPILER: ${CMAKE_CXX_COMPILER}")
   message(STATUS "CMAKE_CXX_FLAGS DEBUG: ${CMAKE_CXX_FLAGS_DEBUG}")
@@ -49,8 +74,7 @@ set(GEOGRAM_LIBS
 )
 
 # Find SemiDiscreteOT
-set(SOT_DIR "/Home/flow/romor/local/sot")
-find_package(SemiDiscreteOT REQUIRED)
+find_package(SemiDiscreteOT REQUIRED HINTS  $ENV{SOT_DIR})
 
 add_executable(${TARGET} ${TARGET_SRC})
 include_directories(${TARGET_INC})
@@ -84,27 +108,34 @@ set(DEAL_II_CXX_COMPILER ${CMAKE_CXX_COMPILER})
 # remove dealii flags and remove -Wall -Wa--compress-debug-sections
 set_target_properties(${TARGET} PROPERTIES COMPILE_OPTIONS "")
 
-if(CMAKE_BUILD_TYPE STREQUAL "Release")
-  target_compile_options(${TARGET} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-pedantic -Wextra -Wmissing-braces -Woverloaded-virtual -Wpointer-arith -Wsign-compare -Wsuggest-override -Wswitch -Wsynth -Wwrite-strings -Wno-placement-new -Wno-deprecated-declarations -Wno-literal-suffix -Wno-psabi -Wno-unused-local-typedefs -fopenmp-simd -pthread -O3 -funroll-loops -funroll-all-loops -Wno-unused-local-typedefs -Wno-unused-parameter --extended-lambda>)
+set(MEMORY_SPACE_CUDA ON)
+if(MEMORY_SPACE_CUDA)
+  target_compile_definitions(${TARGET} PRIVATE MEMORY_SPACE_CUDA=1)
+  message(STATUS "Running on Kokkos::CudaSpace")
 else()
-    target_compile_options(${TARGET} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-pedantic -Wextra -Wmissing-braces -Woverloaded-virtual -Wpointer-arith -Wsign-compare -Wsuggest-override -Wswitch -Wsynth -Wwrite-strings -Wno-placement-new -Wno-deprecated-declarations -Wno-literal-suffix -Wno-psabi -Wno-unused-local-typedefs -fopenmp-simd -pthread -O0 -ggdb --extended-lambda>)
+  target_compile_definitions(${TARGET} PRIVATE MEMORY_SPACE_CUDA=0)
+  message(STATUS "Running on Kokkos::OpenMP")
+endif()
+
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+  target_compile_options(${TARGET} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-pedantic -Wextra -Wmissing-braces -Woverloaded-virtual -Wpointer-arith -Wsign-compare -Wsuggest-override -Wswitch -Wsynth -Wwrite-strings -Wno-placement-new -Wno-deprecated-declarations -Wno-literal-suffix -Wno-psabi -Wno-unused-local-typedefs -fopenmp -fopenmp-simd -pthread -O3 -funroll-loops -funroll-all-loops -Wno-unused-local-typedefs -Wno-unused-parameter --extended-lambda>)
+else()
+    target_compile_options(${TARGET} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-pedantic -Wextra -Wmissing-braces -Woverloaded-virtual -Wpointer-arith -Wsign-compare -Wsuggest-override -Wswitch -Wsynth -Wwrite-strings -Wno-placement-new -Wno-deprecated-declarations -Wno-literal-suffix -Wno-psabi -Wno-unused-local-typedefs -fopenmp -fopenmp-simd -pthread -O0 -ggdb --extended-lambda>)
 endif()
 
 target_link_libraries(${TARGET}
-    ${KOKKOS_DIR}/lib64/libkokkoscore.a
-    ${KOKKOS_DIR}/lib64/libkokkossimd.a
-    ${KOKKOS_DIR}/lib64/libkokkoscontainers.a
+    $ENV{KOKKOS_DIR}/lib64/libkokkoscore.a
+    $ENV{KOKKOS_DIR}/lib64/libkokkossimd.a
+    $ENV{KOKKOS_DIR}/lib64/libkokkoscontainers.a
     ${GEOGRAM_LIBS}
-    ${SOT_DIR}/lib/libSemiDiscreteOT.so
+    $ENV{SOT_DIR}/lib/libSemiDiscreteOT.so
 )
 
 target_include_directories(${TARGET} PUBLIC
-    ${Kokkos_INCLUDE_DIRS}
-    ${SOT_DIR}/include
+    ${KOKKOS_INCLUDE_DIRS}
+    $ENV{SOT_DIR}/include
     $ENV{GEOGRAM_DIR}/src/lib
 )
-
-message(STATUS "Kokkos include directories: ${Kokkos_INCLUDE_DIRS}")
 
 set_target_properties(${TARGET} PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/run
