@@ -317,7 +317,8 @@ public:
         const Mapping<dim, spacedim> &mapping,
         const Vector<double> &potential,
         const std::vector<unsigned int> &potential_indices,
-        std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> &conditioned_densities);
+        std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> &conditioned_densities,
+        bool thresholded = true);
 
     // Distance function
     std::string distance_name; ///< The name of the distance function.
@@ -345,6 +346,10 @@ public:
     // Source and target measures
     SourceMeasure source_measure; ///< The source measure.
     TargetMeasure target_measure; ///< The target measure.
+
+    // Current solver parameters
+    SotParameterManager::SolverParameters current_params;
+    double current_epsilon;
 
 private:
 
@@ -502,15 +507,11 @@ private:
     mutable double current_distance_threshold;
     mutable double effective_distance_threshold;
     const Vector<double>* current_potential;
-    double current_epsilon;
     mutable double global_functional;
     Vector<double> gradient;  
     double covering_radius;           
     double min_target_density;       
     double C_global = 0.0; // Sum of all scale terms
-
-    // Current solver parameters
-    SotParameterManager::SolverParameters current_params;
 
     // weighted truncated barycenters evaluation
 

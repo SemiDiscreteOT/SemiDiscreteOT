@@ -48,13 +48,11 @@ void SemiDiscreteOT<dim, spacedim>::configure(std::function<void(SotParameterMan
 }
 
 template <int dim, int spacedim>
-void SemiDiscreteOT<dim, spacedim>::setup_source_measure(
+void SemiDiscreteOT<dim, spacedim>::setup_source_mesh(
     Triangulation<dim, spacedim>& tria,
-    const DoFHandler<dim, spacedim>& dh,
-    const Vector<double>& density,
     const std::string& name)
 {
-    pcout << "Setting up source measure from standard dealii objects (simplified API)..." << std::endl;
+    pcout << "Setting up source mesh from standard dealii objects (simplified API)..." << std::endl;
 
     // Store the source mesh name for later use
     if (!name.empty())
@@ -64,8 +62,8 @@ void SemiDiscreteOT<dim, spacedim>::setup_source_measure(
     {
         std::string mesh_directory = "output/data_mesh";
         mesh_manager->write_mesh(tria,
-                mesh_directory + "/" + source_mesh_name,
-              std::vector<std::string>{"vtk", "msh"});
+            mesh_directory + "/" + source_mesh_name,
+            std::vector<std::string>{"vtk", "msh"});
     }
 
     // Create distributed triangulation from serial triangulation
@@ -86,30 +84,18 @@ void SemiDiscreteOT<dim, spacedim>::setup_source_measure(
     mapping = std::move(map);
 
     // Set up DoFHandler on distributed mesh
-    dof_handler_source.clear();
     dof_handler_source.reinit(source_mesh);
     dof_handler_source.distribute_dofs(*fe_system);
 
     // Set up distributed vectors
-    IndexSet locally_owned_dofs = dof_handler_source.locally_owned_dofs();
-    IndexSet locally_relevant_dofs;
-    DoFTools::extract_locally_relevant_dofs(dof_handler_source, locally_relevant_dofs);
+    source_fine_loc_owned_dofs = dof_handler_source.locally_owned_dofs();
+    source_fine_loc_relevant_dofs;
+    DoFTools::extract_locally_relevant_dofs(dof_handler_source, source_fine_loc_relevant_dofs);
 
-    source_density.reinit(locally_owned_dofs, locally_relevant_dofs, mpi_communicator);
-
-    // Convert serial density to distributed density
-    pcout << "Converting serial density vector to distributed format..." << std::endl;
-    AssertDimension(density.size(), dof_handler_source.n_dofs());
-
-    // Copy density values to distributed vector
-    for (const auto& dof_index : locally_owned_dofs)
-    {
-        source_density[dof_index] = density[dof_index];
-    }
-    source_density.update_ghost_values();
-
-    // Normalize the density
-    normalize_density(source_density);
+    source_density.reinit(
+        source_fine_loc_owned_dofs,
+        source_fine_loc_relevant_dofs,
+        mpi_communicator);
 
     pcout << "Distributed source mesh has " << source_mesh.n_active_cells()
           << " active cells and " << dof_handler_source.n_dofs() << " DoFs" << std::endl;
@@ -119,8 +105,75 @@ void SemiDiscreteOT<dim, spacedim>::setup_source_measure(
     {
         pcout << "Storing fine-grain source data for multilevel interpolation." << std::endl;
         initial_fine_dof_handler = std::make_unique<DoFHandler<dim, spacedim>>(tria);
-        initial_fine_dof_handler->distribute_dofs(dh.get_fe());
-        initial_fine_density = std::make_unique<Vector<double>>(density);
+    }
+
+    pcout << "Source mesh setup from standard objects complete." << std::endl;
+}
+
+template <int dim, int spacedim>
+void SemiDiscreteOT<dim, spacedim>::setup_source_measure(
+    const Vector<double>& density)
+{
+    pcout << "Setting up source measure from standard dealii objects (simplified API)..." << std::endl;
+
+    // Convert serial density to distributed density
+    pcout << "Converting serial density vector to distributed format..." << std::endl;
+    AssertDimension(density.size(), dof_handler_source.n_dofs());
+
+    // Copy density values to distributed vector
+    for (const auto& dof_index : source_fine_loc_owned_dofs)
+        source_density[dof_index] = density[dof_index];
+    source_density.update_ghost_values();
+    
+    // Normalize the density
+    normalize_density(source_density);
+
+    // Save source density to a VTK file in parallel
+    const std::string output_dir = "./output/data_density";
+    if (!fs::exists(output_dir))
+        fs::create_directories(output_dir);
+    DataOut<dim, spacedim> data_out;
+    data_out.attach_dof_handler(dof_handler_source);
+    data_out.add_data_vector(source_density, "source_density");
+    Vector<float> subdomain_ids(source_mesh.n_active_cells());
+    for (const auto &cell : source_mesh.active_cell_iterators())
+        subdomain_ids[cell->active_cell_index()] = static_cast<float>(cell->subdomain_id());
+    data_out.add_data_vector(subdomain_ids, "subdomain_id");
+    data_out.build_patches();
+    const std::string filename = output_dir + "/" + source_mesh_name + ".vtu";
+    data_out.write_vtu_with_pvtu_record(output_dir + "/", source_mesh_name, 0, mpi_communicator);
+
+    // Store fine-grain data for multilevel operations if needed
+    if (multilevel_params.source_enabled)
+    {
+        pcout << "Storing fine-grain source data for multilevel interpolation." << std::endl;
+        initial_fine_dof_handler->distribute_dofs(dof_handler_source.get_fe());
+
+        if (n_mpi_processes > 1)
+        {
+            // Gather all density
+            std::vector<double> local_density(
+                source_fine_loc_owned_dofs.n_elements());
+            for (unsigned int i=0; i < source_fine_loc_owned_dofs.n_elements(); ++i)
+                local_density[i] = source_density[source_fine_loc_owned_dofs.nth_index_in_set(i)];
+
+            std::vector<double> global_density;
+            global_density.reserve(source_density.size());
+
+            auto all_data = Utilities::MPI::all_gather(
+                mpi_communicator, local_density);
+            for (const auto &data : all_data)
+                global_density.insert(
+                    global_density.end(), data.begin(), data.end());
+
+            initial_fine_density = std::make_unique<Vector<double>>(global_density.size());
+            for (size_t i = 0; i < global_density.size(); ++i)
+                (*initial_fine_density)[i] = global_density[i];
+        }
+        else
+        {
+            initial_fine_density = std::make_unique<Vector<double>>(density);
+        }
     }
 
     is_setup_programmatically_ = true;
@@ -352,9 +405,7 @@ void SemiDiscreteOT<dim, spacedim>::normalize_density(LinearAlgebra::distributed
         fe_values.get_function_values(density, density_values);
 
         for (unsigned int q = 0; q < quadrature->size(); ++q)
-        {
             local_l1_norm += std::abs(density_values[q]) * fe_values.JxW(q);
-        }
     }
 
     const double global_l1_norm = Utilities::MPI::sum(local_l1_norm, mpi_communicator);
@@ -1950,7 +2001,6 @@ void SemiDiscreteOT<dim, spacedim>::prepare_target_multilevel()
 
             try
             {
-
                 pcout << "Generating hierarchy with " << target_points.size() << " points..." << std::endl;
 
                 // Convert dealii vector to std::vector

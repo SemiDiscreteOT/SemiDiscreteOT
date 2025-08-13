@@ -136,7 +136,8 @@ ot_problem.configure([&](SotParameterManager &params) {
 });
 
 // Setup measures
-ot_problem.setup_source_measure(triangulation, dof_handler, density);
+ot_problem.setup_source_mesh(triangulation);
+ot_problem.setup_source_masure(dof_handler, density);
 ot_problem.setup_target_measure(target_points, target_weights);
 
 // Solve

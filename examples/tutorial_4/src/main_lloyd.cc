@@ -326,7 +326,8 @@ int main(int argc, char *argv[])
     source1_dof_handler.distribute_dofs(source1_fe);
     Vector<double> source1_density(source1_dof_handler.n_dofs());
     source1_density = 1.0;
-    problem1->setup_source_measure(source1_tria, source1_dof_handler, source1_density, "source_1");
+    problem1->setup_source_mesh(source1_tria, "source_1");
+    problem2->setup_source_measure(source1_density);
 
     Triangulation<dim, spacedim> source2_tria;
     {
@@ -352,7 +353,8 @@ int main(int argc, char *argv[])
     source2_dof_handler.distribute_dofs(source2_fe);
     Vector<double> source2_density(source2_dof_handler.n_dofs());
     source2_density = 1.0;
-    problem2->setup_source_measure(source2_tria, source2_dof_handler, source2_density, "source_2");
+    problem2->setup_source_mesh(source2_tria, "source_2");
+    problem2->setup_source_measure(source2_density);
 
 
     if (ot_params.source_multilevel_enabled) {

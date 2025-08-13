@@ -563,7 +563,8 @@ namespace Applications
 
     // Setup source measure using the PDE-computed density
     Vector<double> source_density_copy = source_density;
-    ot_problem.setup_source_measure(triangulation_1, dof_handler_1, source_density_copy);
+    ot_problem.setup_source_mesh(triangulation_1);
+    ot_problem.setup_source_measure(source_density_copy);
     
     // Setup target measure
     ot_problem.setup_target_measure(target_points, target_weights);

@@ -468,8 +468,9 @@ bool load_vtk_points(const std::string &filename, std::vector<Point<3>> &points)
 }
 
 template <int dim, int spacedim>
-std::vector<Point<spacedim>> sample_points_from_geometry(const Triangulation<dim, spacedim> &triangulation,
-                                                         unsigned int n_samples,
+std::vector<Point<spacedim>> sample_points_from_geometry(
+    const Triangulation<dim, spacedim> &triangulation,
+        unsigned int n_samples,
                                                          std::mt19937 &rng)
 {
     std::vector<Point<spacedim>> sampled_points;
@@ -606,7 +607,8 @@ int main(int argc, char *argv[])
     source1_dof_handler.distribute_dofs(source1_fe);
     Vector<double> source1_density(source1_dof_handler.n_dofs());
     source1_density = 1.0;
-    sot_problem_1.setup_source_measure(source1_tria, source1_dof_handler, source1_density, "source_1");
+    sot_problem_1.setup_source_mesh(source1_tria, "source_1");
+    sot_problem_1.setup_source_measure(source1_density);
 
     Triangulation<dim, spacedim> source2_tria;
     {
@@ -632,14 +634,16 @@ int main(int argc, char *argv[])
     source2_dof_handler.distribute_dofs(source2_fe);
     Vector<double> source2_density(source2_dof_handler.n_dofs());
     source2_density = 1.0;
-    sot_problem_2.setup_source_measure(source2_tria, source2_dof_handler, source2_density, "source_2");
+    sot_problem_2.setup_source_mesh(source2_tria, "source_2");
+    sot_problem_2.setup_source_measure(source2_density);
 
     if (ot_params.source_multilevel_enabled) {
         sot_problem_1.prepare_source_multilevel();
         sot_problem_2.prepare_source_multilevel();
     }
 
-    std::vector<Point<spacedim>> barycenter_points(barycenter_params.n_barycenter_points);
+    std::vector<Point<spacedim>> barycenter_points(
+        barycenter_params.n_barycenter_points);
     Vector<double> barycenter_weights(barycenter_params.n_barycenter_points);
     barycenter_weights = 1.0 / barycenter_params.n_barycenter_points;
 
@@ -698,12 +702,25 @@ int main(int argc, char *argv[])
                     std::shuffle(barycenter_points.begin(), barycenter_points.end(), rng);
                 }
             } else {
-                // Use support points of second mesh for initialization
-                std::map<types::global_dof_index, Point<spacedim>> support_points;
-                DoFTools::map_dofs_to_support_points(MappingQ1<dim,spacedim>(), source2_dof_handler, support_points);
-                barycenter_points.resize(support_points.size());
-                unsigned int i = 0;
-                for(const auto& pair : support_points) barycenter_points[i++] = pair.second;
+                // setup barycenters support points (fixed for this example)
+                std::map<types::global_dof_index, Point<3>> support_points; //locally_relevant support_points
+                DoFTools::map_dofs_to_support_points(
+                    MappingQ1<2,3>(), sot_problem_2.dof_handler_source, support_points);
+
+                std::vector<Point<3>> barycenter_points_local;
+                barycenter_points_local.resize(sot_problem_2.source_fine_loc_owned_dofs.n_elements());
+                for(unsigned int i=0; i < sot_problem_2.source_fine_loc_owned_dofs.n_elements(); ++i)
+                    barycenter_points_local[i] = support_points[sot_problem_2.source_fine_loc_owned_dofs.nth_index_in_set(i)];
+
+                // Gather all support points
+                auto all_barycenter_points = Utilities::MPI::all_gather(
+                    mpi_comm, barycenter_points_local);
+                barycenter_points.clear();
+                // locally_owned dofs have contiguous indices for increasing ranks order
+                for (const auto &local_points : all_barycenter_points)
+                    barycenter_points.insert(
+                    barycenter_points.end(), local_points.begin(), local_points.end());
+
                 barycenter_weights.reinit(barycenter_points.size());
                 barycenter_weights = 1.0 / barycenter_points.size();
             }

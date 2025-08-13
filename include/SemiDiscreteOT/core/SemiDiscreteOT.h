@@ -95,19 +95,33 @@ public:
 
 
     /**
-     * @brief Setup source measure from standard deal.II objects (simplified API for tutorials)
+     * @brief Setup source mesh from standard deal.II objects (simplified API for tutorials). Shared mesh is loaded from file, then `setup_source_measure` is called to setup the source measure from a shared `Vector<double>` or a distributed `LinearAlgebra::distributed::Vector<double>`.
      * @param tria A standard Triangulation
-     * @param dh A DoFHandler on the provided triangulation
-     * @param density A standard Vector containing the density values
      * @param name An optional name for the source mesh (used for saving and hierarchy generation)
      * 
      * This method internally handles the conversion to distributed objects when needed for parallel computation.
      */
-    void setup_source_measure(
+    void setup_source_mesh(
         Triangulation<dim, spacedim>& tria,
-        const DoFHandler<dim, spacedim>& dh,
-        const Vector<double>& density,
         const std::string& name = "source");
+
+    /**
+     * @brief Sets up the source measure for the semi-discrete optimal transport problem.
+     *
+     * This function initializes the source measure using the provided degrees of freedom
+     * handler and density vector. The source measure represents the distribution of mass
+     * in the source domain. The vector `density` bust me initialized with this class' `dof_handler_source`.
+     *
+     * @tparam dim The spatial dimension of the problem.
+     * @tparam spacedim The dimension of the embedding space.
+     * 
+     * @param dh The degrees of freedom handler that describes the finite element space
+     *           for the source domain.
+     * @param density A serial vector representing the density values of the source
+     *                measure at the degrees of freedom.
+     */
+    void setup_source_measure(
+        const Vector<double>& density);
 
     /**
      * @brief Set up the target measure from a discrete set of points and weights.
@@ -181,14 +195,28 @@ public:
         }
         
         ConditionalOStream pcout; ///< A conditional output stream for parallel printing.
+
+    LinearAlgebra::distributed::Vector<double> source_density; ///< The source density.
+    Vector<double> target_density; ///< The target density.
+    std::vector<Point<spacedim>> target_points; ///< The target points.
+    std::vector<Point<spacedim>> source_points; ///< The source points.
+
+    // Mesh and DoF handler members
+    parallel::fullydistributed::Triangulation<dim, spacedim> source_mesh; ///< The source mesh.
+    Triangulation<dim, spacedim> target_mesh; ///< The target mesh.
+    
+    DoFHandler<dim, spacedim> dof_handler_source; ///< The DoF handler for the source mesh.
+    DoFHandler<dim, spacedim> dof_handler_target; ///< The DoF handler for the target mesh.
+    IndexSet source_fine_loc_owned_dofs;
+    IndexSet source_fine_loc_relevant_dofs;
+
+    // Solver member
+    std::unique_ptr<SotSolver<dim, spacedim>> sot_solver; ///< The semi-discrete optimal transport solver.
 protected:
     // MPI-related members
     MPI_Comm mpi_communicator; ///< The MPI communicator.
     const unsigned int n_mpi_processes; ///< The number of MPI processes.
     const unsigned int this_mpi_process; ///< The rank of the current MPI process.
-
-    // Solver member
-    std::unique_ptr<SotSolver<dim, spacedim>> sot_solver; ///< The semi-discrete optimal transport solver.
 
     // Parameter manager and references
     SotParameterManager param_manager; ///< The parameter manager.
@@ -208,12 +236,6 @@ protected:
     // Source mesh name for saving and hierarchy generation
     std::string source_mesh_name = "source"; ///< The name of the source mesh.
 
-    // Mesh and DoF handler members
-    parallel::fullydistributed::Triangulation<dim, spacedim> source_mesh; ///< The source mesh.
-    Triangulation<dim, spacedim> target_mesh; ///< The target mesh.
-    DoFHandler<dim, spacedim> dof_handler_source; ///< The DoF handler for the source mesh.
-    DoFHandler<dim, spacedim> dof_handler_target; ///< The DoF handler for the target mesh.
-
     std::unique_ptr<VTKHandler<dim,spacedim>> source_vtk_handler; ///< The VTK handler for the source mesh.
     DoFHandler<dim,spacedim> vtk_dof_handler_source; ///< The DoF handler for the source VTK mesh.
     Vector<double> vtk_field_source; ///< The source field from the VTK file.
@@ -223,10 +245,6 @@ protected:
     std::unique_ptr<Mapping<dim, spacedim>> mapping; ///< The mapping.
     std::unique_ptr<FiniteElement<dim, spacedim>> fe_system_target; ///< The target finite element system.
     std::unique_ptr<Mapping<dim, spacedim>> mapping_target; ///< The target mapping.
-    LinearAlgebra::distributed::Vector<double> source_density; ///< The source density.
-    Vector<double> target_density; ///< The target density.
-    std::vector<Point<spacedim>> target_points; ///< The target points.
-    std::vector<Point<spacedim>> source_points; ///< The source points.
 
     // Mesh manager
     std::unique_ptr<MeshManager<dim, spacedim>> mesh_manager; ///< The mesh manager.

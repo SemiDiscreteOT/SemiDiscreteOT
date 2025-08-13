@@ -20,5 +20,8 @@ ADD_SUBDIRECTORY(tutorial_3)
 # Add all example subdirectories
 ADD_SUBDIRECTORY(tutorial_4)
 
+# Add all example subdirectories
+ADD_SUBDIRECTORY(tutorial_5)
+
 # Common settings for all examples
 SET(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)

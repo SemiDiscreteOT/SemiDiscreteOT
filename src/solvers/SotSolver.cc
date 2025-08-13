@@ -192,7 +192,14 @@ void SotSolver<dim, spacedim>::solve(
 
         solver.solve(
             [this](const Vector<double>& w, Vector<double>& grad) {
-                return this->evaluate_functional(w, grad);
+                auto start = std::chrono::system_clock::now();
+                auto res = this->evaluate_functional(w, grad);
+                auto end = std::chrono::system_clock::now();
+                auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+                if (current_params.verbose_output) {
+                    pcout << "Functional evaluation took " << elapsed.count() << " microseconds" << std::endl;
+                }
+                return res;
             },
             potentials
         );
@@ -694,9 +701,10 @@ void SotSolver<dim,spacedim>::compute_weighted_barycenters_non_euclidean(
         }
 
         // Create scratch and copy data
-        ScratchData scratch_data(*source_measure.fe,
-                               *source_measure.mapping,
-                               *quadrature);
+        ScratchData scratch_data(
+            *source_measure.fe,
+            *source_measure.mapping,
+            *quadrature);
         CopyData copy_data(target_measure.points.size());
 
         // Create filtered iterators for locally owned cells
@@ -976,7 +984,8 @@ void SotSolver<dim, spacedim>::get_potential_conditioned_density(
     const Mapping<dim, spacedim> &mapping,
     const Vector<double> &potential,
     const std::vector<unsigned int> &potential_indices,
-    std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> &conditioned_densities)
+    std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> &conditioned_densities,
+    bool thresholded)
 {
     std::cout << "Current epsilon: " << current_epsilon << std::endl;
     auto locally_owned_dofs = dof_handler.locally_owned_dofs();
