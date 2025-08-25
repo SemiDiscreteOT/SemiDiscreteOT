@@ -207,7 +207,7 @@ void WassersteinBarycenters<dim, spacedim, update_flag>::configure()
       p.multilevel_params.target_min_points = ot_params.target_min_points;
       p.multilevel_params.target_max_points = ot_params.target_max_points;
     
-      p.multilevel_params.source_hierarchy_dir = "output/barycenter_h/source" + std::to_string(solver_id);
+      p.multilevel_params.source_hierarchy_dir = "output/barycenter_h/source_" + std::to_string(solver_id);
       p.multilevel_params.use_python_clustering = ot_params.use_python_clustering;
       p.multilevel_params.python_script_name = ot_params.python_script_name;
     };
@@ -223,7 +223,7 @@ void WassersteinBarycenters<dim, spacedim, update_flag>::configure()
 template <int dim, int spacedim, UpdateMode update_flag>
 void WassersteinBarycenters<dim, spacedim, update_flag>::run_wasserstein_barycenters()
 {  
-    Assert(barycenter_points_.size() > 0,
+    Assert(barycenter_points.size() > 0,
         ExcMessage("Barycenter points vector must not be empty."));
     
     if constexpr (update_flag == UpdateMode::TargetSupportOnly)
@@ -262,11 +262,11 @@ void WassersteinBarycenters<dim, spacedim, update_flag>::run_wasserstein_barycen
     }
 
     for (unsigned int i = 1; i < n_measures; ++i) {
-        Assert(sot_problems[i]->target_points.size() == sot_problems[0]->target_points.size();,
-            ExcMessage("All measures must have the same number of target points. "
-                        "Measure 0 has " + std::to_string(sot_problems[0]->target_points.size();) + 
-                        " points, but measure " + std::to_string(i) + 
-                        " has " + std::to_string(sot_problems[i]->target_points.size()) + " points."));
+        Assert(sot_problems[i]->target_points.size() == sot_problems[0]->target_points.size(),
+        ExcMessage("All measures must have the same number of target points. "
+                    "Measure 0 has " + std::to_string(sot_problems[0]->target_points.size();) + 
+                    " points, but measure " + std::to_string(i) + 
+                    " has " + std::to_string(sot_problems[i]->target_points.size()) + " points."));
     }
 
     pcout << Color::yellow << Color::bold << "\nStarting Wassertein Barycenters algorithm with " << n_measures << " measures:\n" << std::endl;
@@ -416,24 +416,42 @@ double WassersteinBarycenters<dim, spacedim, update_flag>::evaluate_functional(
                     std::cout.rdbuf(cout_old);
                 }
             } silence;
-        }
-
-        for (unsigned int i = 0; i < n_measures; ++i) {
-            sot_problems[i]->setup_target_measure(
-                barycenter_points, barycenter_weights);
-
-            if (ot_params.target_multilevel_enabled) {
-                sot_problems[i]->prepare_target_multilevel();
+            
+            for (unsigned int i = 0; i < n_measures; ++i) {
+                sot_problems[i]->setup_target_measure(
+                    barycenter_points, barycenter_weights);
+                    
+                    if (ot_params.target_multilevel_enabled) {
+                        sot_problems[i]->prepare_target_multilevel();
+                    }
+                }
+                
+                if (ot_params.target_multilevel_enabled) {
+                    for (unsigned int i = 0; i < n_measures; ++i)
+                    potentials[i] = sot_problems[i]->solve();
             }
-        }
-
-        if (ot_params.target_multilevel_enabled) {
-            for (unsigned int i = 0; i < n_measures; ++i)
-                potentials[i] = sot_problems[i]->solve();
-        }
-        else {
-            for (unsigned int i = 0; i < n_measures; ++i)
+            else {
+                for (unsigned int i = 0; i < n_measures; ++i)
                 potentials[i] = sot_problems[i]->solve(potentials[i]);
+            }
+        } else {
+            for (unsigned int i = 0; i < n_measures; ++i) {
+                sot_problems[i]->setup_target_measure(
+                    barycenter_points, barycenter_weights);
+                    
+                    if (ot_params.target_multilevel_enabled) {
+                        sot_problems[i]->prepare_target_multilevel();
+                    }
+                }
+                
+                if (ot_params.target_multilevel_enabled) {
+                    for (unsigned int i = 0; i < n_measures; ++i)
+                    potentials[i] = sot_problems[i]->solve();
+            }
+            else {
+                for (unsigned int i = 0; i < n_measures; ++i)
+                potentials[i] = sot_problems[i]->solve(potentials[i]);
+            }
         }
     }
 

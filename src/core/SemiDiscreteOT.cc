@@ -433,19 +433,17 @@ void SemiDiscreteOT<dim, spacedim>::setup_source_finite_elements(const bool is_m
 
     source_density.reinit(locally_owned_dofs, locally_relevant_dofs, mpi_communicator);
 
-
     if (is_multilevel && is_setup_programmatically_ && initial_fine_dof_handler)
     {
         pcout << Color::green
               << "Interpolating programmatically provided source density onto current mesh level"
               << Color::reset << std::endl;
 
-        Utils::interpolate_non_conforming_nearest(*initial_fine_dof_handler,
-                                                                 *initial_fine_density,
-                                                                 dof_handler_source,
-                                                                 source_density);
-
-
+        Utils::interpolate_non_conforming_nearest(
+            *initial_fine_dof_handler,
+            *initial_fine_density,
+            dof_handler_source,
+            source_density);
 
         pcout << "Source density interpolated for current multilevel grid." << std::endl;
     }
@@ -471,9 +469,9 @@ void SemiDiscreteOT<dim, spacedim>::setup_source_finite_elements(const bool is_m
                         // Fallback to non-conforming nearest neighbor interpolation if VTKHandler not available
                         pcout << "VTKHandler not available, using non-conforming nearest neighbor interpolation" << std::endl;
                         Utils::interpolate_non_conforming_nearest(vtk_dof_handler_source,
-                                                                  vtk_field_source,
-                                                                  dof_handler_source,
-                                                                  source_density);
+                        vtk_field_source,
+                        dof_handler_source,
+                        source_density);
                     }
 
                     pcout << "Source density interpolated from VTK to source mesh" << std::endl;
