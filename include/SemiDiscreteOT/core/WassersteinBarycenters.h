@@ -64,12 +64,16 @@ public:
                      "Numerical stability parameter");
         add_parameter("max_iterations", max_iterations,
                      "Maximum iterations for OT solver");
+        add_parameter("quadrature_order", quadrature_order,
+                     "Quadrature order for integration");
         add_parameter("tolerance", tolerance,
                      "Tolerance for OT solver");
         add_parameter("use_log_sum_exp_trick", use_log_sum_exp_trick,
                      "Use log-sum-exp trick for numerical stability");
         add_parameter("verbose_output", verbose_output,
                      "Enable verbose output for OT solver");
+        add_parameter("timer_output", timer_output,
+                     "Enable verbose timer output for OT solver");
         add_parameter("distance_threshold_type", distance_threshold_type,
                      "Type of distance threshold");
         add_parameter("source_multilevel_enabled", source_multilevel_enabled,
@@ -96,9 +100,11 @@ public:
     double distance_threshold = 1.5;
     double tau = 1e-12;
     unsigned int max_iterations = 1000;
+    unsigned int quadrature_order = 3;
     double tolerance = 1e-3;
     bool use_log_sum_exp_trick = true;
     bool verbose_output = false;
+    bool timer_output = false;
     std::string distance_threshold_type = "pointwise";
     bool source_multilevel_enabled = false;
     bool target_multilevel_enabled = false;

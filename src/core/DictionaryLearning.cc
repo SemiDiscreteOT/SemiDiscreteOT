@@ -1,4 +1,4 @@
-#include "SemiDiscreteOT/core/WassersteinBarycenters.h"
+#include "SemiDiscreteOT/core/DictionaryLearning.h"
 
 namespace fs = std::filesystem;
 using namespace dealii;
@@ -57,7 +57,7 @@ std::vector<std::size_t> find_nearest_target_points(
 }
 
 template <int dim, int spacedim, UpdateMode update_flag>
-void WassersteinBarycenters<dim, spacedim, update_flag>::local_assemble_barycenter_gradient(
+void DictionaryLearning<dim, spacedim, update_flag>::local_assemble_barycenter_gradient(
     const SotSolver<dim, spacedim> &sot_solver,
     const typename DoFHandler<dim, spacedim>::active_cell_iterator &cell,
     BarycenterScratchData<dim, spacedim> &scratch,
@@ -138,7 +138,7 @@ void WassersteinBarycenters<dim, spacedim, update_flag>::local_assemble_barycent
 }
 
 template <int dim, int spacedim, UpdateMode update_flag>
-void WassersteinBarycenters<dim, spacedim, update_flag>::set_distance_function(
+void DictionaryLearning<dim, spacedim, update_flag>::set_distance_function(
     const std::string &distance_name_)
 {
     distance_name = distance_name_;
@@ -160,12 +160,12 @@ void WassersteinBarycenters<dim, spacedim, update_flag>::set_distance_function(
 }
 
 template <int dim, int spacedim, UpdateMode update_flag>
-WassersteinBarycenters<dim, spacedim, update_flag>::WassersteinBarycenters(const MPI_Comm &comm)
+DictionaryLearning<dim, spacedim, update_flag>::DictionaryLearning(const MPI_Comm &comm)
     : pcout(std::cout, Utilities::MPI::this_mpi_process(comm) == 0),
       mpi_comm(comm){}
 
 template <int dim, int spacedim, UpdateMode update_flag>
-void WassersteinBarycenters<dim, spacedim, update_flag>::configure()
+void DictionaryLearning<dim, spacedim, update_flag>::configure()
 {
     // Configure OT solver
     n_measures = barycenter_params.weights.size();
@@ -190,7 +190,6 @@ void WassersteinBarycenters<dim, spacedim, update_flag>::configure()
         }
     }
     
-
     auto configure_solver = [this](SotParameterManager &p, int solver_id) {
       p.solver_params.epsilon = ot_params.epsilon;
       p.solver_params.use_log_sum_exp_trick = ot_params.use_log_sum_exp_trick;
@@ -199,7 +198,6 @@ void WassersteinBarycenters<dim, spacedim, update_flag>::configure()
       p.solver_params.distance_threshold_type = ot_params.distance_threshold_type;
       p.solver_params.max_iterations = ot_params.max_iterations;
       p.solver_params.tolerance = ot_params.tolerance;
-      p.solver_params.quadrature_order = ot_params.quadrature_order;
 
       p.multilevel_params.source_enabled = ot_params.source_multilevel_enabled;
       p.multilevel_params.target_enabled = ot_params.target_multilevel_enabled;
@@ -209,7 +207,7 @@ void WassersteinBarycenters<dim, spacedim, update_flag>::configure()
       p.multilevel_params.target_min_points = ot_params.target_min_points;
       p.multilevel_params.target_max_points = ot_params.target_max_points;
     
-      p.multilevel_params.source_hierarchy_dir = "output/barycenter_h/source_" + std::to_string(solver_id);
+      p.multilevel_params.source_hierarchy_dir = "output/barycenter_h/source" + std::to_string(solver_id);
       p.multilevel_params.use_python_clustering = ot_params.use_python_clustering;
       p.multilevel_params.python_script_name = ot_params.python_script_name;
     };
@@ -223,12 +221,9 @@ void WassersteinBarycenters<dim, spacedim, update_flag>::configure()
 }
 
 template <int dim, int spacedim, UpdateMode update_flag>
-void WassersteinBarycenters<dim, spacedim, update_flag>::run_wasserstein_barycenters()
+void DictionaryLearning<dim, spacedim, update_flag>::run_wasserstein_barycenters()
 {  
-    Assert(!(ot_params.target_multilevel_enabled && update_flag == UpdateMode::TargetSupportOnly),
-        ExcMessage("ot_params.target_multilevel_enabled is not implemented yet when UpdateMode::TargetSupportOnly is used."));
-
-    Assert(barycenter_points.size() > 0,
+    Assert(barycenter_points_.size() > 0,
         ExcMessage("Barycenter points vector must not be empty."));
     
     if constexpr (update_flag == UpdateMode::TargetSupportOnly)
@@ -267,11 +262,11 @@ void WassersteinBarycenters<dim, spacedim, update_flag>::run_wasserstein_barycen
     }
 
     for (unsigned int i = 1; i < n_measures; ++i) {
-        Assert(sot_problems[i]->target_points.size() == sot_problems[0]->target_points.size(),
-        ExcMessage("All measures must have the same number of target points. "
-                    "Measure 0 has " + std::to_string(sot_problems[0]->target_points.size();) + 
-                    " points, but measure " + std::to_string(i) + 
-                    " has " + std::to_string(sot_problems[i]->target_points.size()) + " points."));
+        Assert(sot_problems[i]->target_points.size() == sot_problems[0]->target_points.size();,
+            ExcMessage("All measures must have the same number of target points. "
+                        "Measure 0 has " + std::to_string(sot_problems[0]->target_points.size();) + 
+                        " points, but measure " + std::to_string(i) + 
+                        " has " + std::to_string(sot_problems[i]->target_points.size()) + " points."));
     }
 
     pcout << Color::yellow << Color::bold << "\nStarting Wassertein Barycenters algorithm with " << n_measures << " measures:\n" << std::endl;
@@ -335,7 +330,7 @@ void WassersteinBarycenters<dim, spacedim, update_flag>::run_wasserstein_barycen
 }
 
 template <int dim, int spacedim, UpdateMode update_flag>
-void WassersteinBarycenters<dim, spacedim, update_flag>::init_sol(
+void DictionaryLearning<dim, spacedim, update_flag>::init_sol(
     Vector<double> &w,
     const std::vector<Point<spacedim>> &bpoints,
     const Vector<double> &bweights)
@@ -354,7 +349,7 @@ void WassersteinBarycenters<dim, spacedim, update_flag>::init_sol(
 }
 
 template <int dim, int spacedim, UpdateMode update_flag>
-void WassersteinBarycenters<dim, spacedim, update_flag>::update_barycenter(
+void DictionaryLearning<dim, spacedim, update_flag>::update_barycenter(
     const Vector<double> &w,
     std::vector<Point<spacedim>> &bpoints,
     Vector<double> &bweights,
@@ -386,7 +381,7 @@ void WassersteinBarycenters<dim, spacedim, update_flag>::update_barycenter(
 }
 
 template <int dim, int spacedim, UpdateMode update_flag>
-double WassersteinBarycenters<dim, spacedim, update_flag>::evaluate_functional(
+double DictionaryLearning<dim, spacedim, update_flag>::evaluate_functional(
     const Vector<double>& w, Vector<double>& grad)
 {
     // barycenter_points, barycenter_weights
@@ -421,46 +416,24 @@ double WassersteinBarycenters<dim, spacedim, update_flag>::evaluate_functional(
                     std::cout.rdbuf(cout_old);
                 }
             } silence;
-            
-            for (unsigned int i = 0; i < n_measures; ++i) {
-                sot_problems[i]->setup_target_measure(
-                    barycenter_points, barycenter_weights);
-                    
-                    if (ot_params.target_multilevel_enabled) {
-                        sot_problems[i]->prepare_target_multilevel();
-                    }
-                }
-                
-                if (ot_params.target_multilevel_enabled) {
-                    for (unsigned int i = 0; i < n_measures; ++i)
-                        potentials[i] = sot_problems[i]->solve();
+        }
+
+        for (unsigned int i = 0; i < n_measures; ++i) {
+            sot_problems[i]->setup_target_measure(
+                barycenter_points, barycenter_weights);
+
+            if (ot_params.target_multilevel_enabled) {
+                sot_problems[i]->prepare_target_multilevel();
             }
-            else {
-                for (unsigned int i = 0; i < n_measures; ++i)
-                    potentials[i] = sot_problems[i]->solve(potentials[i]);
-            }
-        } else {
+        }
+
+        if (ot_params.target_multilevel_enabled) {
             for (unsigned int i = 0; i < n_measures; ++i)
-            {
-                sot_problems[i]->setup_target_measure(
-                    barycenter_points, barycenter_weights);
-                    
-                if (ot_params.target_multilevel_enabled) {
-                    sot_problems[i]->prepare_target_multilevel();
-                }
-            }
-                
-            // TODO: target multivel not supported yet
-            if (ot_params.target_multilevel_enabled)
-            {
-                for (unsigned int i = 0; i < n_measures; ++i)
-                    potentials[i] = sot_problems[i]->solve();
-            }
-            else
-            {
-                for (unsigned int i = 0; i < n_measures; ++i)
-                    potentials[i] = sot_problems[i]->solve(potentials[i]);
-            }
+                potentials[i] = sot_problems[i]->solve();
+        }
+        else {
+            for (unsigned int i = 0; i < n_measures; ++i)
+                potentials[i] = sot_problems[i]->solve(potentials[i]);
         }
     }
 
@@ -547,7 +520,7 @@ double WassersteinBarycenters<dim, spacedim, update_flag>::evaluate_functional(
 }
 
 template <int dim, int spacedim, UpdateMode update_flag>
-void WassersteinBarycenters<dim, spacedim, update_flag>::save_vtk_output(
+void DictionaryLearning<dim, spacedim, update_flag>::save_vtk_output(
     const std::vector<Point<spacedim>> &points,
     const Vector<double> &weights,
     const std::string &filename) const
@@ -598,7 +571,7 @@ void WassersteinBarycenters<dim, spacedim, update_flag>::save_vtk_output(
 }
 
 template <int dim, int spacedim, UpdateMode update_flag>
-void WassersteinBarycenters<dim, spacedim, update_flag>::save_vtk_output(
+void DictionaryLearning<dim, spacedim, update_flag>::save_vtk_output(
     const std::vector<Point<spacedim>> &points,
     const Vector<double> &weights,
     const Vector<double> &grad,
@@ -652,10 +625,10 @@ void WassersteinBarycenters<dim, spacedim, update_flag>::save_vtk_output(
     vtk_file.close();
 }
 
-template class WassersteinBarycenters<2, 2, UpdateMode::TargetSupportOnly>;
-template class WassersteinBarycenters<3, 3, UpdateMode::TargetSupportOnly>;
-template class WassersteinBarycenters<2, 3, UpdateMode::TargetSupportOnly>;
+template class DictionaryLearning<2, 2, UpdateMode::TargetSupportOnly>;
+template class DictionaryLearning<3, 3, UpdateMode::TargetSupportOnly>;
+template class DictionaryLearning<2, 3, UpdateMode::TargetSupportOnly>;
 
-template class WassersteinBarycenters<2, 2, UpdateMode::TargetMeasureOnly>;
-template class WassersteinBarycenters<3, 3, UpdateMode::TargetMeasureOnly>;
-template class WassersteinBarycenters<2, 3, UpdateMode::TargetMeasureOnly>;
+template class DictionaryLearning<2, 2, UpdateMode::TargetMeasureOnly>;
+template class DictionaryLearning<3, 3, UpdateMode::TargetMeasureOnly>;
+template class DictionaryLearning<2, 3, UpdateMode::TargetMeasureOnly>;

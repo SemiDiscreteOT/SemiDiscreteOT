@@ -199,9 +199,10 @@ void MeshManager<dim, spacedim>::load_target_mesh(Triangulation<dim, spacedim>& 
 }
 
 template <int dim, int spacedim>
-void MeshManager<dim, spacedim>::load_mesh_at_level(parallel::fullydistributed::Triangulation<dim, spacedim>& source_mesh,
-                                        DoFHandler<dim, spacedim>& dof_handler_source,
-                                        const std::string& mesh_file)
+void MeshManager<dim, spacedim>::load_mesh_at_level(
+    parallel::fullydistributed::Triangulation<dim, spacedim>& source_mesh,
+    DoFHandler<dim, spacedim>& dof_handler_source,
+    const std::string& mesh_file)
 {
     pcout << "Attempting to load mesh from: " << mesh_file << std::endl;
     

@@ -85,15 +85,17 @@ void load_source_meshes_and_set_target(
       }
     }
   }
-  FE_Q<2, 3> source_fe(1);
+
+  auto [source_fe, map] = Utils::create_fe_and_mapping_for_mesh<2, 3>(source_tria);
+
   DoFHandler<2, 3> source_dof_handler(source_tria);
-  source_dof_handler.distribute_dofs(source_fe);
+  source_dof_handler.distribute_dofs(*source_fe);
   wb.sot_problems[0]->setup_source_mesh(source_tria, "source_" + std::to_string(0 + 1));
   
   // setup barycenters support points (fixed for this example)
   std::map<types::global_dof_index, Point<3>> support_points; //locally_relevant support_points
   DoFTools::map_dofs_to_support_points(
-    MappingQ1<2,3>(), wb.sot_problems[0]->dof_handler_source, support_points);
+    *map, wb.sot_problems[0]->dof_handler_source, support_points);
 
   std::vector<Point<3>> barycenter_points_local;
   barycenter_points_local.resize(wb.sot_problems[0]->source_fine_loc_owned_dofs.n_elements());
@@ -141,15 +143,18 @@ void load_source_meshes_and_set_target(
         }
       }
     }
+
+    auto [source_fe, map] = Utils::create_fe_and_mapping_for_mesh<2, 3>(source_tria);
+
     source_dof_handler.reinit(source_tria);
-    source_dof_handler.distribute_dofs(source_fe);
+    source_dof_handler.distribute_dofs(*source_fe);
     wb.sot_problems[i]->setup_source_mesh(source_tria, "source_" + std::to_string(i + 1));
     
     center_on_sphere = Point<3>(-1.0, 0.0, 0.0);
     SphericalGaussian gaussian_(center_on_sphere, sigma);
     
     std::map<types::global_dof_index, Point<3>> support_points_;
-    DoFTools::map_dofs_to_support_points(MappingQ1<2,3>(), wb.sot_problems[i]->dof_handler_source, support_points_);
+    DoFTools::map_dofs_to_support_points(*map, wb.sot_problems[i]->dof_handler_source, support_points_);
 
     source_density.reinit(wb.sot_problems[i]->dof_handler_source.n_dofs());
     for (const auto &[key, value] : support_points)
@@ -159,7 +164,7 @@ void load_source_meshes_and_set_target(
 
     if (Utilities::MPI::this_mpi_process(wb.mpi_comm) == 0)
     {
-      wb.save_vtk_output(wb.barycenter_points, source_density, "source_" + std::to_string(i + 1) + ".vtk");
+      wb.save_vtk_output(wb.barycenter_points, source_density, "source_tutorial_5.vtk");
     }
   }
 }
@@ -177,15 +182,27 @@ int main(int argc, char *argv[])
     ConditionalOStream pcout(std::cout, this_mpi_process == 0);
     pcout << "=== Wasserstein Barycenter Tutorial 5 === " << std::endl;
     
-    if (Utilities::MPI::this_mpi_process(comm) == 0 && !std::ifstream("sphere.msh").good())
+    if (Utilities::MPI::this_mpi_process(comm) == 0 && !std::ifstream("sphere_tria.msh").good() && !std::ifstream("sphere_quad.msh").good())
     {
-      Triangulation<2, 3> tmp_tria;
-      GridGenerator::hyper_sphere(tmp_tria);
-      tmp_tria.refine_global(4);
-      std::ofstream output_file("sphere.msh");
-      GridOut grid_out;
-      grid_out.write_msh(tmp_tria, output_file);
-      std::cout << "Saved tria sphere.msh" << std::endl;
+      Triangulation<2, 3> quad_tria;
+      GridGenerator::hyper_sphere(quad_tria);
+      quad_tria.refine_global(4);
+      
+      std::ofstream output_file_quad("sphere_quad.msh");
+      GridOut grid_out_quad;
+      grid_out_quad.write_msh(quad_tria, output_file_quad);
+      std::cout << "Saved tria sphere_quad.msh" << std::endl;
+
+      Triangulation<2, 3> tri_mesh;
+      GridGenerator::convert_hypercube_to_simplex_mesh(quad_tria, tri_mesh);
+
+      std::ofstream output_file_tria("sphere_tria.msh");
+      GridOut grid_out_tria;
+      grid_out_tria.write_msh(tri_mesh, output_file_tria);
+      std::cout << "Saved tria sphere_tria.msh" << std::endl;
+
+      std::cout << "Mesh have been saved, re-run\n";
+      return 0;
     }
 
     WassersteinBarycenters<2, 3, UpdateMode::TargetMeasureOnly> wb(comm);

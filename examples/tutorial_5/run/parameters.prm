@@ -24,6 +24,8 @@ subsection Optimal Transport
   set tau = 1e-4
   # Maximum iterations for OT solver
   set max_iterations = 50000
+  # Quadrature order for integration
+  set quadrature_order = 1
   # Tolerance for OT solver
   set tolerance = 1e-3
   # Use log-sum-exp trick for numerical stability
@@ -35,7 +37,7 @@ subsection Optimal Transport
   # Enable multilevel for source
   set source_multilevel_enabled = true
   # Minimum number of vertices for source multilevel
-  set source_min_vertices = 100
+  set source_min_vertices = 1000
   # Maximum number of vertices for source multilevel
   set source_max_vertices = 1000
   # Enable multilevel for target
@@ -52,7 +54,7 @@ end
 
 subsection Files
   # Filename for first source mesh
-  set source_filenames = sphere.msh, sphere.msh
+  set source_filenames = sphere_tria.msh, sphere_tria.msh
   # Prefix for output files
   set output_prefix = barycenter
   # Save results in VTK format

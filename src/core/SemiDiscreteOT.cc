@@ -104,7 +104,13 @@ void SemiDiscreteOT<dim, spacedim>::setup_source_mesh(
     if (multilevel_params.source_enabled)
     {
         pcout << "Storing fine-grain source data for multilevel interpolation." << std::endl;
-        initial_fine_dof_handler = std::make_unique<DoFHandler<dim, spacedim>>(tria);
+        initial_fine_tria = std::make_unique<Triangulation<dim, spacedim>>();
+        initial_fine_tria->copy_triangulation(tria);
+
+        initial_fine_dof_handler = std::make_unique<DoFHandler<dim, spacedim>>(*initial_fine_tria);
+        initial_fine_dof_handler->distribute_dofs(*fe_system);
+
+        pcout << "Initial fine DoFHandler has " << initial_fine_dof_handler->n_dofs() << " DoFs " << initial_fine_tria->n_active_cells() << " " << source_mesh.n_active_cells() << " " << dof_handler_source.n_dofs() << std::endl;
     }
 
     pcout << "Source mesh setup from standard objects complete." << std::endl;
@@ -147,28 +153,76 @@ void SemiDiscreteOT<dim, spacedim>::setup_source_measure(
     if (multilevel_params.source_enabled)
     {
         pcout << "Storing fine-grain source data for multilevel interpolation." << std::endl;
-        initial_fine_dof_handler->distribute_dofs(dof_handler_source.get_fe());
 
         if (n_mpi_processes > 1)
         {
-            // Gather all density
-            std::vector<double> local_density(
-                source_fine_loc_owned_dofs.n_elements());
-            for (unsigned int i=0; i < source_fine_loc_owned_dofs.n_elements(); ++i)
-                local_density[i] = source_density[source_fine_loc_owned_dofs.nth_index_in_set(i)];
+            initial_fine_density = std::make_unique<Vector<double>>(initial_fine_dof_handler->n_dofs());
 
-            std::vector<double> global_density;
-            global_density.reserve(source_density.size());
+            Vector<double> local_init_density;
+            local_init_density.reinit(initial_fine_density->size());
+            
+            auto [fe, map] = Utils::create_fe_and_mapping_for_mesh<dim, spacedim>(source_mesh);
 
-            auto all_data = Utilities::MPI::all_gather(
-                mpi_communicator, local_density);
-            for (const auto &data : all_data)
-                global_density.insert(
-                    global_density.end(), data.begin(), data.end());
+            std::map<types::global_dof_index, Point<spacedim>> initial_support_points;
+            DoFTools::map_dofs_to_support_points(
+                *map, *initial_fine_dof_handler, initial_support_points);
 
-            initial_fine_density = std::make_unique<Vector<double>>(global_density.size());
-            for (size_t i = 0; i < global_density.size(); ++i)
-                (*initial_fine_density)[i] = global_density[i];
+            std::map<types::global_dof_index, Point<spacedim>> support_points;DoFTools::map_dofs_to_support_points(
+                *map, dof_handler_source, support_points);
+                
+            auto point_comparator = [](
+                const Point<spacedim>& a, const Point<spacedim>& b) {
+                for (unsigned int i = 0; i < spacedim; ++i)
+                {
+                    if (a[i] < b[i]) return true;
+                    if (a[i] > b[i]) return false;
+                }
+                return false;
+            };
+
+            std::map<Point<spacedim>, types::global_dof_index, decltype(point_comparator)> inverted_support_points(point_comparator);
+            
+            for (const auto &[dof_index, point] : initial_support_points)
+            {
+                inverted_support_points[point] = dof_index;
+            }
+                
+            for (const auto &[dof_index, point] : support_points)
+            {
+                if (source_fine_loc_owned_dofs.is_element(dof_index))
+                {
+                    auto it = inverted_support_points.find(point);
+                    if (it != inverted_support_points.end())
+                    {
+                        auto serial_index = it->second;
+                        local_init_density[serial_index] = density[dof_index];
+                    }
+                }
+            }
+
+            Utilities::MPI::sum(local_init_density, mpi_communicator, *initial_fine_density);
+
+            // { // DEBUG
+            //     if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0)
+            //     {
+            //         pcout << "DEBUG: Saving initial fine density to VTK file " << initial_fine_dof_handler->n_dofs() << " == " << initial_fine_density->size() << " == " << dof_handler_source.n_dofs() << std::endl;
+
+            //         DataOut<dim, spacedim> data_out;
+            //         data_out.attach_dof_handler(*initial_fine_dof_handler);
+            //         data_out.add_data_vector(*initial_fine_density, "initial_fine_density");
+            //         data_out.build_patches();
+
+            //         const std::string output_dir = "./output/data_density";
+            //         if (!fs::exists(output_dir))
+            //             fs::create_directories(output_dir);
+
+            //         const std::string filename = output_dir + "/initial_fine_density.vtk";
+            //         std::ofstream output(filename);
+            //         data_out.write_vtk(output);
+
+            //         pcout << "Initial fine density saved to " << filename << std::endl;
+            //     }
+            // }
         }
         else
         {
@@ -438,7 +492,7 @@ void SemiDiscreteOT<dim, spacedim>::setup_source_finite_elements(const bool is_m
         pcout << Color::green
               << "Interpolating programmatically provided source density onto current mesh level"
               << Color::reset << std::endl;
-
+        
         Utils::interpolate_non_conforming_nearest(
             *initial_fine_dof_handler,
             *initial_fine_density,
@@ -539,6 +593,7 @@ void SemiDiscreteOT<dim, spacedim>::setup_source_finite_elements(const bool is_m
             ++n_locally_owned;
     }
     const unsigned int n_total_owned = Utilities::MPI::sum(n_locally_owned, mpi_communicator);
+    
     pcout << "Total cells: " << source_mesh.n_active_cells()
           << ", Locally owned on proc " << this_mpi_process
           << ": " << n_locally_owned
@@ -812,11 +867,12 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_sot(const Vector<double>& init
     SotParameterManager::SolverParameters &solver_config = solver_params;
 
     // Set up source measure
-    sot_solver->setup_source(dof_handler_source,
-                             *mapping,
-                             *fe_system,
-                             source_density,
-                             solver_config.quadrature_order);
+    sot_solver->setup_source(
+        dof_handler_source,
+        *mapping,
+        *fe_system,
+        source_density,
+        solver_config.quadrature_order);
 
     // Set up target measure
     sot_solver->setup_target(target_points, target_density);
@@ -1316,7 +1372,8 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_source_multilevel(const Vector
 
     // Create/Open the summary log file on rank 0
     std::ofstream summary_log;
-    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0) {
+    if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0)
+    {
         summary_log.open(source_multilevel_dir + "/summary_log.txt", std::ios::app);
         // Write header if file is new or empty
         if (summary_log.tellp() == 0) {
@@ -1436,6 +1493,7 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_source_multilevel(const Vector
         {
             level_potentials.reinit(previous_source_potentials.size());
             level_potentials = previous_source_potentials;
+            pcout << "Reset potentials\n";
         }
         pcout << "  Max iterations: " << solver_params.max_iterations << std::endl;
 
@@ -1443,7 +1501,59 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_source_multilevel(const Vector
         sot_solver->setup_source(dof_handler_source, *mapping, *fe_system, source_density, solver_params.quadrature_order);
         sot_solver->setup_target(target_points, target_density);
 
-        process_epsilon_scaling_for_source_multilevel(level_potentials, source_level_idx, source_level_dir);
+        // { // DEBUG
+        //     // Save source_density in parallel as .pvtu
+        //     {
+        //         DataOut<dim, spacedim> data_out;
+        //         data_out.attach_dof_handler(dof_handler_source);
+        //         data_out.add_data_vector(source_density, "source_density");
+        //         data_out.build_patches(*mapping, fe_system->degree);
+
+        //         const std::string pvtu_filename = "source_density_"+std::to_string(source_level_idx);
+        //         data_out.write_vtu_with_pvtu_record(
+        //             "./", pvtu_filename, 0, mpi_communicator);
+        //         pcout << "Source density saved in parallel as .pvtu to: " << pvtu_filename << std::endl;
+        //     }
+
+        //     // Save target_points and target_density as .ply
+        //     if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0)
+        //     {
+        //         const std::string ply_filename = "target_points_and_density.ply";
+        //         std::ofstream ply_file(ply_filename);
+
+        //         // Write PLY header
+        //         ply_file << "ply\n";
+        //         ply_file << "format ascii 1.0\n";
+        //         ply_file << "element vertex " << target_points.size() << "\n";
+        //         ply_file << "property float x\n";
+        //         ply_file << "property float y\n";
+        //         if constexpr (spacedim == 3)
+        //         {
+        //             ply_file << "property float z\n";
+        //         }
+        //         ply_file << "property float density\n";
+        //         ply_file << "end_header\n";
+
+        //         // Write PLY data
+        //         std::vector<double> target_density_vec(target_density.begin(), target_density.end());
+        //         for (size_t i = 0; i < target_points.size(); ++i)
+        //         {
+        //             ply_file << target_points[i][0] << " " << target_points[i][1];
+        //             if constexpr (spacedim == 3)
+        //             {
+        //                 ply_file << " " << target_points[i][2];
+        //             }
+        //             ply_file << " " << target_density_vec[i] << "\n";
+        //         }
+
+        //         ply_file.close();
+        //         pcout << "Target points and density saved as .ply to: " << ply_filename << std::endl;
+        //     }
+        // }
+        // Assert(false, ExcNotImplemented());
+
+        process_epsilon_scaling_for_source_multilevel(
+            level_potentials, source_level_idx, source_level_dir);
 
         level_timer.stop();
         const double level_time = level_timer.wall_time();

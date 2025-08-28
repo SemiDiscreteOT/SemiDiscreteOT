@@ -229,6 +229,7 @@ protected:
     std::string& selected_task; ///< A reference to the selected task.
     std::string& io_coding; ///< A reference to the I/O coding.
 
+    std::unique_ptr<Triangulation<dim, spacedim>> initial_fine_tria; ///< The initial fine triangulation.
     std::unique_ptr<DoFHandler<dim, spacedim>> initial_fine_dof_handler; ///< The initial fine DoF handler.
     std::unique_ptr<Vector<double>> initial_fine_density; ///< The initial fine density.
     bool is_setup_programmatically_ = false; ///< A flag to indicate if the setup is done programmatically.
