@@ -202,27 +202,6 @@ void SemiDiscreteOT<dim, spacedim>::setup_source_measure(
 
             Utilities::MPI::sum(local_init_density, mpi_communicator, *initial_fine_density);
 
-            // { // DEBUG
-            //     if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0)
-            //     {
-            //         pcout << "DEBUG: Saving initial fine density to VTK file " << initial_fine_dof_handler->n_dofs() << " == " << initial_fine_density->size() << " == " << dof_handler_source.n_dofs() << std::endl;
-
-            //         DataOut<dim, spacedim> data_out;
-            //         data_out.attach_dof_handler(*initial_fine_dof_handler);
-            //         data_out.add_data_vector(*initial_fine_density, "initial_fine_density");
-            //         data_out.build_patches();
-
-            //         const std::string output_dir = "./output/data_density";
-            //         if (!fs::exists(output_dir))
-            //             fs::create_directories(output_dir);
-
-            //         const std::string filename = output_dir + "/initial_fine_density.vtk";
-            //         std::ofstream output(filename);
-            //         data_out.write_vtk(output);
-
-            //         pcout << "Initial fine density saved to " << filename << std::endl;
-            //     }
-            // }
         }
         else
         {
@@ -1500,57 +1479,6 @@ Vector<double> SemiDiscreteOT<dim, spacedim>::run_source_multilevel(const Vector
 
         sot_solver->setup_source(dof_handler_source, *mapping, *fe_system, source_density, solver_params.quadrature_order);
         sot_solver->setup_target(target_points, target_density);
-
-        // { // DEBUG
-        //     // Save source_density in parallel as .pvtu
-        //     {
-        //         DataOut<dim, spacedim> data_out;
-        //         data_out.attach_dof_handler(dof_handler_source);
-        //         data_out.add_data_vector(source_density, "source_density");
-        //         data_out.build_patches(*mapping, fe_system->degree);
-
-        //         const std::string pvtu_filename = "source_density_"+std::to_string(source_level_idx);
-        //         data_out.write_vtu_with_pvtu_record(
-        //             "./", pvtu_filename, 0, mpi_communicator);
-        //         pcout << "Source density saved in parallel as .pvtu to: " << pvtu_filename << std::endl;
-        //     }
-
-        //     // Save target_points and target_density as .ply
-        //     if (Utilities::MPI::this_mpi_process(mpi_communicator) == 0)
-        //     {
-        //         const std::string ply_filename = "target_points_and_density.ply";
-        //         std::ofstream ply_file(ply_filename);
-
-        //         // Write PLY header
-        //         ply_file << "ply\n";
-        //         ply_file << "format ascii 1.0\n";
-        //         ply_file << "element vertex " << target_points.size() << "\n";
-        //         ply_file << "property float x\n";
-        //         ply_file << "property float y\n";
-        //         if constexpr (spacedim == 3)
-        //         {
-        //             ply_file << "property float z\n";
-        //         }
-        //         ply_file << "property float density\n";
-        //         ply_file << "end_header\n";
-
-        //         // Write PLY data
-        //         std::vector<double> target_density_vec(target_density.begin(), target_density.end());
-        //         for (size_t i = 0; i < target_points.size(); ++i)
-        //         {
-        //             ply_file << target_points[i][0] << " " << target_points[i][1];
-        //             if constexpr (spacedim == 3)
-        //             {
-        //                 ply_file << " " << target_points[i][2];
-        //             }
-        //             ply_file << " " << target_density_vec[i] << "\n";
-        //         }
-
-        //         ply_file.close();
-        //         pcout << "Target points and density saved as .ply to: " << ply_filename << std::endl;
-        //     }
-        // }
-        // Assert(false, ExcNotImplemented());
 
         process_epsilon_scaling_for_source_multilevel(
             level_potentials, source_level_idx, source_level_dir);

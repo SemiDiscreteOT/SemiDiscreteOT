@@ -41,7 +41,7 @@ subsection Optimal Transport
   # Maximum number of vertices for source multilevel
   set source_max_vertices = 1000
   # Enable multilevel for target
-  set target_multilevel_enabled = false
+  set target_multilevel_enabled = true
   # Minimum number of points for target multilevel
   set target_min_points = 500
   # Maximum number of points for target multilevel
