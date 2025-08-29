@@ -104,7 +104,8 @@ int main(int argc, char *argv[])
         params.solver_params.tolerance = 1e-2;
     });
 
-    ot_problem.setup_source_measure(tria, dof_handler, density_vector);
+    ot_problem.setup_source_mesh(tria);
+    ot_problem.setup_source_measure(density_vector);
     ot_problem.setup_target_measure(target_points, target_weights);
     ot_problem.prepare_multilevel_hierarchies();
     Vector<double> potentials = ot_problem.solve();

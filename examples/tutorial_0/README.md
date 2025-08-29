@@ -126,7 +126,8 @@ ot_problem.configure([&](SotParameterManager &params) {
 
 ```cpp
 // Setup the optimal transport problem
-ot_problem.setup_source_measure(tria, dof_handler, density_vector);
+ot_problem.setup_source_mesh(tria);
+ot_problem.setup_source_measure(density_vector)
 ot_problem.setup_target_measure(target_points, target_weights);
 ot_problem.prepare_multilevel_hierarchies();
 

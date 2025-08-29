@@ -181,7 +181,7 @@ void SotSolver<dim, spacedim>::solve(
     if (use_componentwise) {
         verbose_control->set_target_measure(target_measure.density, params.tolerance);
     }
-
+    
     try {
         Timer timer;
         timer.start();
@@ -189,10 +189,10 @@ void SotSolver<dim, spacedim>::solve(
         // Create and run BFGS solver
         SolverBFGS<Vector<double>> solver(*solver_control);
         current_potential = &potentials;
-
+        
         solver.solve(
             [this](const Vector<double>& w, Vector<double>& grad) {
-                return this->evaluate_functional(w, grad);
+                return this->evaluate_functional(w, grad);;
             },
             potentials
         );
@@ -208,7 +208,6 @@ void SotSolver<dim, spacedim>::solve(
         pcout << "Warning: Optimization did not converge" << std::endl
               << "  Iterations: " << exc.last_step << std::endl
               << "  Residual: " << exc.last_residual << std::endl;
-        throw;
     }
 
     // Reset solver state
@@ -242,7 +241,7 @@ double SotSolver<dim, spacedim>::evaluate_functional(
 
     try {
         // Determine if we're using simplex elements
-        bool use_simplex = (dynamic_cast<const FE_SimplexP<dim>*>(&*source_measure.fe) != nullptr);
+        bool use_simplex = (dynamic_cast<const FE_SimplexP<dim, spacedim>*>(&*source_measure.fe) != nullptr);
 
         // Create appropriate quadrature rule
         std::unique_ptr<Quadrature<dim>> quadrature;
@@ -683,7 +682,7 @@ void SotSolver<dim,spacedim>::compute_weighted_barycenters_non_euclidean(
 
     try {
         // Determine if we're using simplex elements
-        bool use_simplex = (dynamic_cast<const FE_SimplexP<dim>*>(&*source_measure.fe) != nullptr);
+        bool use_simplex = (dynamic_cast<const FE_SimplexP<dim, spacedim>*>(&*source_measure.fe) != nullptr);
 
         // Create appropriate quadrature rule
         std::unique_ptr<Quadrature<dim>> quadrature;
@@ -694,9 +693,10 @@ void SotSolver<dim,spacedim>::compute_weighted_barycenters_non_euclidean(
         }
 
         // Create scratch and copy data
-        ScratchData scratch_data(*source_measure.fe,
-                               *source_measure.mapping,
-                               *quadrature);
+        ScratchData scratch_data(
+            *source_measure.fe,
+            *source_measure.mapping,
+            *quadrature);
         CopyData copy_data(target_measure.points.size());
 
         // Create filtered iterators for locally owned cells
@@ -852,7 +852,7 @@ void SotSolver<dim, spacedim>::local_assemble(
         }
 
         if (total_sum_exp <= 0.0) continue;
-        
+                
         function_call(
             copy,
             x,
@@ -889,7 +889,7 @@ void SotSolver<dim, spacedim>::compute_weighted_barycenters_euclidean(
 
     try {
         // Determine if we're using simplex elements
-        bool use_simplex = (dynamic_cast<const FE_SimplexP<dim>*>(&*source_measure.fe) != nullptr);
+        bool use_simplex = (dynamic_cast<const FE_SimplexP<dim, spacedim>*>(&*source_measure.fe) != nullptr);
 
         // Create appropriate quadrature rule
         std::unique_ptr<Quadrature<dim>> quadrature;
@@ -976,7 +976,8 @@ void SotSolver<dim, spacedim>::get_potential_conditioned_density(
     const Mapping<dim, spacedim> &mapping,
     const Vector<double> &potential,
     const std::vector<unsigned int> &potential_indices,
-    std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> &conditioned_densities)
+    std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> &conditioned_densities,
+    bool thresholded)
 {
     std::cout << "Current epsilon: " << current_epsilon << std::endl;
     auto locally_owned_dofs = dof_handler.locally_owned_dofs();

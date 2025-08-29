@@ -1,0 +1,64 @@
+# Parameter file for Wasserstein Barycenter computation
+
+subsection Barycenter
+  # Maximum number of barycenter iterations
+  set max_iterations = 100
+  # Convergence tolerance for barycenter iterations
+  set convergence_tolerance = 1e-4
+  # Weight for first source measure
+  set weights = 0.5, 0.5
+  # Frequency of output (every N iterations)
+  set output_frequency = 1
+  # Volume scaling
+  set volume_scaling = false
+  # Silence SotSolver output
+  set silence_output = false
+end
+
+subsection Optimal Transport
+  # Regularization parameter
+  set epsilon = 1e-2
+  # Distance threshold for computational efficiency
+  set distance_threshold = 10
+  # Numerical stability parameter
+  set tau = 1e-4
+  # Maximum iterations for OT solver
+  set max_iterations = 50000
+  # Quadrature order for integration
+  set quadrature_order = 1
+  # Tolerance for OT solver
+  set tolerance = 1e-3
+  # Use log-sum-exp trick for numerical stability
+  set use_log_sum_exp_trick = true
+  # Enable verbose output for OT solver
+  set verbose_output = false
+  # Type of distance threshold
+  set distance_threshold_type = geometric
+  # Enable multilevel for source
+  set source_multilevel_enabled = true
+  # Minimum number of vertices for source multilevel
+  set source_min_vertices = 1000
+  # Maximum number of vertices for source multilevel
+  set source_max_vertices = 1000
+  # Enable multilevel for target
+  set target_multilevel_enabled = true
+  # Minimum number of points for target multilevel
+  set target_min_points = 500
+  # Maximum number of points for target multilevel
+  set target_max_points = 500
+  # Whether to use Python scripts for clustering
+  set use_python_clustering = false
+  # Name of the Python script to use
+  set python_script_name = multilevel_clustering_faiss_cpu.py
+end
+
+subsection Files
+  # Filename for first source mesh
+  set source_filenames = sphere_tria.msh, sphere_tria.msh
+  # Prefix for output files
+  set output_prefix = barycenter
+  # Save results in VTK format
+  set save_vtk = true
+  # Save results in text format
+  set save_txt = true
+end

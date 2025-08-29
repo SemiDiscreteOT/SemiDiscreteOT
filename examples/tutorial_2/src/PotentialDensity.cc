@@ -384,11 +384,11 @@ namespace Applications
 
     for (unsigned int i = 0; i < conditioned_densities.size(); ++i)
     {
-        data_out.add_data_vector(
-            conditioned_densities[i],
-            std::string("conditioned_density_") + Utilities::int_to_string(i),
-            DataOut<3>::type_dof_data,
-            interpretation);
+      data_out.add_data_vector(
+          conditioned_densities[i],
+          std::string("conditioned_density_") + Utilities::int_to_string(i),
+          DataOut<3>::type_dof_data,
+          interpretation);
     }
 
     // --- Build patches and write output files ---
@@ -541,7 +541,6 @@ void PotentialDensity::run()
       pcout << "   Adding potential index " << i * N << std::endl;
       potential_indices.push_back(i * N);
     }
-
 
     std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> conditioned_densities;
 

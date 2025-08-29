@@ -77,8 +77,8 @@ namespace Applications
     constraints.close();
 
     auto locally_owned_dofs_per_processor =
-        Utilities::MPI::all_gather(
-          mpi_communicator, locally_owned_dofs);
+      Utilities::MPI::all_gather(
+        mpi_communicator, locally_owned_dofs);
 
     // Initialize matrices and vectors.
     solution.reinit(locally_owned_dofs, mpi_communicator);

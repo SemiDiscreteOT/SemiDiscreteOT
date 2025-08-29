@@ -66,11 +66,11 @@ int PointCloudHierarchyManager::getPointsForLevel(int base_points, int level) co
         return base_points;
     }
     // Level 1 starts with max_points (if smaller than base_points)
+    int level1_points = std::min(base_points, max_points_);
     if (level == 1) {
-        return std::min(base_points, max_points_);
+        return level1_points;
     }
     // For subsequent levels, use a reduction factor of 4 based on level 1's size
-    int level1_points = std::min(base_points, max_points_);
     int points = static_cast<int>(level1_points / std::pow(4.0, level - 1));
     return std::max(points, min_points_);
 }

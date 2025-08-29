@@ -543,6 +543,7 @@ void interpolate_non_conforming_nearest(
   Vector<double> weights(target_field.size());
 
   std::vector<std::pair<Point<spacedim>, typename DoFHandler<dim, spacedim>::active_cell_iterator>> cell_centers;
+
   for (const auto &cell : source_dh.active_cell_iterators())
   {
     if (!cell->is_locally_owned())
