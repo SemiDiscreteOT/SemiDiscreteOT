@@ -380,7 +380,7 @@ WassersteinSolverBFGS<spacedim, VectorType, update_flag>::solve(
                 break;
               alpha *= 0.5; // Reduce step size
             }
-            Assert(alpha > std::pow(0.5, 5),
+            Assert(alpha <= std::pow(0.5, 5),
               ExcMessage("Gradient descent limit reached."));
             return alpha; // Return a step size of 0
           }
