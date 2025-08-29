@@ -36,7 +36,7 @@ subsection Tutorial 3
       set solver_control_type = l1norm
       set verbose_output = true
       set solver_type = BFGS
-      set quadrature_order = 2
+      set quadrature_order = 3
       set number_of_threads = 0
       set use_log_sum_exp_trick = true
       set use_epsilon_scaling = false

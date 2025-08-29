@@ -665,53 +665,6 @@ namespace Applications
     Kokkos::View<double*, memory_space> grad("grad", n_target);
     this->evaluate_functional_sot(phi, grad, y, nu, x, mu, true);
 
-    // // Simple gradient descent loop
-    // const int max_iters = solver_config.max_iterations;
-    // const double tol = solver_config.tolerance;
-    // pcout << "x: " << x.extent(0) << ", y: " << y.extent(0) << std::endl;
-    // pcout << "Using gradient descent solver with max iterations: "
-    //       << max_iters << ", tolerance: " << tol << ", step size: " << step_size << std::endl;
-
-    // Kokkos::View<double*, memory_space> grad("grad", n_target);
-    // double fval = 0.0;
-    // for (int iter = 0; iter < max_iters; ++iter) {
-    //   if (iter % output_frequency == 0)
-    //   {
-    //     fval = this->evaluate_functional_sot(phi, grad, y, nu, x, mu, true);
-    //   } else {
-    //     fval = this->evaluate_functional_sot(phi, grad, y, nu, x, mu, false);
-    //   }
-
-    //   // Compute grad L2 norm
-    //   double grad_l1_norm = 0.0;
-    //   Kokkos::parallel_reduce("GradL1Norm", grad.extent(0), KOKKOS_LAMBDA(int i, double &sum) {
-    //   sum += Kokkos::abs(grad(i));
-    //   }, grad_l1_norm);
-
-    //   if (iter % output_frequency == 0)
-    //   {
-    //     if (grad_l1_norm > tol * 10)
-    //       pcout << "\033[31mGD iter " << iter << ", fval: " << fval << ", grad l1-norm: " << grad_l1_norm << "\033[0m" << std::endl;
-    //     else
-    //       pcout << "\033[33mGD iter " << iter << ", fval: " << fval << ", grad l1-norm: " << grad_l1_norm << "\033[0m" << std::endl;
-    //   }
-
-    //   if (grad_l1_norm < tol)
-    //   break;
-
-    //   // Compute average gradient
-    //   double grad_avg = 0.0;
-    //   Kokkos::parallel_reduce("GradAverage", grad.extent(0), KOKKOS_LAMBDA(int i, double &sum) {
-    //     sum += grad(i);
-    //   }, grad_avg);
-    //   grad_avg /= grad.extent(0);
-
-    //   // Gradient descent update
-    //   Kokkos::parallel_for("GDUpdate", grad.extent(0), KOKKOS_LAMBDA(int i) {
-    //   phi(i) -= step_size * (grad(i)-grad_avg);
-    //   });
-    // }
-
     Kokkos::deep_copy(phi_host, phi);
     for (int i = 0; i < n_target; ++i)
       potential[i] = phi_host(i);
