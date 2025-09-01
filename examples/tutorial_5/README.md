@@ -1,4 +1,4 @@
-# Tutorial 4: Wasserstein Barycenter Computation
+# Tutorial 5: Wasserstein Barycenter with Fixed Support on the Unit Sphere
 
 ## Overview
 

@@ -190,7 +190,6 @@ void WassersteinBarycenters<dim, spacedim, update_flag>::configure()
         }
     }
     
-
     auto configure_solver = [this](SotParameterManager &p, int solver_id) {
       p.solver_params.epsilon = ot_params.epsilon;
       p.solver_params.use_log_sum_exp_trick = ot_params.use_log_sum_exp_trick;

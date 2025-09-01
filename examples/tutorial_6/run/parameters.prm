@@ -1,19 +1,15 @@
 subsection Tutorial 3
-  subsection SphereData
-    set number of refinements = 6
+  subsection KokkosSOT
+    set task = kokkossot  # kokkosrsot | kokkossot | rsot
+    set number of refinements = 2
     set number of eigenfunctions = 5
-    set n samples = 9
+    set number of conditioned densities = 5
   end
 
   subsection SotParameterManager
-    set selected_task = lloyd
+    set selected_task = sot
     set io_coding = txt
-
-    subsection lloyd parameters
-      set max iterations = 100
-      set relative tolerance = 0
-    end
-
+    
     subsection mesh_generation
       subsection source
         set number of refinements = 6
@@ -35,15 +31,17 @@ subsection Tutorial 3
       set max_iterations = 10000
       set tolerance = 1e-3
       set epsilon = 1e-2
-      set tau = 1e-4  # Truncation error tolerance for integral radius bound
-      set verbose_output = false
+      set tau = 0 # Truncation error tolerance for integral radius bound
+      set distance_threshold_type = pointwise # Options: pointwise/integral
+      set solver_control_type = l1norm
+      set verbose_output = true
       set solver_type = BFGS
       set quadrature_order = 3
       set number_of_threads = 0
+      set use_log_sum_exp_trick = true
       set use_epsilon_scaling = false
       set epsilon_scaling_factor = 10
       set epsilon_scaling_steps = 3
     end
   end
 end
-

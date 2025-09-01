@@ -74,8 +74,12 @@
 #include <deal.II/base/logstream.h>
 #include <deal.II/base/parameter_handler.h>
 
-#include <SemiDiscreteOT/core/Lloyd.h>
+#include <SemiDiscreteOT/core/SemiDiscreteOT.h>
+#include <SemiDiscreteOT/core/PowerDiagram.h>
 #include <SemiDiscreteOT/solvers/Distance.h>
+#include <Kokkos_DualView.hpp>
+
+#include "kokkos_bfgs.h"
 
 namespace fs = std::filesystem;
 
@@ -84,47 +88,80 @@ namespace LA
 #if defined(DEAL_II_WITH_PETSC)
   using namespace dealii::LinearAlgebraPETSc;
 #define USE_PETSC_LA
-#elif defined(DEAL_II_WITH_TRILINOS)
-  using namespace dealii::LinearAlgebraTrilinos;
-#define USE_TRILINOS_LA
 #else
 #error DEAL_II_WITH_PETSC or DEAL_II_WITH_TRILINOS required
 #endif
 } // namespace LA
 
+#ifdef MEMORY_SPACE_CUDA
+using memory_space = Kokkos::CudaSpace;// CudaUVMSpace
+#else
+using memory_space = Kokkos::OpenMP;
+#endif
+
 namespace Applications
 {
   using namespace dealii;
 
-  class SphereData : public ParameterAcceptor, public Lloyd<2, 3>
+  class KokkosSOT : public ParameterAcceptor, public SemiDiscreteOT<3>
   {
-    using Iterator = typename DoFHandler<2, 3>::active_cell_iterator;
+    using Iterator = typename DoFHandler<3>::active_cell_iterator;
     using VectorType = LA::MPI::Vector;
     using MatrixType = LA::MPI::SparseMatrix;
 
   public:
-    SphereData(const MPI_Comm &comm);
+    KokkosSOT(const MPI_Comm &comm);
     void run();
+    void kokkos_semidiscrete_ot(Vector<double> &potential);
+    double evaluate_functional_sot(
+      const Kokkos::View<double*, memory_space> phi,
+      Kokkos::View<double*, memory_space> grad,
+      const Kokkos::DualView<double*[3], memory_space> y,
+      const Kokkos::DualView<double*, memory_space> nu,
+      const Kokkos::DualView<double*[3], memory_space> x,
+      const Kokkos::DualView<double*, memory_space> mu,
+      const bool save = false);
 
+    void kokkos_regularized_semidiscrete_ot(Vector<double> &potential);
+    double evaluate_functional_rsot(
+      double epsilon,
+      const Kokkos::View<double*, memory_space> phi,
+      Kokkos::View<double*, memory_space> grad,
+      const Kokkos::DualView<double*[3], memory_space> y,
+      const Kokkos::DualView<double*, memory_space> nu,
+      const Kokkos::DualView<double*[3], memory_space> x,
+      const Kokkos::DualView<double*, memory_space> mu);
+    void kokkos_init(
+      Kokkos::DualView<double*[3], memory_space>y,
+      Kokkos::DualView<double*, memory_space>nu,
+      Kokkos::DualView<double*[3], memory_space>x,
+      Kokkos::DualView<double*, memory_space>mu);
   private:
-    void setup_system();
+    void setup_system(const std::string name_1, const std::string name_2);
     void assemble_system();
     unsigned int solve();
     void output_results() const;
     void output_eigenfunctions() const;
     void output_normalized_source(LinearAlgebra::distributed::Vector<double, MemorySpace::Host> &source) const;
-    
+    void output_conditioned_densities(
+      std::vector<LinearAlgebra::distributed::Vector<double, MemorySpace::Host>> &conditioned_densities,
+      std::vector<unsigned int> &potential_indices) const;
+
     MPI_Comm mpi_communicator;
     ConditionalOStream pcout;
 
     const std::string vtk_folder = "vtk";
     const std::string output_dir = "output/density_field/";
 
-    parallel::distributed::Triangulation<2, 3> triangulation;
+    Triangulation<3> tria_1;
+    Triangulation<3> tria_2;
 
-    DoFHandler<2, 3> dof_handler;
-    FE_Q<2, 3> fe;
-    MappingQ<2, 3> mapping;
+    DoFHandler<3> dof_handler_1;
+    DoFHandler<3> dof_handler_2;
+    // FE_Q<3> fe;
+    // MappingQ<3> mapping;
+    FE_SimplexP<3> fe;
+    MappingFE<3> mapping;
 
     AffineConstraints<double> constraints;
 
@@ -138,22 +175,25 @@ namespace Applications
     std::vector<VectorType> eigenfunctions;
     std::vector<double>        eigenvalues;
 
+    std::string task;
     unsigned int n_refinements;
     unsigned int n_evecs        = 5;
-    unsigned int n_samples      = 5;
+    unsigned int n_conditioned_densities = 5;
+
+    unsigned int iter_save = 0;
   };
 
   struct ScratchData
   {
-    ScratchData(const Mapping<2, 3> &      mapping,
-                const FiniteElement<2, 3> &fe,
+    ScratchData(const Mapping<3> &      mapping,
+                const FiniteElement<3> &fe,
                 const unsigned int        quadrature_degree,
                 const UpdateFlags         update_flags,
                 const UpdateFlags         interface_update_flags)
-      : fe_values(mapping, fe, QGauss<2>(quadrature_degree), update_flags)
+      : fe_values(mapping, fe, QGauss<3>(quadrature_degree), update_flags)
       , fe_interface_values(mapping,
                             fe,
-                            QGauss<1>(quadrature_degree),
+                            QGauss<2>(quadrature_degree),
                             interface_update_flags)
     {}
 
@@ -169,8 +209,8 @@ namespace Applications
                             scratch_data.fe_interface_values.get_update_flags())
     {}
 
-    FEValues<2, 3>          fe_values;
-    FEInterfaceValues<2, 3> fe_interface_values;
+    FEValues<3>          fe_values;
+    FEInterfaceValues<3> fe_interface_values;
   };
 
 
