@@ -9,9 +9,7 @@ We briefly recall the minimization problems related to the SOT and RSOT problems
 
 ### Semi-Discrete Optimal Transport
 
-$$ 
-\min_{\psi\in\mathbb{R}^N} J_{\text{SOT}}(\psi)=\min_{\phi\in\mathbb{R}^N} \int_{\Omega} \max_i (\psi_i-c(\mathbf{x, \mathbf{y}_i})) \rho(\mathbf{x})\,d\mathbf{x} - \sum_{i=1}^N \nu_i\psi_i,
-$$
+$$\min_{\psi\in\mathbb{R}^N} J_{\text{SOT}}(\psi)=\min_{\phi\in\mathbb{R}^N} \int_{\Omega} \max_i (\psi_i-c(\mathbf{x, \mathbf{y}_i})) \rho(\mathbf{x})\,d\mathbf{x} - \sum_{i=1}^N \nu_i\psi_i,$$
 
 with gradients
 
