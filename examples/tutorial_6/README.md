@@ -9,19 +9,27 @@ We briefly recall the minimization problems related to the SOT and RSOT problems
 
 ### Semi-Discrete Optimal Transport
 
-$$ \min_{\psi\in\mathbb{R}^N} J_{\text{SOT}}(\psi)=\min_{\phi\in\mathbb{R}^N} \int_{\Omega} \max_i (\psi_i-c(\mathbf{x, \mathbf{y}_i})) \rho(\mathbf{x})\,d\mathbf{x} - \sum_{i=1}^N \nu_i\psi_i,$$
+$$ 
+\min_{\psi\in\mathbb{R}^N} J_{\text{SOT}}(\psi)=\min_{\phi\in\mathbb{R}^N} \int_{\Omega} \max_i (\psi_i-c(\mathbf{x, \mathbf{y}_i})) \rho(\mathbf{x})\,d\mathbf{x} - \sum_{i=1}^N \nu_i\psi_i,
+$$
 
 with gradients
 
-$$ [\nabla J_{\text{SOT}}(\psi)]_i = \int_{Pow_i(\psi)}\rho(\mathbf{x})\,d\mathbf{x}-\nu_i,\qquad \text{with}\quad Pow_i(\psi)=\{\mathbf{x}\in\Omega|\ \psi_i-c(\mathbf{x},\mathbf{y}_i)>\psi_j-c(\mathbf{x},\mathbf{y}_j),\ \forall j\}.$$
+$$ 
+[\nabla J_{\text{SOT}}(\psi)]_i = \int_{Pow_i(\psi)}\rho(\mathbf{x})\,d\mathbf{x}-\nu_i,\qquad \text{with}\quad Pow_i(\psi)=\{\mathbf{x}\in\Omega|\ \psi_i-c(\mathbf{x},\mathbf{y}_i)>\psi_j-c(\mathbf{x},\mathbf{y}_j),\ \forall j\}.
+$$
 
 ### Regularized Semi-Discrete Optimal Transport
 
-$$ \min_{\psi\in\mathbb{R}^N} J_{\text{RSOT}}(\psi)=\min_{\phi\in\mathbb{R}^N} \int_{\Omega} \varepsilon \log\left(\sum_{i=1}^N \nu_i \exp\left(\frac{\psi_i-c(\mathbf{x, \mathbf{y}_i})}{\epsilon}\right)\right) \rho(\mathbf{x})\,d\mathbf{x} - \sum_{i=1}^N \nu_i\psi_i,$$
+$$ 
+\min_{\psi\in\mathbb{R}^N} J_{\text{RSOT}}(\psi)=\min_{\phi\in\mathbb{R}^N} \int_{\Omega} \varepsilon \log\left(\sum_{i=1}^N \nu_i \exp\left(\frac{\psi_i-c(\mathbf{x, \mathbf{y}_i})}{\epsilon}\right)\right) \rho(\mathbf{x})\,d\mathbf{x} - \sum_{i=1}^N \nu_i\psi_i,
+$$
 
 with gradients
 
-$$ [\nabla J_{\text{RSOT}}(\psi)]_i = \int_{\Omega}\frac{\nu_i\exp\left((\psi_i-c(\mathbf{x, \mathbf{y}_i}))/\epsilon\right)}{\sum_{i=1}^N \nu_i \exp\left((\psi_i-c(\mathbf{x, \mathbf{y}_i}))/\epsilon\right)}\rho(\mathbf{x})\,d\mathbf{x}-\nu_i.$$
+$$ 
+[\nabla J_{\text{RSOT}}(\psi)]_i = \int_{\Omega}\frac{\nu_i\exp\left((\psi_i-c(\mathbf{x, \mathbf{y}_i}))/\epsilon\right)}{\sum_{i=1}^N \nu_i \exp\left((\psi_i-c(\mathbf{x, \mathbf{y}_i}))/\epsilon\right)}\rho(\mathbf{x})\,d\mathbf{x}-\nu_i.
+$$
 
 ### Visual Examples
 
