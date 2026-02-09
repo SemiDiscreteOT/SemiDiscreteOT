@@ -15,8 +15,13 @@ PROJECT(Tutorial4 VERSION 1.0.0 LANGUAGES CXX C)
 SET(CMAKE_CXX_STANDARD 17)
 SET(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-SET(SemiDiscreteOT_DIR ../../build)
-FIND_PACKAGE(VTK REQUIRED)
+# Find SemiDiscreteOT (for standalone builds outside the main project)
+IF(NOT TARGET SemiDiscreteOT)
+    FIND_PACKAGE(SemiDiscreteOT REQUIRED)
+ENDIF()
+
+# Find VTK (optional: comes through deal.II or SemiDiscreteOT)
+FIND_PACKAGE(VTK QUIET)
 
 # Create executables
 ADD_EXECUTABLE(tutorial_4_gradient_descent src/main_gradient_descent.cc)
@@ -31,8 +36,13 @@ TARGET_INCLUDE_DIRECTORIES(tutorial_4_lloyd PRIVATE
 )
 
 # Link with SemiDiscreteOT and Deal.II
-TARGET_LINK_LIBRARIES(tutorial_4_gradient_descent SemiDiscreteOT)
-TARGET_LINK_LIBRARIES(tutorial_4_lloyd SemiDiscreteOT)
+IF(TARGET SemiDiscreteOT::SemiDiscreteOT)
+    TARGET_LINK_LIBRARIES(tutorial_4_gradient_descent SemiDiscreteOT::SemiDiscreteOT)
+    TARGET_LINK_LIBRARIES(tutorial_4_lloyd SemiDiscreteOT::SemiDiscreteOT)
+ELSE()
+    TARGET_LINK_LIBRARIES(tutorial_4_gradient_descent SemiDiscreteOT)
+    TARGET_LINK_LIBRARIES(tutorial_4_lloyd SemiDiscreteOT)
+ENDIF()
 DEAL_II_SETUP_TARGET(tutorial_4_gradient_descent)
 DEAL_II_SETUP_TARGET(tutorial_4_lloyd)
 

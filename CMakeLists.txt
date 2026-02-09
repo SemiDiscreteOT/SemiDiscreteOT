@@ -1,7 +1,6 @@
 CMAKE_MINIMUM_REQUIRED(VERSION 3.13.0)
 
 PROJECT(SemiDiscreteOT VERSION 1.0.0 LANGUAGES CXX C)
-ADD_COMPILE_DEFINITIONS(HX=HX HY=HY HZ=HZ)
 
 
 # Check Deal.II
@@ -33,6 +32,9 @@ ENDIF()
 
 # Find vtk
 FIND_PACKAGE(VTK QUIET)
+IF(VTK_FOUND AND DEFINED VTK_USE_FILE)
+    INCLUDE(${VTK_USE_FILE})
+ENDIF()
 
 # Add custom release target
 ADD_CUSTOM_TARGET(release
@@ -102,6 +104,17 @@ TARGET_COMPILE_DEFINITIONS(SemiDiscreteOT
         POWER_DIAGRAM_WITH_DEALII
         POWER_DIAGRAM_WITH_GEOGRAM
 )
+
+# Workaround: HZ (and HX, HY) is defined as a macro in Linux system headers
+# (e.g. <sys/param.h>), conflicting with VTK's vtkPointLocator.h member variables.
+# Redefining them to themselves neutralizes the macro while preserving the identifier.
+# PUBLIC ensures this propagates to consumers linking against SemiDiscreteOT.
+TARGET_COMPILE_DEFINITIONS(SemiDiscreteOT PUBLIC HX=HX HY=HY HZ=HZ)
+
+# Propagate VTK include directories to consumers
+IF(VTK_FOUND AND DEFINED VTK_INCLUDE_DIRS)
+    TARGET_INCLUDE_DIRECTORIES(SemiDiscreteOT PUBLIC ${VTK_INCLUDE_DIRS})
+ENDIF()
 
 # Create the executable
 ADD_EXECUTABLE(sot src/ComputeSot.cc)

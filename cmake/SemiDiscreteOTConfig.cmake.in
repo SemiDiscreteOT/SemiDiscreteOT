@@ -4,8 +4,9 @@ include(CMakeFindDependencyMacro)
 
 # Find dependencies
 find_dependency(deal.II 9.5.0 REQUIRED)
+find_dependency(VTK QUIET)
 
 # Import targets
 include("${CMAKE_CURRENT_LIST_DIR}/SemiDiscreteOTTargets.cmake")
 
-check_required_components(SemiDiscreteOT) 
+check_required_components(SemiDiscreteOT)

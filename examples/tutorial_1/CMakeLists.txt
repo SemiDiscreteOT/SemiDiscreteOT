@@ -16,8 +16,13 @@ PROJECT(Tutorial1 VERSION 1.0.0 LANGUAGES CXX C)
 SET(CMAKE_CXX_STANDARD 17)
 SET(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-SET(SemiDiscreteOT_DIR ../../build)
-FIND_PACKAGE(VTK REQUIRED)
+# Find SemiDiscreteOT (for standalone builds outside the main project)
+IF(NOT TARGET SemiDiscreteOT)
+    FIND_PACKAGE(SemiDiscreteOT REQUIRED)
+ENDIF()
+
+# Find VTK (optional: comes through deal.II or SemiDiscreteOT)
+FIND_PACKAGE(VTK QUIET)
 
 # Collect source files
 FILE(GLOB_RECURSE TUTORIAL_SOURCES "src/*.cc")
@@ -30,8 +35,12 @@ TARGET_INCLUDE_DIRECTORIES(tutorial_1 PRIVATE
     ${CMAKE_SOURCE_DIR}/include
 )
 
-# Link with RSOT and Deal.II
-TARGET_LINK_LIBRARIES(tutorial_1 SemiDiscreteOT)
+# Link with SemiDiscreteOT and Deal.II
+IF(TARGET SemiDiscreteOT::SemiDiscreteOT)
+    TARGET_LINK_LIBRARIES(tutorial_1 SemiDiscreteOT::SemiDiscreteOT)
+ELSE()
+    TARGET_LINK_LIBRARIES(tutorial_1 SemiDiscreteOT)
+ENDIF()
 DEAL_II_SETUP_TARGET(tutorial_1)
 
 # Set output directory
